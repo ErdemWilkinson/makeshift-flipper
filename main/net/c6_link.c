@@ -18,6 +18,7 @@
 #define LINE_BUF_LEN 256
 #define RESPONSE_TIMEOUT_MS 8000  // SCAN/CONNECT can take a few seconds on the C6 side
 #define SETUP_TIMEOUT_MS (6 * 60 * 1000) // SETUP waits for a human on the setup page; give it more room than the C6's own 5-minute internal timeout
+#define ASK_TIMEOUT_MS (70 * 1000) // give the PC-side LLM (C6's own OLLAMA_TIMEOUT_MS is 60s) a bit of headroom
 
 static const char *TAG = "c6_link";
 static char s_line_buf[LINE_BUF_LEN];
@@ -171,6 +172,50 @@ bool c6_link_send(const char *ip, uint16_t port, const char *data)
         return false;
     }
     return strcmp(s_line_buf, "SENT") == 0;
+}
+
+bool c6_link_ask(const char *question, char *out_answer)
+{
+    out_answer[0] = '\0';
+
+    // Wire format "ASK:<question>". A newline can't appear in `question`
+    // (it's typed via the on-device keyboard, which can't produce one), so
+    // no escaping is needed here -- unlike CONNECT's ',' or SEND's ':',
+    // there's no delimiter inside this command to collide with.
+    char cmd[LINE_BUF_LEN];
+    snprintf(cmd, sizeof(cmd), "ASK:%s", question);
+    if (!send_line(cmd)) {
+        return false;
+    }
+
+    int deadline = ASK_TIMEOUT_MS;
+    int answer_len = 0;
+    for (;;) {
+        if (!read_line(&deadline)) {
+            ESP_LOGW(TAG, "ASK timed out");
+            return false;
+        }
+        if (strcmp(s_line_buf, "ANSWERDONE") == 0) {
+            return true;
+        }
+        if (strcmp(s_line_buf, "ASKFAIL") == 0) {
+            return false;
+        }
+        if (strncmp(s_line_buf, "ANSWER:", 7) != 0) {
+            continue; // ignore anything unexpected rather than aborting
+        }
+        const char *chunk = s_line_buf + 7;
+        int chunk_len = strlen(chunk);
+        int space = C6_ASK_ANSWER_MAX_LEN - answer_len;
+        if (space > 0) {
+            if (chunk_len > space) {
+                chunk_len = space;
+            }
+            memcpy(out_answer + answer_len, chunk, chunk_len);
+            answer_len += chunk_len;
+            out_answer[answer_len] = '\0';
+        }
+    }
 }
 
 bool c6_link_setup(void)

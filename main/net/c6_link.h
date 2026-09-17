@@ -35,6 +35,18 @@ bool c6_link_connect(const char *ssid, const char *password);
 // Sends SEND:<ip>:<port>:<data> and blocks for the result.
 bool c6_link_send(const char *ip, uint16_t port, const char *data);
 
+// Max length of an AI answer this side will accumulate (across all
+// "ANSWER:" chunks) before truncating -- keeps a runaway/misbehaving
+// response from growing the buffer without bound.
+#define C6_ASK_ANSWER_MAX_LEN 1024
+
+// Sends ASK:<question> and blocks (up to a minute -- the PC-side LLM does
+// the actual generation) waiting for "ANSWER:" chunk lines terminated by
+// "ANSWERDONE". Concatenates the chunks into `out_answer` (capacity
+// C6_ASK_ANSWER_MAX_LEN + 1, null-terminated). Returns true on success,
+// false on timeout, link error, or an "ASKFAIL" reply.
+bool c6_link_ask(const char *question, char *out_answer);
+
 // Sends SETUP: tells the C6 to open its web-based Wi-Fi setup AP
 // ("MakeshiftFlipper-Setup") and a captive HTTP page at 192.168.4.1, then
 // blocks (up to several minutes -- there's a human in the loop) until the
