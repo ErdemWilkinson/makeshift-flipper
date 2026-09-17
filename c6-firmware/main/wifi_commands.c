@@ -280,6 +280,12 @@ void wifi_commands_ask(const char *question)
     cJSON_AddStringToObject(req, "prompt", question);
     cJSON_AddStringToObject(req, "system", OLLAMA_SYSTEM_PROMPT);
     cJSON_AddBoolToObject(req, "stream", false);
+    // Qwen3's "thinking mode" (on by default in Ollama) adds tens of
+    // seconds of extra latency before the final answer -- measured ~54s vs
+    // ~4s with this off for the same prompt, dangerously close to this
+    // device's own OLLAMA_TIMEOUT_MS/c6_link's ASK_TIMEOUT_MS. Disabling it
+    // is a no-op for models that don't support the field.
+    cJSON_AddBoolToObject(req, "think", false);
     char *req_body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
 

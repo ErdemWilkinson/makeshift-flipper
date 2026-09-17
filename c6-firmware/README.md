@@ -37,10 +37,16 @@ fine for a hobby LAN, not something to expose beyond it.
 
 1. Install Ollama on a PC that will stay on and reachable on the same
    network as the C6.
-2. Pull a Turkish-capable model, e.g. `ollama pull qwen2.5:7b` (7B is a
-   reasonable size/quality tradeoff for a CPU-only PC; a GPU lets you go
-   bigger). Qwen2.5 speaks Turkish well out of the box, no fine-tuning
-   needed.
+2. Pull a Turkish-capable model, e.g. `ollama pull qwen3:8b` (a noticeable
+   quality step up from qwen2.5 at a similar size; 8B is a reasonable
+   size/quality tradeoff, a GPU lets you go bigger). No fine-tuning needed.
+   **If you're on Qwen3, also disable "thinking mode"** — it's on by
+   default in Ollama and adds tens of seconds of latency before the answer
+   even starts (measured ~54s vs ~4s for the same prompt with it off),
+   which risks tripping this project's own `OLLAMA_TIMEOUT_MS`/
+   `ASK_TIMEOUT_MS`. This firmware already sends `"think": false` in the
+   request body (`wifi_commands_ask()` in `main/wifi_commands.c`) to
+   handle this — it's a no-op for models that don't support the field.
 3. By default Ollama only listens on `localhost`, which the C6 can't
    reach. Make it listen on the LAN instead:
    - Windows: set the environment variable `OLLAMA_HOST=0.0.0.0:11434`
