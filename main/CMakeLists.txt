@@ -1,0 +1,34 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "ui/menu.c"
+        "ui/display.c"
+        "ui/font8x8_basic.c"
+        "ui/text_entry.c"
+        "input/buttons.c"
+        "ir/ir_nec.c"
+        "ir/ir_driver.c"
+        "rfid/rc522.c"
+        "rfid/rdm6300.c"
+        "feedback/vibration.c"
+        "net/c6_link.c"
+    INCLUDE_DIRS
+        "."
+        "ui"
+        "input"
+        "ir"
+        "rfid"
+        "feedback"
+        "net"
+    REQUIRES
+        driver
+        esp_adc
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_rmt
+        esp_driver_spi
+        esp_driver_uart
+        esp_lcd
+        esp_timer
+        log
+)
