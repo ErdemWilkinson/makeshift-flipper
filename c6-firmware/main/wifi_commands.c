@@ -29,11 +29,17 @@ static const char *TAG = "wifi_commands";
 // Where the PC running Ollama (https://ollama.com) lives on the local
 // network. Ollama's default REST API listens on 11434 and isn't
 // network-exposed unless OLLAMA_HOST=0.0.0.0 is set on the PC -- see
-// c6-firmware/README.md for the one-time PC-side setup. Change OLLAMA_HOST
-// to that PC's LAN IP (a hostname works too if your network resolves it).
-#define OLLAMA_HOST "192.168.4.27"
-#define OLLAMA_PORT 11434
-#define OLLAMA_MODEL "qwen2.5vl:3b"
+// c6-firmware/README.md for the one-time PC-side setup.
+//
+// Set via "idf.py menuconfig" -> "Makeshift Flipper C6 -- Ask AI (Ollama
+// bridge)" (Kconfig.projbuild in this directory) rather than editing this
+// file directly -- previously a hardcoded #define here, moved to Kconfig
+// so a wrong/stale address doesn't require a source change to fix (see
+// KNOWN_ISSUES.md: a stale OLLAMA_HOST after a DHCP reassignment sends
+// Ask AI questions to whatever device now holds that address).
+#define OLLAMA_HOST CONFIG_MAKESHIFT_OLLAMA_HOST
+#define OLLAMA_PORT CONFIG_MAKESHIFT_OLLAMA_PORT
+#define OLLAMA_MODEL CONFIG_MAKESHIFT_OLLAMA_MODEL
 #define OLLAMA_TIMEOUT_MS 60000
 #define OLLAMA_SYSTEM_PROMPT "Sen bir cihaz asistanisin. Kisa ve net turkce cevaplar ver."
 
@@ -226,11 +232,15 @@ void wifi_commands_send(const char *args)
 }
 
 // Response body accumulator for the Ollama HTTP client's event callback.
-// Sized for a generous answer; a reply that overflows this is truncated
-// (the JSON will fail to parse cleanly in that case and ASKFAIL is sent --
-// acceptable for a hobby project, a streaming/incremental parse would be
-// needed to handle arbitrarily long answers).
-#define ASK_RESPONSE_BUF_LEN 4096
+// Was 4096 bytes, which a few-hundred-word answer could exceed (the JSON
+// wrapper itself adds overhead on top of the answer text) -- a reply that
+// overflowed it got silently truncated mid-JSON, so cJSON_Parse() failed
+// and the whole request came back as a bare ASKFAIL with no indication of
+// why. Bumped to 16KB (cheap on the C6's RAM budget, comfortably covers a
+// long multi-paragraph answer); a reply that still overflows this is
+// truncated the same way -- a streaming/incremental JSON parse would be
+// needed to handle arbitrarily long answers without any upper bound.
+#define ASK_RESPONSE_BUF_LEN 16384
 
 typedef struct {
     char *buf;
