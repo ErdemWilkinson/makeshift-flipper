@@ -5,7 +5,6 @@ idf_component_register(
         "ui/display.c"
         "ui/font8x8_basic.c"
         "ui/text_entry.c"
-        "ui/answer_view.c"
         "input/buttons.c"
         "ir/ir_nec.c"
         "ir/ir_driver.c"
