@@ -396,6 +396,86 @@ itself. Two additional findings from reviewing the surrounding code:
   touches the HTTP event-handler flow more invasively for a scenario
   that's now much rarer in practice.
 
+## Round 9 (this session): "Debug AI" feature (new main/diag/diag.c/h,
+## c6_link_debug()/wifi_commands_debug(), c6-firmware/tools/debug_server.py,
+## background debug_ai_task in main.c)
+
+Started as a standalone DEBUG button; the button was removed mid-session
+in favor of a fully automatic background task (`debug_ai_task()` in
+`main.c`) that polls `diag_get()->seq` and, on any new recorded error,
+sends it to a PC-side helper for an AI opinion (logged to
+`debug_log.md`) without any user action. The result is delivered back to
+the main loop via a depth-1 queue (`s_debug_result_queue`,
+`xQueueOverwrite`/`xQueueReceive` with 0 timeout) so the ~65s network
+call never blocks the joystick/menu. `c6_link.c` gained an internal
+mutex (`s_link_mutex`) so this background task and the main loop's own
+blocking `c6_link_*` calls can't collide on the shared UART line buffer.
+Self-reviewed (no other session available this round); flagged for a
+second look.
+
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `diag.c` keeps exactly one global
+  error slot, overwritten by whatever fails next. If a user hits an RC522
+  error, then immediately triggers an unrelated WiFi Scan failure before
+  `debug_ai_task()` polls again, only the WiFi error is reported — the
+  RC522 one is silently gone with no trace it ever happened. This is the
+  documented, intended behavior (`diag.h`'s header comment: "not a
+  history/log"), not a bug, but worth remembering if this ever needs to
+  explain "several things went wrong."
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** none of the `diag_record_error()`
+  call sites added in `main.c` are reached from `ir_driver.c`/
+  `ir_direction.c` (`ir_nec_decode()` failures aren't errors worth
+  reporting -- most failed decodes are just noise/partial frames, not a
+  real problem) or `rdm6300.c` (a checksum failure there is silently
+  discarded by the driver itself, never surfacing as a distinct error
+  code the main loop could record). So "Debug AI" can only ever fire for
+  RC522/Wi-Fi/Ask-AI failures today, not IR or 125kHz RFID ones. Not
+  documented anywhere the user would see it.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `wifi_commands_debug()` and
+  `c6_link_debug()` use `'|'` as the field separator for
+  `DEBUG:<module>|<code>|<note>`, matching the reply format
+  `DIAG:<verdict>|<explanation>`. Like the existing `','`/`':'`
+  separators used by `CONNECT`/`SEND`, this isn't escaped -- a `note`
+  containing `|` would corrupt the parse on the C6 side. `note` is always
+  sent as `""` now that there's no UI moment to type one, so this is
+  currently unreachable; would need revisiting if a note field is ever
+  reintroduced.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `debug_server.py` is a bare
+  `http.server.HTTPServer` with `serve_forever()` -- single-threaded, one
+  request at a time. Since `wifi_commands_debug()`'s HTTP call already
+  blocks the C6 (and transitively `debug_ai_task()`'s call into
+  `c6_link_debug()`) for up to ~65s, this isn't a new bottleneck in
+  practice (there's only ever one device that could be calling it), but
+  it would need `ThreadingHTTPServer` if this script were ever reused for
+  more than one device.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `debug_ai_task()` polls every 500ms
+  and will retry-send on every new error regardless of whether Wi-Fi is
+  even connected -- before "WiFi Setup" has ever been run, any recorded
+  error (e.g. an RC522 read failure during normal use) triggers a
+  `c6_link_debug()` call that's expected to fail, logged as a `ESP_LOGW`
+  and otherwise silently dropped. This is intentional (no good way to
+  distinguish "not worth reporting" from "should report but network's
+  down" from inside the task), but means a user with no Wi-Fi configured
+  will see one warning log line per error with no on-screen feedback.
+- 🟡 **NOTE:** `c6_link.c`'s new `s_link_mutex` is taken with
+  `portMAX_DELAY` in every public wrapper, including inside
+  `debug_ai_task()`'s call to `c6_link_debug()`. If the main loop is
+  itself blocked inside a different `c6_link_*` call (e.g.
+  `action_wifi_setup()`'s multi-minute wait) when a new error is
+  recorded, `debug_ai_task()` simply queues behind it on the mutex and
+  sends once the main loop's call releases it -- no deadlock (nothing
+  ever takes the mutex and then blocks waiting on the background task),
+  just a delayed report. Worth confirming in practice once there's real
+  hardware to test concurrent Wi-Fi setup + a triggered error on.
+- ❌ **REVIEWED, NO RISK:** `c6_link.h` and `wifi_commands.h` briefly had
+  duplicate/conflicting `#define`s and struct definitions for
+  `C6_DEBUG_EXPLANATION_MAX_LEN`/`c6_debug_result_t`/`DEBUG_SERVER_PORT`
+  during this session, from two concurrent edits landing close together
+  (one from this session, one already on disk). Resolved before
+  committing -- the final files each define these exactly once,
+  confirmed by re-reading both after the fix. Noted here only so a
+  future `git blame` dig into near-simultaneous commits doesn't waste
+  time chasing a conflict that never made it into a commit.
+
 ## General
 
 - No firmware in this repo has been built or run on real hardware (also
