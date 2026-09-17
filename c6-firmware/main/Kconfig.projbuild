@@ -30,4 +30,22 @@ menu "Makeshift Flipper C6 -- Ask AI (Ollama bridge)"
             qwen3:8b replaced qwen2.5vl:3b after testing showed noticeably
             better Turkish answer quality for the same prompt.
 
+    config MAKESHIFT_DEBUG_SERVER_HOST
+        string "Debug AI server host (PC's LAN IP or hostname)"
+        default "192.168.4.27"
+        help
+            Where debug_server.py (c6-firmware/tools/debug_server.py) runs
+            on the local network -- usually the same PC as Ollama, often
+            the same address as MAKESHIFT_OLLAMA_HOST above, but kept as a
+            separate setting since it's a different port/process and
+            could run elsewhere. Used by the device's automatic "Debug AI"
+            feature to send the most recent error for diagnosis and
+            logging as soon as it happens -- see c6-firmware/README.md.
+
+    config MAKESHIFT_DEBUG_SERVER_PORT
+        int "Debug AI server port"
+        default 8765
+        help
+            Must match PORT in debug_server.py.
+
 endmenu

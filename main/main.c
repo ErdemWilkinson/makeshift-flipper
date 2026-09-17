@@ -1,10 +1,13 @@
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 
+#include "diag/diag.h"
 #include "input/buttons.h"
 #include "ir/ir_direction.h"
 #include "ir/ir_driver.h"
@@ -83,6 +86,7 @@ static void action_wifi_scan_test(void)
     int count = c6_link_scan(networks, C6_MAX_NETWORKS);
     if (count < 0) {
         ESP_LOGW(TAG, "Wi-Fi scan failed (C6 not responding?)");
+        diag_record_error("WiFi Scan Test", "C6_LINK_SCAN_FAILED");
         return;
     }
     ESP_LOGI(TAG, "Wi-Fi scan found %d network(s):", count);
@@ -109,6 +113,9 @@ static void action_wifi_setup(void)
     display_flush();
 
     bool ok = c6_link_setup();
+    if (!ok) {
+        diag_record_error("WiFi Setup", "C6_LINK_SETUP_FAILED");
+    }
 
     display_clear();
     display_draw_text(0, 0, "WiFi Setup");
@@ -224,6 +231,9 @@ static void action_wifi_setup_manual(void)
     display_flush();
 
     bool ok = c6_link_connect(networks[selected].ssid, entry.buffer);
+    if (!ok) {
+        diag_record_error("WiFi Setup Manual", "C6_LINK_CONNECT_FAILED");
+    }
 
     display_clear();
     display_draw_text(0, 0, "WiFi Setup");
@@ -290,6 +300,7 @@ static void action_ask_ai(void)
     bool ok = c6_link_ask(entry.buffer, answer);
 
     if (!ok) {
+        diag_record_error("Ask AI", "C6_LINK_ASK_FAILED");
         display_clear();
         display_draw_text(0, 0, "AI request failed");
         display_draw_text(2, 0, "Check WiFi / PC");
@@ -325,6 +336,124 @@ static void action_ask_ai(void)
     }
 
     menu_render(s_active_menu);
+}
+
+// Renders the verdict as a fixed line under the title, with the
+// (potentially scrolled) explanation from `view` below it. Shared between
+// the debug notification's initial draw and its scroll loop so both stay
+// in sync with view->scroll_offset.
+static void render_debug_result_screen(const answer_view_t *view, const char *verdict_label)
+{
+    display_clear();
+    display_draw_text(0, 0, "Debug AI");
+    display_draw_text(1, 0, verdict_label);
+    for (int i = 0; i < DISPLAY_ROWS - 2; i++) {
+        int line_idx = view->scroll_offset + i;
+        if (line_idx >= view->line_count) {
+            break;
+        }
+        display_draw_text(2 + i, 0, view->lines[line_idx]);
+    }
+    display_flush();
+}
+
+// Shows the automatic debug task's result and waits for any key before
+// returning to whatever menu was active. Only called from debug_ai_task()
+// below, never from a menu action -- there's no manual "Debug AI" entry
+// point, this only ever fires on its own after an error.
+static void show_debug_result(const c6_debug_result_t *result)
+{
+    const char *verdict_label =
+        (strcmp(result->verdict, "user") == 0)   ? "Verdict: your setup" :
+        (strcmp(result->verdict, "system") == 0) ? "Verdict: device/firmware" :
+                                                     "Verdict: unclear";
+
+    // answer_view only word-wraps on spaces (no '\n' support -- see
+    // answer_view.c), so the verdict is drawn as its own fixed line above
+    // the scrollable explanation rather than concatenated with a '\n' into
+    // one string, which would otherwise glue the two together as one
+    // garbled "word" at the wrap boundary.
+    answer_view_t view;
+    answer_view_init(&view, "Debug AI", result->explanation);
+    render_debug_result_screen(&view, verdict_label);
+
+    for (;;) {
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            break;
+        }
+        int delta = (event == BUTTON_DOWN) ? 1 : (event == BUTTON_UP) ? -1 : 0;
+        if (delta != 0 && answer_view_scroll(&view, delta)) {
+            render_debug_result_screen(&view, verdict_label);
+        }
+    }
+
+    menu_render(s_active_menu);
+}
+
+// --- Automatic "Debug AI" background task -------------------------------
+// No physical DEBUG button (there used to be one -- see KNOWN_ISSUES.md's
+// Round 9 for the earlier manual version): instead, this task polls
+// diag_get() and, whenever a new error shows up (diag->seq changed since
+// last checked), automatically sends it off to the C6/debug_server.py
+// pipeline in the background and hands the result to the main loop via a
+// queue. This can take up to ~75s (c6_link_debug()'s own timeout), which
+// is why it runs in its own task rather than blocking the main loop the
+// way the menu-triggered actions above do -- the joystick/menu stay fully
+// responsive the whole time. c6_link.c's internal mutex keeps this from
+// colliding on the UART with whatever else might be talking to the C6.
+#define DEBUG_TASK_POLL_INTERVAL_MS 500
+static QueueHandle_t s_debug_result_queue; // holds c6_debug_result_t, depth 1
+
+static void debug_ai_task(void *arg)
+{
+    (void)arg;
+    uint32_t last_seq = diag_get()->seq; // don't fire for whatever's already recorded at boot
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(DEBUG_TASK_POLL_INTERVAL_MS));
+
+        const diag_state_t *diag = diag_get();
+        if (diag->seq == last_seq || !diag->has_error) {
+            continue;
+        }
+
+        // Copy out the fields before the blocking call below -- diag_get()'s
+        // pointer is only valid until the next diag_record_error(), and
+        // another error could get recorded while this send is in flight.
+        char module[DIAG_MODULE_MAX_LEN + 1];
+        char code[DIAG_CODE_MAX_LEN + 1];
+        uint32_t sent_seq = diag->seq;
+        strncpy(module, diag->module, sizeof(module));
+        strncpy(code, diag->code, sizeof(code));
+        last_seq = sent_seq;
+
+        c6_debug_result_t result;
+        // No note field -- there's no UI moment to type one anymore now
+        // that this isn't a menu action a user deliberately opened.
+        bool ok = c6_link_debug(module, code, "", &result);
+        if (!ok) {
+            // No Wi-Fi, no PC, debug_server.py not running, etc. -- this is
+            // expected to happen often (e.g. before "WiFi Setup" has ever
+            // been run) and isn't itself worth surfacing as an error; the
+            // user already saw whatever the original failure's own message
+            // was. Just log it and try again on the next new error.
+            ESP_LOGW(TAG, "Automatic Debug AI report failed to send (module=%s code=%s)",
+                     module, code);
+            continue;
+        }
+
+        // Depth-1 queue: if a result is already waiting (main loop hasn't
+        // shown it yet) and a second one arrives, overwrite it rather than
+        // blocking this task forever -- same "latest wins" reasoning as
+        // diag.h's single-slot design.
+        xQueueOverwrite(s_debug_result_queue, &result);
+    }
 }
 
 // --- Menu tree ---------------------------------------------------------
@@ -420,10 +549,33 @@ void app_main(void)
     menu_link_submenu(&s_main_menu, &s_main_menu_items[1], &s_ir_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[2], &s_wifi_menu);
 
+    // Queue of depth 1: only the latest debug result matters, an older one
+    // waiting to be shown is superseded rather than queued up behind it.
+    s_debug_result_queue = xQueueCreate(1, sizeof(c6_debug_result_t));
+    xTaskCreate(debug_ai_task, "debug_ai", 4096, NULL, tskIDLE_PRIORITY + 1, NULL);
+
     s_active_menu = &s_main_menu;
     menu_render(s_active_menu);
 
     while (1) {
+        // A result from the background debug_ai_task() takes priority over
+        // whatever's on screen -- it's transient information the user
+        // should see promptly, and show_debug_result() itself blocks
+        // (waiting for BACK/scroll) so there's no risk of losing the
+        // current screen -- menu_render(s_active_menu) at the end of that
+        // function restores it. xQueueReceive with 0 timeout is
+        // non-blocking, so this check doesn't add latency to normal
+        // button polling.
+        c6_debug_result_t debug_result;
+        if (xQueueReceive(s_debug_result_queue, &debug_result, 0) == pdTRUE) {
+            if (s_screen == APP_SCREEN_SCAN_1356MHZ) {
+                rc522_antenna_off();
+            }
+            s_screen = APP_SCREEN_MENU;
+            show_debug_result(&debug_result);
+            continue;
+        }
+
         button_id_t event = buttons_poll();
 
         if (s_screen == APP_SCREEN_MENU) {
@@ -487,6 +639,9 @@ void app_main(void)
                     snprintf(s_last_scan_line, sizeof(s_last_scan_line),
                              "7/10-byte UID: no support");
                     found = true;
+                    diag_record_error("13.56MHz NFC", "RC522_SCAN_UNSUPPORTED_UID");
+                } else if (result == RC522_SCAN_ERROR) {
+                    diag_record_error("13.56MHz NFC", "RC522_SCAN_ERROR");
                 }
             }
 
