@@ -1,0 +1,8 @@
+# Enables Bluetooth (BLE-only on the C6 -- no classic BT/BR-EDR radio) via
+# the lightweight NimBLE stack, used by bt_scan.c for the passive "BT Scan"
+# feature. Written here (rather than requiring a manual "idf.py menuconfig"
+# step) so a fresh `idf.py set-target esp32c6 && idf.py build` picks this up
+# automatically -- see README.md's "Building" section.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_CONTROLLER_ENABLED=y
