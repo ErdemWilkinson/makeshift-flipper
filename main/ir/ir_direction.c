@@ -14,6 +14,12 @@
 // RC522 SPI=9-13, RDM6300 RX=17, ESP32-C6=18/19, vibration=20,
 // joystick=3/4/22/23, single IR RX/TX=1/2) -- rewire here if your board
 // differs.
+// NORTH/EAST sit on GPIO5/6, inside the ADC1-only GPIO0-6 range that
+// buttons.c's own comment calls scarce (the joystick's X/Y axes already
+// had to land on GPIO3/4 for the same reason). Using them here as plain
+// digital RMT-RX inputs is fine today, but permanently forecloses using
+// ADC on these two pins later without moving one of the two systems --
+// worth remembering if a third analog input is ever needed.
 #define GPIO_NORTH 5
 #define GPIO_EAST  6
 #define GPIO_SOUTH 14

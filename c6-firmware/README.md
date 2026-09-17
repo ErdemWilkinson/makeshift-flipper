@@ -47,17 +47,21 @@ fine for a hobby LAN, not something to expose beyond it.
      (System Properties → Environment Variables) and restart Ollama.
    - Linux/macOS: `OLLAMA_HOST=0.0.0.0:11434 ollama serve` (or set it in
      Ollama's systemd unit / launch config).
-4. Find that PC's LAN IP (`ipconfig` / `ifconfig`) and set `OLLAMA_HOST`
-   in `main/wifi_commands.c` (near the top) to match. `OLLAMA_MODEL` there
-   must match whatever you pulled in step 2.
-5. Rebuild and reflash the C6 firmware after changing those constants.
+4. Find that PC's LAN IP (`ipconfig` / `ifconfig`) and run
+   `idf.py menuconfig` in `c6-firmware/`, then set it under
+   **"Makeshift Flipper C6 -- Ask AI (Ollama bridge)"** →
+   `MAKESHIFT_OLLAMA_HOST`. Set `MAKESHIFT_OLLAMA_MODEL` there to match
+   whatever you pulled in step 2 (these used to be hardcoded `#define`s
+   in `main/wifi_commands.c`; they're Kconfig options now, so this step
+   doesn't require editing source).
+5. Rebuild and reflash the C6 firmware after changing the config.
 
 **Known limits:**
 
-- The PC's IP is hardcoded at build time — if your PC's LAN IP changes
-  (e.g. no DHCP reservation), `ASK` will fail until the firmware is
-  reflashed with the new address. A static DHCP lease on the PC avoids
-  this.
+- The PC's IP is set at build time via Kconfig — if your PC's LAN IP
+  changes (e.g. no DHCP reservation), `ASK` will fail (or silently go to
+  whatever device now holds that address) until the firmware is
+  reflashed with the new one. A static DHCP lease on the PC avoids this.
 - No auth on the Ollama HTTP endpoint — anything on the same LAN segment
   could also reach it. Acceptable for a home network, not for anything
   more exposed.

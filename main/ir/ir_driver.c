@@ -61,7 +61,12 @@ void ir_driver_init(void)
     };
     ESP_ERROR_CHECK(rmt_new_rx_channel(&rx_chan_cfg, &s_rx_channel));
 
-    s_rx_queue = xQueueCreate(1, sizeof(rmt_rx_done_event_data_t));
+    // Depth 3, not 1: the main loop polls ir_driver_poll_rx() every ~10ms
+    // (main.c), and back-to-back IR bursts (e.g. a remote's repeat codes,
+    // or two different transmitters) arriving faster than that would
+    // previously overflow a depth-1 queue and get silently dropped by
+    // xQueueSendFromISR in rx_done_callback().
+    s_rx_queue = xQueueCreate(3, sizeof(rmt_rx_done_event_data_t));
     rmt_rx_event_callbacks_t rx_cbs = {
         .on_recv_done = rx_done_callback,
     };

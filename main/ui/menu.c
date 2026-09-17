@@ -122,8 +122,27 @@ void menu_render(const menu_t *menu)
         char label[DISPLAY_COLS + 1];
         int n = 0;
         label[n++] = is_selected ? '>' : ' ';
-        for (int i = 0; menu->items[idx].label[i] != '\0' && n < DISPLAY_COLS; i++) {
-            label[n++] = menu->items[idx].label[i];
+        // DISPLAY_COLS - 1 usable columns after the cursor char above. If
+        // the label doesn't fit, truncate and show "..." instead of
+        // silently cutting it off mid-word with no indication anything's
+        // missing.
+        int usable = DISPLAY_COLS - 1;
+        int label_len = 0;
+        while (menu->items[idx].label[label_len] != '\0') {
+            label_len++;
+        }
+        if (label_len <= usable) {
+            for (int i = 0; i < label_len; i++) {
+                label[n++] = menu->items[idx].label[i];
+            }
+        } else {
+            int keep = (usable > 3) ? usable - 3 : 0;
+            for (int i = 0; i < keep; i++) {
+                label[n++] = menu->items[idx].label[i];
+            }
+            for (int i = 0; i < 3 && n < DISPLAY_COLS; i++) {
+                label[n++] = '.';
+            }
         }
         label[n] = '\0';
 

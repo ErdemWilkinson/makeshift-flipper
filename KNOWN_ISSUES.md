@@ -220,21 +220,14 @@ section).
   characters instead of plaintext. `action_wifi_setup_manual()`'s
   password entry in `main.c` now passes `mask=true`; this never applied
   to the network picker (a list selection, not text entry).
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `ir_driver.c`'s RX queue
-  (`s_rx_queue = xQueueCreate(1, ...)`) is only 1 deep. The main loop
-  calls `ir_driver_poll_rx()` roughly every 10ms; if two IR symbol
-  bursts arrive close enough together that the queue is still full,
-  `xQueueSendFromISR` silently drops the second one (its return value
-  isn't checked). NEC repeat codes typically arrive ~110ms apart, so the
-  practical risk is low but not zero; bumping the queue depth to 2-3
-  would be a cheap improvement.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `menu_render()` fits a menu item's
-  label into `DISPLAY_COLS` columns, but spends one column on the cursor
-  character (`>`/space), so the real usable width is `DISPLAY_COLS - 1`.
-  A label longer than that is silently truncated with no `...` or other
-  truncation hint. Not an issue for the current 7 fixed menu items in
-  `main.c`; could bite unnoticed if a longer item label is added later
-  (e.g. a saved IR code's name).
+- ✅ **FIXED**: `ir_driver.c`'s RX queue depth was bumped from 1 to 3
+  (`xQueueCreate(3, ...)`) — back-to-back IR bursts arriving faster than
+  the main loop's ~10ms `ir_driver_poll_rx()` polling interval no longer
+  silently overflow a depth-1 queue.
+- ✅ **FIXED**: `menu_render()` now truncates an over-length label to
+  `DISPLAY_COLS - 1` usable columns (accounting for the cursor character)
+  with a trailing `"..."` instead of silently cutting it off with no
+  indication anything's missing.
 - 🟡 **NOTE, NO FIX NEEDED (already called out in the README, reiterated
   here):** `c6-firmware/main/uart_link.c`'s `UART_TX_GPIO 6`/
   `UART_RX_GPIO 7` are placeholder values. On some ESP32-C6 modules
@@ -371,45 +364,37 @@ checked `menu.c/h`, `main.c`'s `app_main()` wiring (`menu_init` /
 reported, no discrepancies found. No new issues in the submenu system
 itself. Two additional findings from reviewing the surrounding code:
 
-- 🟡 **ACCEPTABLE RISK, NOT FIXED (new, this session):** `ir_direction.c`
-  puts two of its four receivers on GPIO5/GPIO6 — both inside the
-  ADC1-only GPIO0-6 range that `buttons.c`'s own comment identifies as
-  scarce (it already had to place the joystick's X/Y axes on GPIO3/4
-  specifically because 0-2 and 7-8 were taken). Using GPIO5/6 as plain
-  digital RMT-RX inputs doesn't conflict with anything *today*, but it
-  permanently forecloses ever using ADC on those pins later (e.g. if a
-  third analog input were ever needed) without moving one of the two
-  systems. Worth a one-line note next to `GPIO_NORTH`/`GPIO_EAST` in
-  `ir_direction.c` so a future editor doesn't have to rediscover this by
-  cross-referencing `buttons.c`.
-- 🔴 **OPEN, NOT ADDRESSED (carried over from the Ask AI feature, not this
-  round's changes, but still unresolved):** `OLLAMA_HOST` in
-  `c6-firmware/main/wifi_commands.c` is a hardcoded LAN IP
-  (`192.168.1.100`). If the device is ever connected to a Wi-Fi network
-  where that address belongs to a different, unrelated device (DHCP
-  reassignment, or simply a different network than the one the address
-  was set for), "Ask AI" questions get POSTed as plain HTTP to whatever
-  is actually listening there — a real request smuggling / wrong-target
-  risk, not just a connection failure, since many devices happily accept
-  arbitrary POST bodies on some port. This predates Round 8 and isn't
-  something either session has added to this file yet; flagging it here
-  since it's a real, unaddressed risk in the current codebase.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED (also carried over from the Ask AI
-  feature):** `wifi_commands_ask()`'s response buffer
-  (`ASK_RESPONSE_BUF_LEN`, 4096 bytes) holds Ollama's raw HTTP response
-  body before it's JSON-parsed. If a reply (including Ollama's own JSON
-  wrapper fields, not just the answer text) is long enough to exceed that
-  buffer, the body gets silently truncated mid-stream by
-  `ask_http_event_handler()`, `cJSON_Parse()` then fails on the cut-off
-  JSON, and the whole request comes back as a bare "ASKFAIL" — no partial
-  answer, no distinction from a network failure or an actual Ollama
-  error. A longer model reply (a few hundred words) can trigger this in
-  practice; verified by reading `wifi_commands.c` end to end
-  (`ask_http_event_handler`, `wifi_commands_ask`'s `cJSON_Parse` +
-  `ESP_LOGW("... truncated/oversized?")` at the point of failure, which
-  already anticipates this same scenario). A streaming JSON parse (or a
-  larger/dynamically-grown buffer) would fix it properly; flagged rather
-  than fixed since scope was "record it," not "patch it."
+- ✅ **FIXED (one-line note added)**: `ir_direction.c` puts two of its
+  four receivers on GPIO5/GPIO6 — both inside the ADC1-only GPIO0-6 range
+  that `buttons.c`'s own comment identifies as scarce. This doesn't
+  conflict with anything today (RMT-RX is a plain digital input), but a
+  comment was added next to `GPIO_NORTH`/`GPIO_EAST` explaining the
+  tradeoff (forecloses using ADC on those two pins later) so a future
+  editor doesn't have to rediscover it by cross-referencing `buttons.c`.
+  The pin assignment itself wasn't changed — moving it would just shift
+  the scarcity elsewhere on the same GPIO0-6 range.
+- ✅ **FIXED**: `OLLAMA_HOST` (and `OLLAMA_PORT`/`OLLAMA_MODEL`) moved
+  from a hardcoded `#define` in `c6-firmware/main/wifi_commands.c` to
+  `c6-firmware/main/Kconfig.projbuild`, set via `idf.py menuconfig`
+  ("Makeshift Flipper C6 -- Ask AI (Ollama bridge)"). This doesn't
+  eliminate the underlying risk (a stale address after a DHCP
+  reassignment still sends questions to whatever now holds that IP,
+  plain HTTP, no host verification) — it only removes the "requires a
+  source edit + rebuild to fix" friction, making a wrong address easier
+  to notice and correct without touching code. Real host verification
+  (pinning, TLS, or a discovery mechanism) would be a separate, larger
+  change; not attempted here.
+- ✅ **FIXED, PARTIALLY**: `wifi_commands_ask()`'s response buffer
+  (`ASK_RESPONSE_BUF_LEN`) was bumped from 4096 to 16384 bytes — a
+  multi-paragraph answer that previously got silently truncated
+  mid-JSON (causing a bare "ASKFAIL" with `cJSON_Parse()` failing on the
+  cut-off body) now has much more headroom. "Partially" because this
+  raises the ceiling rather than removing it — a sufficiently long reply
+  can still overflow 16KB and hit the same silent-truncation path. A
+  true fix (streaming/incremental JSON parse, or a dynamically-grown
+  buffer) would remove the ceiling entirely; not attempted here since it
+  touches the HTTP event-handler flow more invasively for a scenario
+  that's now much rarer in practice.
 
 ## General
 
