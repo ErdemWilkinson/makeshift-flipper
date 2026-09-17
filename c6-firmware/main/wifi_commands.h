@@ -34,3 +34,12 @@ void wifi_commands_send(const char *args);
 // fit the UART line-length limit), terminated by "ANSWERDONE", or a single
 // "ASKFAIL" line if the request couldn't be completed at all.
 void wifi_commands_ask(const char *args);
+
+// Handles "DEBUG:<module>|<code>|<note>": POSTs the error report to the
+// debug_server.py helper on the PC (see c6-firmware/tools/debug_server.py
+// and DEBUG_SERVER_HOST/PORT in wifi_commands.c -- separate from Ollama's
+// own port, since this needs the extra "diagnose, then log to a file" step
+// that Ollama itself can't do). `note` may be empty. Replies with
+// "DIAG:<verdict>|<explanation>" (verdict is "user"/"system"/"unknown") or
+// a single "DIAGFAIL" line if the request couldn't be completed.
+void wifi_commands_debug(const char *args);
