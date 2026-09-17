@@ -1,0 +1,2 @@
+dependencies:
+  espressif/esp_lcd_ssd1306: "^1.0.0"

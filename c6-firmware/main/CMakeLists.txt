@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "uart_link.c"
+        "wifi_commands.c"
+        "wifi_setup_ap.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_driver_uart
+        esp_event
+        esp_wifi
+        esp_netif
+        esp_http_server
+        lwip
+        nvs_flash
+        log
+)
