@@ -363,6 +363,54 @@ whenever one is.
   new submenu system in any special way — it's a plain leaf item under
   the top-level menu, unaffected by the tree restructuring.
 
+Second-look verification on Round 8 (this session, `makeshift-flipper-da`):
+checked `menu.c/h`, `main.c`'s `app_main()` wiring (`menu_init` /
+`menu_link_submenu` calls, ~lines 410-421), `CMakeLists.txt` (confirmed
+`answer_view.c` and `ir_direction.c` are both now in `SRCS`), and
+`ir_direction.c` against the claims above — all consistent with what was
+reported, no discrepancies found. No new issues in the submenu system
+itself. Two additional findings from reviewing the surrounding code:
+
+- 🟡 **ACCEPTABLE RISK, NOT FIXED (new, this session):** `ir_direction.c`
+  puts two of its four receivers on GPIO5/GPIO6 — both inside the
+  ADC1-only GPIO0-6 range that `buttons.c`'s own comment identifies as
+  scarce (it already had to place the joystick's X/Y axes on GPIO3/4
+  specifically because 0-2 and 7-8 were taken). Using GPIO5/6 as plain
+  digital RMT-RX inputs doesn't conflict with anything *today*, but it
+  permanently forecloses ever using ADC on those pins later (e.g. if a
+  third analog input were ever needed) without moving one of the two
+  systems. Worth a one-line note next to `GPIO_NORTH`/`GPIO_EAST` in
+  `ir_direction.c` so a future editor doesn't have to rediscover this by
+  cross-referencing `buttons.c`.
+- 🔴 **OPEN, NOT ADDRESSED (carried over from the Ask AI feature, not this
+  round's changes, but still unresolved):** `OLLAMA_HOST` in
+  `c6-firmware/main/wifi_commands.c` is a hardcoded LAN IP
+  (`192.168.1.100`). If the device is ever connected to a Wi-Fi network
+  where that address belongs to a different, unrelated device (DHCP
+  reassignment, or simply a different network than the one the address
+  was set for), "Ask AI" questions get POSTed as plain HTTP to whatever
+  is actually listening there — a real request smuggling / wrong-target
+  risk, not just a connection failure, since many devices happily accept
+  arbitrary POST bodies on some port. This predates Round 8 and isn't
+  something either session has added to this file yet; flagging it here
+  since it's a real, unaddressed risk in the current codebase.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED (also carried over from the Ask AI
+  feature):** `wifi_commands_ask()`'s response buffer
+  (`ASK_RESPONSE_BUF_LEN`, 4096 bytes) holds Ollama's raw HTTP response
+  body before it's JSON-parsed. If a reply (including Ollama's own JSON
+  wrapper fields, not just the answer text) is long enough to exceed that
+  buffer, the body gets silently truncated mid-stream by
+  `ask_http_event_handler()`, `cJSON_Parse()` then fails on the cut-off
+  JSON, and the whole request comes back as a bare "ASKFAIL" — no partial
+  answer, no distinction from a network failure or an actual Ollama
+  error. A longer model reply (a few hundred words) can trigger this in
+  practice; verified by reading `wifi_commands.c` end to end
+  (`ask_http_event_handler`, `wifi_commands_ask`'s `cJSON_Parse` +
+  `ESP_LOGW("... truncated/oversized?")` at the point of failure, which
+  already anticipates this same scenario). A streaming JSON parse (or a
+  larger/dynamically-grown buffer) would fix it properly; flagged rather
+  than fixed since scope was "record it," not "patch it."
+
 ## General
 
 - No firmware in this repo has been built or run on real hardware (also
