@@ -275,10 +275,11 @@ a real hardware test.
 **Headline points, since this repo is public:**
 
 - The Wi-Fi setup AP uses a **fixed, hardcoded password** baked into the
-  firmware source. It only deters casual/opportunistic connections, not
-  a targeted attacker with access to (or who decompiles) the firmware.
-  If you build this, change it before relying on it for anything
-  sensitive.
+  firmware source — and since this repo is public, that password is
+  visible in plain text to anyone reading the code, not just someone
+  decompiling a built firmware image. **If you build this device, change
+  `AP_PASSWORD` in `c6-firmware/main/wifi_setup_ap.c` (and the copy
+  shown in `main/main.c`) before relying on it for anything.**
 - The Wi-Fi setup flow is **plain HTTP, no TLS** — the setup AP is
   limited to a single simultaneous client specifically to reduce the
   window for a second device to join and sniff the request that carries

@@ -49,10 +49,13 @@ section).
   (no password). A WPA2 password was added, shown to the user on the
   P4's OLED during setup. This is marked "mitigated" rather than "fixed"
   for a few reasons:
-  1. The password is fixed/hardcoded in the firmware source — zero
-     resistance against anyone with access to (or who decompiles) the
-     firmware. It only stops opportunistic/casual connections, not a
-     targeted attacker.
+  1. The password is fixed/hardcoded in the firmware source. This
+     repository is public, so the password isn't hypothetically
+     recoverable by decompiling the firmware — it's plainly visible in
+     the source to anyone who looks. It only stops opportunistic/casual
+     connections, not anyone who has seen this repo or a build of it. If
+     you build this device, **change `AP_PASSWORD` before relying on it
+     for anything**.
   2. **New risk introduced:** the password now has to be kept in sync by
      hand between two places in two different firmware source files
      (there's no shared header between them). If one is updated and the
