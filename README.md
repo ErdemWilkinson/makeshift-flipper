@@ -11,6 +11,13 @@ plus a separate BACK button.
 
 - Read 125kHz RFID tags (EM4100 via RDM6300) and 13.56MHz NFC UIDs
   (Mifare via RC522), with haptic feedback on a successful scan
+- Dump and clone Mifare Classic 1K cards: authenticate every sector
+  against a built-in default-key dictionary, read what it can, and write
+  the data blocks onto a second card (RFID / NFC → Clone). UID cloning is
+  attempted separately via the gen1a "magic card" backdoor if the target
+  supports it; trailer blocks (keys/access bits) are deliberately never
+  written to avoid permanently locking a sector — see
+  `KNOWN_ISSUES.md`'s Round 10 entry
 - Receive and transmit infrared remote codes (NEC protocol), plus coarse
   4-receiver direction finding to tell roughly which way a remote is
   pointed (see `main/ir/ir_direction.c` — needs 4x VS1838B modules, not
@@ -19,16 +26,24 @@ plus a separate BACK button.
   either via a phone-based web setup flow or a fully offline
   joystick-driven "scroll keyboard"
 - Animated OLED menu navigation (slide-in entrance, inverted selection bar)
-- "Ask AI": type a question on the scroll keyboard and get an answer from a
-  Turkish-capable LLM (Qwen2.5) running on a PC on the same network, via the
-  C6's Wi-Fi — see `c6-firmware/README.md`'s "AI bridge" section for the
-  one-time Ollama setup this needs
-- **Automatic Debug AI**: no button, no manual step -- the moment any
-  action records an error (`main/diag/diag.h`), a background task sends it
-  to a PC-side helper that asks the same Ollama instance whether the
-  problem looks user-caused or system-caused, logs the verdict to
-  `debug_log.md`, and shows the result on the OLED on its own — see
-  `c6-firmware/README.md`'s "Debug AI" section
+- **Errors**: a rolling on-device history of the last `DIAG_HISTORY_CAPACITY`
+  (24) recorded failures (`main/diag/diag.h`) across every module --
+  browse it fully offline (Errors menu), or optionally upload the whole
+  list with one button press to a small PC-side log collector over the
+  C6's Wi-Fi (no AI/Ollama involved, just an append-only log file) — see
+  `c6-firmware/README.md`'s "Error log upload" section
+- **Wi-Fi Monitor**: puts the C6 radio into passive promiscuous mode,
+  hopping channels 1-13 and listing every AP it sees (SSID/BSSID/RSSI/
+  channel) live on the OLED (WiFi → WiFi Monitor). Receive-only — no
+  deauth or packet injection. Starting it disconnects the C6's STA
+  connection and blocks every other Wi-Fi-backed feature (WiFi Scan/Setup,
+  Errors → Send) until it's stopped; WiFi Setup needs to be re-run
+  afterward if a connection is needed again
+- **BT Scan**: passive BLE advertisement scan (Bluetooth → BT Scan) —
+  lists nearby BLE devices (address/name/RSSI) live on the OLED. Never
+  connects to anything; observation only, same receive-only scope as Wi-Fi
+  Monitor. Can't run at the same time as Wi-Fi Monitor (both need the
+  shared C6 UART link exclusively) — see `KNOWN_ISSUES.md`'s Round 10 entry
 
 None of this has been built or flashed on real hardware yet — see
 "Known issues / security notes" below and `KNOWN_ISSUES.md` for the full
@@ -77,9 +92,8 @@ defines at the top of `main/input/buttons.c`. The center button (SW)
 stayed on GPIO22. A **separate physical BACK button** was also added
 (GPIO23) — the analog joystick's X axis is now used purely for
 left/right navigation within a menu, while exiting a screen is this
-standalone button's job. "Debug AI" (see below) has no button of its own
-— it's fully automatic, triggered by `diag_record_error()` rather than a
-GPIO read.
+standalone button's job. Errors are recorded automatically
+(`diag_record_error()`) rather than via a GPIO read -- see "Errors" below.
 
 Joystick axis reading: each axis is calibrated at boot (average of 16
 samples, since the rest point isn't guaranteed to be dead center), a
@@ -93,8 +107,8 @@ modules).
 ## Menu navigation (Flipper Zero style)
 
 The menu is a small tree, not one flat list: the top level is a set of
-categories (**RFID / NFC**, **Infrared**, **WiFi**, plus the leaf items
-**Ask AI** and **About**), and each category opens its own flat submenu
+categories (**RFID / NFC**, **Infrared**, **WiFi**, **Bluetooth**, plus
+the leaf items **Errors** and **About**), and each category opens its own flat submenu
 (e.g. **Infrared** → "IR Send Test" / "IR Direction Find"). See
 `main/ui/menu.c`/`menu.h` — `menu_link_submenu()` wires a category item
 to its child menu at startup (`main/main.c`'s `app_main()`), and
@@ -167,10 +181,13 @@ idf.py -p COMx flash monitor
   Currently only **4-byte (single-size) UIDs** are supported — 7/10-byte
   UIDs (cascade tag `0x88`) are detected and reported distinctly as
   `UNSUPPORTED_UID` (not confused with "no card"/error), but their full
-  UID isn't read. Sector read/write (Mifare Classic auth, for cloning)
-  isn't implemented either — UID read only. The antenna is only powered
-  on while the "13.56MHz" scan screen is active, to save power
-  (`rc522_antenna_on()`/`rc522_antenna_off()`, called from `main.c`).
+  UID isn't read. Also implements Mifare Classic 1K sector
+  authenticate/read/write (`rc522_authenticate`/`rc522_read_block`/
+  `rc522_write_block`, with hardware CRC_A support via the MFRC522's
+  CalcCRC command) and a gen1a magic-card UID-write backdoor
+  (`rc522_gen1a_write_block0`) — see "RFID / NFC → Clone" below. The
+  antenna is only powered on while a scan/clone screen is active, to save
+  power (`rc522_antenna_on()`/`rc522_antenna_off()`, called from `main.c`).
 - `main/rfid/rdm6300.c` — RDM6300 UART driver, genuinely non-blocking
   (reads whatever bytes are ready from the UART FIFO with a 0 timeout,
   carrying partial-frame state across poll calls if a frame spans more
@@ -271,7 +288,7 @@ else text entry is needed later (e.g. naming a saved IR code).
 ## What currently works
 
 - An animated, joystick-driven OLED menu, organized as a category tree
-  (RFID/NFC, Infrared, WiFi, plus Ask AI/About) rather than one flat list
+  (RFID/NFC, Infrared, WiFi, Bluetooth, plus Errors/About) rather than one flat list
 - Buttons (joystick directions) are debounced
 - IR receive (logs incoming codes) and transmit (test code) over NEC
 - IR direction finding (4-receiver quadrant sensing) is implemented and
@@ -284,22 +301,34 @@ else text entry is needed later (e.g. naming a saved IR code).
   implemented end to end, reachable from the menu as "WiFi Setup"
 - No-phone fallback: joystick "scroll keyboard" for picking a network and
   typing a password ("WiFi Setup Manual")
-- "Ask AI": type a question, get a scrollable answer back from a PC-hosted
-  Ollama LLM over the C6's Wi-Fi link — needs the one-time PC-side Ollama
-  setup in `c6-firmware/README.md`
-- "Debug AI": fully automatic, no button -- a background task
-  (`debug_ai_task_fn()` in `main/main.c`) notices the moment any action
-  records an error (`main/diag/diag.c`) and sends it to a PC-side helper
-  script (`c6-firmware/tools/debug_server.py`), which asks Ollama for a
-  user-vs-system verdict, logs it to `debug_log.md`, and returns a short
-  explanation shown on the OLED — needs both the Ask AI Ollama setup and
-  the extra `debug_server.py` step in `c6-firmware/README.md`
+- "Errors": browses a rolling on-device history of recorded failures
+  (`action_error_history()` in `main.c`, `main/diag/diag.c`'s ring
+  buffer) -- works fully offline. An optional "Send" (PRESS) uploads the
+  list to a small PC-side log collector (`c6-firmware/tools/debug_server.py`,
+  no AI involved) over the C6's Wi-Fi link -- see `c6-firmware/README.md`'s
+  "Error log upload" section
+- "RFID / NFC → Clone": dump-and-clone flow for Mifare Classic 1K cards
+  (`action_rfid_clone()` in `main.c`) — scan a source card, authenticate
+  and read every sector the default-key dictionary can unlock, review the
+  dump sector-by-sector on the OLED, then place a target card to write
+  the data blocks (never trailers) onto it, plus a best-effort gen1a UID
+  clone
+- "WiFi → WiFi Monitor": passive promiscuous AP scan
+  (`action_wifi_monitor()` in `main.c`, `wifi_monitor.c` on the C6 side)
+  — live SSID/BSSID/RSSI/channel list, channel-hopping 1-13, no
+  transmit/injection. Disconnects the C6's STA link while running and
+  blocks every other C6 feature until stopped (see `c6_link.h`)
+- "Bluetooth → BT Scan": passive BLE advertisement scan
+  (`action_bt_scan()` in `main.c`, `bt_scan.c` on the C6 side, NimBLE) —
+  live address/name/RSSI list. Never connects to anything; can't run
+  alongside WiFi Monitor (both need the C6's UART link exclusively)
 - "About" still just logs (no real screen yet)
 
 ## Next steps (not yet written)
 
-1. RC522: full read support for 7/10-byte UIDs (cascade level 2/3) and
-   Mifare Classic sector read/write (the auth flow needed for cloning)
+1. RC522: full read support for 7/10-byte UIDs (cascade level 2/3) --
+   Mifare Classic sector read/write/clone (4-byte UIDs) is now implemented,
+   see "RFID / NFC → Clone" above
 2. Replace `action_wifi_setup()`'s blocking wait loop with a background
    "setup in progress" state that doesn't block the joystick from
    interacting with other screens (optional improvement)
@@ -323,24 +352,29 @@ else text entry is needed later (e.g. naming a saved IR code).
    hardware — depending on the potentiometer's noise floor and mechanical
    play, they could end up too sensitive (false triggers) or too strict
    (missing light touches)
-9. "Ask AI" needs a real Ollama host set via `idf.py menuconfig`
-   (`MAKESHIFT_OLLAMA_HOST`, `c6-firmware/main/Kconfig.projbuild`) and a
-   running Ollama instance to do anything — see `c6-firmware/README.md`'s
-   "AI bridge" section. A stale address (e.g. after a DHCP reassignment)
-   silently sends questions to whatever device now holds that IP rather
-   than failing loudly — see `KNOWN_ISSUES.md`
-10. "Debug AI" needs `debug_server.py` running on the PC alongside Ollama
-    (see `c6-firmware/README.md`'s "Debug AI" section) — untested on real
-    hardware, same as everything else here. It only ever reports the
-    single most recently recorded error (`main/diag/diag.h`): if two
-    errors happen close together, only the newer one gets reported, and
-    there's no history/log on the device side (the PC's `debug_log.md`
-    is the only persistent record)
+9. "Errors" → Send needs a log server host set via `idf.py menuconfig`
+   (`MAKESHIFT_LOG_SERVER_HOST`, `c6-firmware/main/Kconfig.projbuild`) and
+   `debug_server.py` running on that PC to do anything — see
+   `c6-firmware/README.md`'s "Error log upload" section. A stale address
+   (e.g. after a DHCP reassignment) makes Send fail with no more specific
+   reason shown — see `KNOWN_ISSUES.md`. None of this is required for the
+   on-device Errors history itself, which works fully offline.
+10. The error history (`main/diag/diag.h`) is a fixed-size ring buffer of
+    the last `DIAG_HISTORY_CAPACITY` (24) entries, kept in RAM only -- it
+    doesn't survive a reboot, and older entries are silently dropped once
+    it's full. `Errors` → `Send` is the only way to get a persistent
+    off-device copy (the PC's `error_log.jsonl`)
 11. On-device offline speech-to-command (TinyML keyword spotting for
     Turkish digits/commands via a microphone) is a separate, not-yet-started
     piece — would need new hardware (I2S mic), a new pin, an
     `esp-tflite-micro` integration, and a trained `.tflite` model (that
     training happens off-device, in Python, not on the ESP32 itself)
+12. "WiFi Monitor" and "RFID / NFC → Clone" are both untested on real
+    hardware, same caveat as everything else here — the CRC_A/authenticate/
+    write flow and the raw 802.11 frame parsing (`wifi_monitor.c`'s
+    `promiscuous_rx_cb()`) are implemented directly from datasheets/specs
+    with no hardware to verify against yet, see `KNOWN_ISSUES.md`'s Round
+    10 entry
 
 ## Known issues / security notes
 

@@ -13,8 +13,6 @@
 #include "esp_wifi.h"
 #include "esp_http_client.h"
 
-#include "cJSON.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
@@ -26,36 +24,20 @@ static const char *TAG = "wifi_commands";
 #define WIFI_FAIL_BIT       BIT1
 #define CONNECT_TIMEOUT_MS  10000
 
-// Where the PC running Ollama (https://ollama.com) lives on the local
-// network. Ollama's default REST API listens on 11434 and isn't
-// network-exposed unless OLLAMA_HOST=0.0.0.0 is set on the PC -- see
-// c6-firmware/README.md for the one-time PC-side setup.
+// Where the log server helper (c6-firmware/tools/debug_server.py) runs on
+// the local network -- a small optional HTTP endpoint that just appends
+// the device's uploaded error history to a file on a PC, no AI/Ollama
+// involved. Entirely optional: the on-device "Errors" history works fully
+// offline without this, this is only used when the user explicitly
+// chooses "Send" from that screen.
 //
-// Set via "idf.py menuconfig" -> "Makeshift Flipper C6 -- Ask AI (Ollama
-// bridge)" (Kconfig.projbuild in this directory) rather than editing this
-// file directly -- previously a hardcoded #define here, moved to Kconfig
-// so a wrong/stale address doesn't require a source change to fix (see
-// KNOWN_ISSUES.md: a stale OLLAMA_HOST after a DHCP reassignment sends
-// Ask AI questions to whatever device now holds that address).
-#define OLLAMA_HOST CONFIG_MAKESHIFT_OLLAMA_HOST
-#define OLLAMA_PORT CONFIG_MAKESHIFT_OLLAMA_PORT
-#define OLLAMA_MODEL CONFIG_MAKESHIFT_OLLAMA_MODEL
-#define OLLAMA_TIMEOUT_MS 60000
-#define OLLAMA_SYSTEM_PROMPT "Sen bir cihaz asistanisin. Kisa ve net turkce cevaplar ver."
-
-// Where debug_server.py (c6-firmware/tools/debug_server.py) runs -- a
-// separate helper process from Ollama itself, since this feature needs a
-// "diagnose, then append to a log file" step that talking to Ollama
-// directly can't do (see that script's module docstring). Usually the
-// same PC as Ollama, but kept as its own Kconfig setting (different
-// port/process, could run elsewhere).
-#define DEBUG_SERVER_HOST CONFIG_MAKESHIFT_DEBUG_SERVER_HOST
-#define DEBUG_SERVER_PORT CONFIG_MAKESHIFT_DEBUG_SERVER_PORT
-#define DEBUG_TIMEOUT_MS 65000 // debug_server.py's own Ollama call times out at 60s
-
-// Answers are split into chunks this size (comfortably under
-// UART_LINK_MAX_LINE_LEN) before being sent as "ANSWER:<chunk>" lines.
-#define ASK_CHUNK_LEN 200
+// Set via "idf.py menuconfig" -> "Makeshift Flipper C6 -- Error Log"
+// (Kconfig.projbuild in this directory) rather than editing this file
+// directly, since a wrong/stale address should be a config change, not a
+// source change (see KNOWN_ISSUES.md's note on the same risk).
+#define LOG_SERVER_HOST CONFIG_MAKESHIFT_LOG_SERVER_HOST
+#define LOG_SERVER_PORT CONFIG_MAKESHIFT_LOG_SERVER_PORT
+#define LOG_SEND_TIMEOUT_MS 10000 // local POST, no AI call to wait on
 
 static EventGroupHandle_t s_wifi_event_group;
 static esp_netif_t *s_netif;
@@ -241,28 +223,23 @@ void wifi_commands_send(const char *args)
     }
 }
 
-// Response body accumulator for the Ollama HTTP client's event callback.
-// Was 4096 bytes, which a few-hundred-word answer could exceed (the JSON
-// wrapper itself adds overhead on top of the answer text) -- a reply that
-// overflowed it got silently truncated mid-JSON, so cJSON_Parse() failed
-// and the whole request came back as a bare ASKFAIL with no indication of
-// why. Bumped to 16KB (cheap on the C6's RAM budget, comfortably covers a
-// long multi-paragraph answer); a reply that still overflows this is
-// truncated the same way -- a streaming/incremental JSON parse would be
-// needed to handle arbitrarily long answers without any upper bound.
-#define ASK_RESPONSE_BUF_LEN 16384
+// Generic HTTP response body accumulator, shared by whatever local HTTP
+// call needs one (currently just wifi_commands_log_flush() below). 4KB is
+// comfortably over what the log server's small JSON ack ({"status":"ok",
+// "count":N}) will ever be.
+#define HTTP_RESPONSE_BUF_LEN 4096
 
 typedef struct {
     char *buf;
     int len;
-} ask_response_ctx_t;
+} http_response_ctx_t;
 
-static esp_err_t ask_http_event_handler(esp_http_client_event_t *evt)
+static esp_err_t http_response_event_handler(esp_http_client_event_t *evt)
 {
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
-        ask_response_ctx_t *ctx = (ask_response_ctx_t *)evt->user_data;
+        http_response_ctx_t *ctx = (http_response_ctx_t *)evt->user_data;
         int copy_len = evt->data_len;
-        int space = ASK_RESPONSE_BUF_LEN - 1 - ctx->len;
+        int space = HTTP_RESPONSE_BUF_LEN - 1 - ctx->len;
         if (copy_len > space) {
             copy_len = space;
         }
@@ -275,187 +252,83 @@ static esp_err_t ask_http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-void wifi_commands_ask(const char *question)
+// Accumulates "LOGSEND:<json>" entries between wifi_commands_log_line()
+// calls until wifi_commands_log_flush() sends them all in one POST.
+// Capacity matches roughly DIAG_HISTORY_CAPACITY (main/diag/diag.h) worth
+// of small JSON objects -- a batch larger than this is truncated (the
+// oldest-still-fitting entries are kept, since main.c sends newest-first
+// and appends in that order... actually appends in receive order, so this
+// buffer just stops accepting once full; see wifi_commands_log_line()).
+#define LOG_BATCH_BUF_LEN 4096
+
+static char s_log_batch[LOG_BATCH_BUF_LEN];
+static int s_log_batch_len;
+static int s_log_entry_count;
+
+void wifi_commands_log_line(const char *json_line)
 {
-    char *response_buf = malloc(ASK_RESPONSE_BUF_LEN);
-    if (response_buf == NULL) {
-        uart_link_write_line("ASKFAIL");
-        return;
+    if (s_log_entry_count == 0) {
+        s_log_batch[0] = '\0';
+        s_log_batch_len = 0;
     }
-    response_buf[0] = '\0';
-    ask_response_ctx_t ctx = { .buf = response_buf, .len = 0 };
 
-    cJSON *req = cJSON_CreateObject();
-    cJSON_AddStringToObject(req, "model", OLLAMA_MODEL);
-    cJSON_AddStringToObject(req, "prompt", question);
-    cJSON_AddStringToObject(req, "system", OLLAMA_SYSTEM_PROMPT);
-    cJSON_AddBoolToObject(req, "stream", false);
-    // Qwen3's "thinking mode" (on by default in Ollama) adds tens of
-    // seconds of extra latency before the final answer -- measured ~54s vs
-    // ~4s with this off for the same prompt, dangerously close to this
-    // device's own OLLAMA_TIMEOUT_MS/c6_link's ASK_TIMEOUT_MS. Disabling it
-    // is a no-op for models that don't support the field.
-    cJSON_AddBoolToObject(req, "think", false);
-    char *req_body = cJSON_PrintUnformatted(req);
-    cJSON_Delete(req);
-
-    if (req_body == NULL) {
-        free(response_buf);
-        uart_link_write_line("ASKFAIL");
+    int prefix_len = (s_log_entry_count > 0) ? 1 : 0; // leading ',' between array elements
+    int line_len = strlen(json_line);
+    int space = LOG_BATCH_BUF_LEN - 1 - s_log_batch_len;
+    if (prefix_len + line_len > space) {
+        ESP_LOGW(TAG, "Log batch buffer full, dropping entry");
         return;
     }
 
-    char url[64];
-    snprintf(url, sizeof(url), "http://%s:%d/api/generate", OLLAMA_HOST, OLLAMA_PORT);
-
-    esp_http_client_config_t http_cfg = {
-        .url = url,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = OLLAMA_TIMEOUT_MS,
-        .event_handler = ask_http_event_handler,
-        .user_data = &ctx,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, req_body, strlen(req_body));
-
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-    free(req_body);
-
-    if (err != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "Ollama request failed: %s (HTTP %d)", esp_err_to_name(err), status);
-        free(response_buf);
-        uart_link_write_line("ASKFAIL");
-        return;
+    if (prefix_len > 0) {
+        s_log_batch[s_log_batch_len++] = ',';
     }
-
-    cJSON *resp = cJSON_Parse(response_buf);
-    free(response_buf);
-    if (resp == NULL) {
-        ESP_LOGW(TAG, "Ollama response wasn't valid JSON (truncated/oversized?)");
-        uart_link_write_line("ASKFAIL");
-        return;
-    }
-
-    cJSON *answer = cJSON_GetObjectItemCaseSensitive(resp, "response");
-    if (!cJSON_IsString(answer) || answer->valuestring == NULL) {
-        cJSON_Delete(resp);
-        uart_link_write_line("ASKFAIL");
-        return;
-    }
-
-    // Send the answer in fixed-size chunks -- the UART link is line-based
-    // and a multi-hundred-token reply would otherwise exceed
-    // UART_LINK_MAX_LINE_LEN in one line. A newline inside the answer text
-    // itself is replaced with a space first, since the wire protocol uses
-    // '\n' strictly as a line terminator.
-    const char *text = answer->valuestring;
-    size_t text_len = strlen(text);
-    char *sanitized = malloc(text_len + 1);
-    if (sanitized == NULL) {
-        cJSON_Delete(resp);
-        uart_link_write_line("ASKFAIL");
-        return;
-    }
-    for (size_t i = 0; i < text_len; i++) {
-        char c = text[i];
-        sanitized[i] = (c == '\n' || c == '\r') ? ' ' : c;
-    }
-    sanitized[text_len] = '\0';
-
-    char chunk[ASK_CHUNK_LEN + 8];
-    for (size_t offset = 0; offset < text_len; offset += ASK_CHUNK_LEN) {
-        size_t n = text_len - offset;
-        if (n > ASK_CHUNK_LEN) {
-            n = ASK_CHUNK_LEN;
-        }
-        snprintf(chunk, sizeof(chunk), "ANSWER:%.*s", (int)n, sanitized + offset);
-        uart_link_write_line(chunk);
-    }
-    if (text_len == 0) {
-        uart_link_write_line("ANSWER:");
-    }
-    uart_link_write_line("ANSWERDONE");
-
-    free(sanitized);
-    cJSON_Delete(resp);
+    memcpy(s_log_batch + s_log_batch_len, json_line, line_len);
+    s_log_batch_len += line_len;
+    s_log_batch[s_log_batch_len] = '\0';
+    s_log_entry_count++;
 }
 
-// Response accumulator for wifi_commands_debug()'s HTTP call. A verdict +
-// short explanation from debug_server.py is expected to be well under this;
-// sized the same as the (much chattier) Ask AI path for headroom.
-#define DEBUG_RESPONSE_BUF_LEN 4096
-
-void wifi_commands_debug(const char *args)
+void wifi_commands_log_flush(void)
 {
-    // Wire format "DEBUG:<module>|<code>|<note>". '|' was picked (instead
-    // of ':' or ',', already used by other commands) because none of
-    // module/code/note are expected to contain it in practice (module
-    // names and error codes are short fixed strings from this codebase;
-    // `note` comes from the on-device scroll keyboard, which has no '|'
-    // key). Malformed input (missing separators) is rejected rather than
-    // guessed at.
-    const char *first_bar = strchr(args, '|');
-    if (first_bar == NULL) {
-        uart_link_write_line("DIAGFAIL");
-        return;
-    }
-    const char *second_bar = strchr(first_bar + 1, '|');
-    if (second_bar == NULL) {
-        uart_link_write_line("DIAGFAIL");
+    if (s_log_entry_count == 0) {
+        uart_link_write_line("FAIL"); // nothing to send -- LOGSENDDONE with no LOGSEND: lines first
         return;
     }
 
-    char module[65];
-    size_t module_len = first_bar - args;
-    if (module_len >= sizeof(module)) {
-        module_len = sizeof(module) - 1;
+    // Wraps the accumulated "{...},{...},..." entries into a JSON object:
+    // {"entries":[{...},{...}]}
+    char *req_body = malloc(s_log_batch_len + 32);
+    bool ok = false;
+    if (req_body != NULL) {
+        int n = snprintf(req_body, s_log_batch_len + 32, "{\"entries\":[%s]}", s_log_batch);
+        ok = (n > 0 && n < s_log_batch_len + 32);
     }
-    memcpy(module, args, module_len);
-    module[module_len] = '\0';
+    s_log_entry_count = 0; // reset for the next batch regardless of outcome below
 
-    char code[65];
-    size_t code_len = second_bar - (first_bar + 1);
-    if (code_len >= sizeof(code)) {
-        code_len = sizeof(code) - 1;
-    }
-    memcpy(code, first_bar + 1, code_len);
-    code[code_len] = '\0';
-
-    const char *note = second_bar + 1;
-
-    cJSON *req = cJSON_CreateObject();
-    cJSON_AddStringToObject(req, "module", module);
-    cJSON_AddStringToObject(req, "code", code);
-    cJSON_AddStringToObject(req, "note", note);
-    char *req_body = cJSON_PrintUnformatted(req);
-    cJSON_Delete(req);
-
-    if (req_body == NULL) {
-        uart_link_write_line("DIAGFAIL");
+    if (!ok) {
+        free(req_body);
+        uart_link_write_line("FAIL");
         return;
     }
 
-    char *response_buf = malloc(DEBUG_RESPONSE_BUF_LEN);
+    char *response_buf = malloc(HTTP_RESPONSE_BUF_LEN);
     if (response_buf == NULL) {
         free(req_body);
-        uart_link_write_line("DIAGFAIL");
+        uart_link_write_line("FAIL");
         return;
     }
     response_buf[0] = '\0';
-    ask_response_ctx_t ctx = { .buf = response_buf, .len = 0 };
+    http_response_ctx_t ctx = { .buf = response_buf, .len = 0 };
 
     char url[64];
-    snprintf(url, sizeof(url), "http://%s:%d/debug", DEBUG_SERVER_HOST, DEBUG_SERVER_PORT);
+    snprintf(url, sizeof(url), "http://%s:%d/logs", LOG_SERVER_HOST, LOG_SERVER_PORT);
 
     esp_http_client_config_t http_cfg = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = DEBUG_TIMEOUT_MS,
-        .event_handler = ask_http_event_handler,
+        .timeout_ms = LOG_SEND_TIMEOUT_MS,
+        .event_handler = http_response_event_handler,
         .user_data = &ctx,
     };
 
@@ -467,42 +340,13 @@ void wifi_commands_debug(const char *args)
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
     free(req_body);
+    free(response_buf);
 
     if (err != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "Debug AI request failed: %s (HTTP %d)", esp_err_to_name(err), status);
-        free(response_buf);
-        uart_link_write_line("DIAGFAIL");
+        ESP_LOGW(TAG, "Log upload failed: %s (HTTP %d)", esp_err_to_name(err), status);
+        uart_link_write_line("FAIL");
         return;
     }
 
-    cJSON *resp = cJSON_Parse(response_buf);
-    free(response_buf);
-    if (resp == NULL) {
-        uart_link_write_line("DIAGFAIL");
-        return;
-    }
-
-    cJSON *verdict = cJSON_GetObjectItemCaseSensitive(resp, "verdict");
-    cJSON *explanation = cJSON_GetObjectItemCaseSensitive(resp, "explanation");
-    if (!cJSON_IsString(verdict) || !cJSON_IsString(explanation)) {
-        cJSON_Delete(resp);
-        uart_link_write_line("DIAGFAIL");
-        return;
-    }
-
-    // Sanitize the same way wifi_commands_ask() does -- the wire protocol
-    // is line-based, so a newline in the AI's explanation would corrupt it.
-    char line[UART_LINK_MAX_LINE_LEN];
-    int n = snprintf(line, sizeof(line), "DIAG:%s|%s", verdict->valuestring, explanation->valuestring);
-    if (n >= (int)sizeof(line)) {
-        line[sizeof(line) - 1] = '\0'; // snprintf already null-terminated; this just documents the truncation
-    }
-    for (char *p = line; *p != '\0'; p++) {
-        if (*p == '\n' || *p == '\r') {
-            *p = ' ';
-        }
-    }
-    uart_link_write_line(line);
-
-    cJSON_Delete(resp);
+    uart_link_write_line("SENT");
 }

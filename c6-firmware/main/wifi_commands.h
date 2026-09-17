@@ -2,10 +2,12 @@
 
 #include <stdbool.h>
 
-// Wi-Fi backend for the three commands the P4 sends over UART: SCAN,
-// CONNECT, SEND. Each function writes its own reply line(s) via
-// uart_link_write_line() and doesn't return a value -- the reply *is*
-// the result, same as the wire protocol.
+// Wi-Fi backend for the STA-mode commands the P4 sends over UART: SCAN,
+// CONNECT, SEND, and the LOGSEND/LOGSENDDONE error-log upload. Each
+// function writes its own reply line(s) via uart_link_write_line() and
+// doesn't return a value -- the reply *is* the result, same as the wire
+// protocol. Wi-Fi Monitor and BT Scan are separate subsystems
+// (wifi_monitor.c/bt_scan.c) with their own headers.
 
 // Brings up esp_netif/esp_wifi in STA mode. Call once at startup, after
 // nvs_flash_init().
@@ -27,19 +29,17 @@ bool wifi_commands_connect_sta(const char *ssid, const char *password);
 // closes it, and writes "SENT" or "FAIL".
 void wifi_commands_send(const char *args);
 
-// Handles "ASK:<question>": POSTs the question to a local Ollama server
-// (see OLLAMA_HOST/OLLAMA_PORT/OLLAMA_MODEL in wifi_commands.c -- the PC
-// running Ollama must be on the same network as the C6's STA connection).
-// Streams the answer back as one or more "ANSWER:<chunk>" lines (split to
-// fit the UART line-length limit), terminated by "ANSWERDONE", or a single
-// "ASKFAIL" line if the request couldn't be completed at all.
-void wifi_commands_ask(const char *args);
+// Handles one "LOGSEND:<json>" line: accumulates `json_line` (one JSON
+// object, e.g. {"module":"...","code":"...","ago_s":123}) into the
+// current batch. Call once per LOGSEND: line received; the batch is sent
+// (and reset) by wifi_commands_log_flush() below. Doesn't write a UART
+// reply itself -- only the LOGSENDDONE/flush step does.
+void wifi_commands_log_line(const char *json_line);
 
-// Handles "DEBUG:<module>|<code>|<note>": POSTs the error report to the
-// debug_server.py helper on the PC (see c6-firmware/tools/debug_server.py
-// and DEBUG_SERVER_HOST/PORT in wifi_commands.c -- separate from Ollama's
-// own port, since this needs the extra "diagnose, then log to a file" step
-// that Ollama itself can't do). `note` may be empty. Replies with
-// "DIAG:<verdict>|<explanation>" (verdict is "user"/"system"/"unknown") or
-// a single "DIAGFAIL" line if the request couldn't be completed.
-void wifi_commands_debug(const char *args);
+// Handles "LOGSENDDONE": wraps the batch accumulated via
+// wifi_commands_log_line() into {"entries":[...]} and POSTs it to the log
+// server helper (see c6-firmware/tools/debug_server.py and
+// LOG_SERVER_HOST/PORT in wifi_commands.c). No AI/Ollama involved -- the
+// PC side just appends the entries to a log file. Writes "SENT" or "FAIL"
+// and resets the batch either way.
+void wifi_commands_log_flush(void);
