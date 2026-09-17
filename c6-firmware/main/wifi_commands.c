@@ -31,7 +31,7 @@ static const char *TAG = "wifi_commands";
 // network-exposed unless OLLAMA_HOST=0.0.0.0 is set on the PC -- see
 // c6-firmware/README.md for the one-time PC-side setup. Change OLLAMA_HOST
 // to that PC's LAN IP (a hostname works too if your network resolves it).
-#define OLLAMA_HOST "192.168.1.100"
+#define OLLAMA_HOST "192.168.4.27"
 #define OLLAMA_PORT 11434
 #define OLLAMA_MODEL "qwen2.5vl:3b"
 #define OLLAMA_TIMEOUT_MS 60000
