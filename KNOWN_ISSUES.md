@@ -298,6 +298,71 @@ reported. Findings on the new code itself:
   missed that tick (not lost permanently — it's picked up on the next
   poll). Practical impact is negligible.
 
+## Round 8 (this session): submenu system (menu.c/h rewrite) + IR direction
+## finding (new ir_direction.c/h)
+
+The menu went from one flat list to a small tree (top-level categories,
+each opening its own flat submenu) so new features (IR direction finding
+now, more later) don't keep growing a single screen. Self-reviewed since
+no other session was available for this round; flagged for a second look
+whenever one is.
+
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `menu_handle_button()`
+  (`main/ui/menu.c`) returns the *next* menu to render but still mutates
+  `menu->selected_index`/`scroll_offset` on the menu passed in even for
+  UP/DOWN within the same menu — this is intended (it's the same menu
+  being mutated), but the split between "mutate in place" and "return a
+  different pointer to switch screens" is easy to get wrong if this
+  function grows more cases later. Worth a comment-level warning for
+  future editors, not a behavior bug today.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** submenu items and their parent are
+  wired together at runtime in `app_main()` via `menu_link_submenu()`
+  rather than at compile time — if a category item in
+  `s_main_menu_items` is ever added without a matching
+  `menu_link_submenu()` call (or the index passed to it drifts out of
+  sync with the array, e.g. after reordering items), that item silently
+  does nothing when selected (`on_select` and `submenu` both stay NULL,
+  and `menu_handle_button()`'s RIGHT/PRESS case just falls through). No
+  compiler warning either way. A comment was added next to the array
+  noting the index dependency, but nothing enforces it.
+- ✅ **VERIFIED, NO RISK:** re-entering a submenu (LEFT then RIGHT back
+  into it) re-triggers its entry animation
+  (`next->anim_offset_px = ANIM_START_OFFSET_PX` in
+  `menu_handle_button()`), but does *not* reset `selected_index` or
+  `scroll_offset` — the cursor stays where it was left. This is
+  intentional (matches Flipper-style "menu remembers where you were")
+  and doesn't conflict with the animation reset, which is purely visual.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `ir_direction.c` opens 4 independent
+  RMT RX channels on top of `ir_driver.c`'s existing one (5 RMT RX
+  channels total once both are active). Neither the ESP32-P4's total RMT
+  channel count nor its `mem_block_symbols` budget across that many
+  channels has been checked against the datasheet — if the SoC doesn't
+  have enough RMT channels/memory for 5 concurrent RX + 1 TX,
+  `ir_direction_init()`'s `ESP_ERROR_CHECK(rmt_new_rx_channel(...))`
+  calls will abort at boot. This needs checking against the ESP32-P4
+  technical reference manual before the first flash, not just assumed.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `ir_direction_poll()`'s claim that a
+  transmission caught by two adjacent receivers is "the same NEC
+  transmission, not two separate ones" assumes the two decodes finished
+  within the same ~110ms polling window and reports whichever frame
+  happened to be decoded first as `out_frame` (both should carry
+  identical address/command, so this is fine in practice, but the
+  function doesn't verify the two decoded frames actually match before
+  merging their flags — a genuinely simultaneous but different
+  transmission from two separate remotes would silently report only one
+  frame's payload under a two-direction flag set). Very unlikely
+  scenario (two remotes firing in the same ~24ms NEC frame window), not
+  worth the added bookkeeping today.
+- 🟡 **NOTE, NEEDS HARDWARE VERIFICATION:** the 4 direction-finding GPIOs
+  (5, 6, 14, 15) are new, unverified pin choices, same caveat as every
+  other pin in this repo — double-check they don't collide with
+  strapping pins or another peripheral on your specific ESP32-P4 module
+  before wiring up the 4 VS1838B units.
+- ❌ **REVIEWED, NO RISK:** the "Ask AI" feature (added by another
+  session, restored from a stash last round) doesn't interact with the
+  new submenu system in any special way — it's a plain leaf item under
+  the top-level menu, unaffected by the tree restructuring.
+
 ## General
 
 - No firmware in this repo has been built or run on real hardware (also

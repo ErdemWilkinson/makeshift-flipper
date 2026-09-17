@@ -20,6 +20,14 @@ void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count)
     menu->selected_index = 0;
     menu->scroll_offset = 0;
     menu->anim_offset_px = ANIM_START_OFFSET_PX;
+    menu->parent = NULL;
+}
+
+void menu_link_submenu(menu_t *parent, menu_item_t *parent_item, menu_t *child)
+{
+    parent_item->submenu = child;
+    parent_item->on_select = NULL;
+    child->parent = parent;
 }
 
 static void menu_clamp_scroll(menu_t *menu)
@@ -31,11 +39,13 @@ static void menu_clamp_scroll(menu_t *menu)
     }
 }
 
-void menu_handle_button(menu_t *menu, button_id_t button)
+menu_t *menu_handle_button(menu_t *menu, button_id_t button)
 {
     if (menu->item_count == 0) {
-        return;
+        return menu;
     }
+
+    menu_t *next = menu;
 
     switch (button) {
         case BUTTON_UP:
@@ -51,20 +61,25 @@ void menu_handle_button(menu_t *menu, button_id_t button)
         case BUTTON_RIGHT:
         case BUTTON_PRESS: {
             const menu_item_t *item = &menu->items[menu->selected_index];
-            if (item->on_select != NULL) {
+            if (item->submenu != NULL) {
+                next = item->submenu;
+                next->anim_offset_px = ANIM_START_OFFSET_PX; // re-trigger entry animation
+            } else if (item->on_select != NULL) {
                 item->on_select();
             }
             break;
         }
         case BUTTON_LEFT:
-            // Reserved for entering a parent list once submenus exist
-            // (BUTTON_BACK, not this, is what exits a screen). No-op here.
+            if (menu->parent != NULL) {
+                next = menu->parent;
+            }
             break;
         default:
             break;
     }
 
-    menu_clamp_scroll(menu);
+    menu_clamp_scroll(next);
+    return next;
 }
 
 void menu_animate_tick(menu_t *menu)
