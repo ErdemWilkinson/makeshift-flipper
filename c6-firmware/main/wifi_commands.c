@@ -33,7 +33,7 @@ static const char *TAG = "wifi_commands";
 // to that PC's LAN IP (a hostname works too if your network resolves it).
 #define OLLAMA_HOST "192.168.1.100"
 #define OLLAMA_PORT 11434
-#define OLLAMA_MODEL "qwen2.5:7b"
+#define OLLAMA_MODEL "qwen2.5vl:3b"
 #define OLLAMA_TIMEOUT_MS 60000
 #define OLLAMA_SYSTEM_PROMPT "Sen bir cihaz asistanisin. Kisa ve net turkce cevaplar ver."
 

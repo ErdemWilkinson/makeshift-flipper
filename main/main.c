@@ -6,6 +6,7 @@
 #include "esp_log.h"
 
 #include "input/buttons.h"
+#include "ir/ir_direction.h"
 #include "ir/ir_driver.h"
 #include "net/c6_link.h"
 #include "rfid/rc522.h"
@@ -22,11 +23,18 @@ typedef enum {
     APP_SCREEN_MENU,
     APP_SCREEN_SCAN_125KHZ,
     APP_SCREEN_SCAN_1356MHZ,
+    APP_SCREEN_IR_DIRECTION,
 } app_screen_t;
 
 static app_screen_t s_screen = APP_SCREEN_MENU;
 static bool s_screen_dirty = true; // forces a render on the next loop tick
-static menu_t *s_main_menu_ref; // set in app_main(), used to redraw after a blocking action
+
+// The menu the main loop is currently rendering/feeding button events to --
+// starts at the top-level menu, moves to a submenu's menu_t and back as
+// menu_handle_button() walks the tree. Blocking actions (WiFi setup, Ask
+// AI, ...) re-render *this* (whichever submenu they were launched from)
+// on return, not necessarily the top-level menu.
+static menu_t *s_active_menu;
 
 // Set when a scan screen just found a tag, so its render function can show
 // the result instead of "scanning...". Cleared when BACK returns to the menu.
@@ -54,6 +62,17 @@ static void action_ir_send_test(void)
     ir_nec_frame_t frame = { .address = 0x00, .command = 0x45 };
     ESP_LOGI(TAG, "IR TX test frame: addr=0x%02X cmd=0x%02X", frame.address, frame.command);
     ir_driver_send(&frame);
+}
+
+// Opens the 4-receiver direction-finding screen. Requires the
+// ir_direction.c hardware (4x VS1838B on GPIO5/6/14/15 by default) to be
+// wired up -- see that file's header comment. Untested on real hardware,
+// same as everything else in this repo (see README).
+static void action_ir_direction_find(void)
+{
+    s_screen = APP_SCREEN_IR_DIRECTION;
+    s_last_scan_line[0] = '\0';
+    s_screen_dirty = true;
 }
 
 // Blocks for a few seconds while the C6 scans. Replace with a real
@@ -103,7 +122,7 @@ static void action_wifi_setup(void)
         vTaskDelay(pdMS_TO_TICKS(10));
     } while (any == BUTTON_COUNT);
 
-    menu_render(s_main_menu_ref);
+    menu_render(s_active_menu);
 }
 
 // No-phone fallback: scan, pick a network with UP/DOWN/PRESS, then type
@@ -128,7 +147,7 @@ static void action_wifi_setup_manual(void)
             any = buttons_poll();
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (any == BUTTON_COUNT);
-        menu_render(s_main_menu_ref);
+        menu_render(s_active_menu);
         return;
     }
 
@@ -166,7 +185,7 @@ static void action_wifi_setup_manual(void)
     }
 
     if (cancelled || !picked) {
-        menu_render(s_main_menu_ref);
+        menu_render(s_active_menu);
         return;
     }
 
@@ -196,7 +215,7 @@ static void action_wifi_setup_manual(void)
     }
 
     if (entry_cancelled) {
-        menu_render(s_main_menu_ref);
+        menu_render(s_active_menu);
         return;
     }
 
@@ -218,7 +237,7 @@ static void action_wifi_setup_manual(void)
         vTaskDelay(pdMS_TO_TICKS(10));
     } while (any == BUTTON_COUNT);
 
-    menu_render(s_main_menu_ref);
+    menu_render(s_active_menu);
 }
 
 static void action_about(void)
@@ -258,7 +277,7 @@ static void action_ask_ai(void)
     }
 
     if (cancelled || entry.length == 0) {
-        menu_render(s_main_menu_ref);
+        menu_render(s_active_menu);
         return;
     }
 
@@ -281,7 +300,7 @@ static void action_ask_ai(void)
             any = buttons_poll();
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (any == BUTTON_COUNT);
-        menu_render(s_main_menu_ref);
+        menu_render(s_active_menu);
         return;
     }
 
@@ -305,19 +324,48 @@ static void action_ask_ai(void)
         }
     }
 
-    menu_render(s_main_menu_ref);
+    menu_render(s_active_menu);
 }
 
-static const menu_item_t s_main_menu_items[] = {
-    {"Read 125kHz",   action_rfid_125khz},
-    {"Read 13.56MHz", action_nfc_1356mhz},
-    {"IR Send Test",  action_ir_send_test},
-    {"WiFi Scan Test", action_wifi_scan_test},
-    {"WiFi Setup",    action_wifi_setup},
-    {"WiFi Setup Manual", action_wifi_setup_manual},
-    {"Ask AI",        action_ask_ai},
-    {"About",         action_about},
+// --- Menu tree ---------------------------------------------------------
+// Top level is a set of categories; each opens its own flat submenu.
+// LEFT backs out of a submenu to its parent (menu_link_submenu() below
+// wires that up); BACK (a separate physical button, not part of the menu
+// at all) exits whatever screen/action is active straight back to
+// whichever menu launched it, handled in the main loop / actions above.
+
+static menu_item_t s_rfid_menu_items[] = {
+    {"Read 125kHz",   action_rfid_125khz, NULL},
+    {"Read 13.56MHz", action_nfc_1356mhz, NULL},
 };
+
+static menu_item_t s_ir_menu_items[] = {
+    {"IR Send Test",     action_ir_send_test,      NULL},
+    {"IR Direction Find", action_ir_direction_find, NULL},
+};
+
+static menu_item_t s_wifi_menu_items[] = {
+    {"WiFi Scan Test",     action_wifi_scan_test,   NULL},
+    {"WiFi Setup",          action_wifi_setup,       NULL},
+    {"WiFi Setup Manual",   action_wifi_setup_manual, NULL},
+};
+
+// Indices [0..2] below must stay in sync with the menu_link_submenu()
+// calls in app_main() -- reordering these items without updating those
+// calls (or their hardcoded indices) makes the moved category silently
+// do nothing when selected, with no compiler warning.
+static menu_item_t s_main_menu_items[] = {
+    {"RFID / NFC", NULL, NULL},
+    {"Infrared",   NULL, NULL},
+    {"WiFi",       NULL, NULL},
+    {"Ask AI",     action_ask_ai, NULL},
+    {"About",      action_about, NULL},
+};
+
+static menu_t s_main_menu;
+static menu_t s_rfid_menu;
+static menu_t s_ir_menu;
+static menu_t s_wifi_menu;
 
 static void render_scan_screen(const char *title)
 {
@@ -328,22 +376,52 @@ static void render_scan_screen(const char *title)
     display_flush();
 }
 
+static void render_ir_direction_screen(uint8_t flags)
+{
+    display_clear();
+    display_draw_text(0, 0, "IR Direction Find");
+    if (s_last_scan_line[0]) {
+        display_draw_text(2, 0, s_last_scan_line);
+    } else {
+        display_draw_text(2, 0, "Waiting for IR...");
+    }
+    char dirs[DISPLAY_COLS + 1];
+    snprintf(dirs, sizeof(dirs), "%c%c%c%c",
+             (flags & IR_DIR_NORTH) ? 'N' : '-',
+             (flags & IR_DIR_EAST)  ? 'E' : '-',
+             (flags & IR_DIR_SOUTH) ? 'S' : '-',
+             (flags & IR_DIR_WEST)  ? 'W' : '-');
+    display_draw_text(4, 0, dirs);
+    display_draw_text(6, 0, "BACK button: exit");
+    display_flush();
+}
+
 void app_main(void)
 {
     display_init();
     buttons_init();
     ir_driver_init();
+    ir_direction_init();
     rc522_init();
     rdm6300_init();
     vibration_init();
     c6_link_init();
 
-    menu_t main_menu;
-    menu_init(&main_menu, s_main_menu_items,
+    menu_init(&s_main_menu, s_main_menu_items,
               sizeof(s_main_menu_items) / sizeof(s_main_menu_items[0]));
-    s_main_menu_ref = &main_menu;
+    menu_init(&s_rfid_menu, s_rfid_menu_items,
+              sizeof(s_rfid_menu_items) / sizeof(s_rfid_menu_items[0]));
+    menu_init(&s_ir_menu, s_ir_menu_items,
+              sizeof(s_ir_menu_items) / sizeof(s_ir_menu_items[0]));
+    menu_init(&s_wifi_menu, s_wifi_menu_items,
+              sizeof(s_wifi_menu_items) / sizeof(s_wifi_menu_items[0]));
 
-    menu_render(&main_menu);
+    menu_link_submenu(&s_main_menu, &s_main_menu_items[0], &s_rfid_menu);
+    menu_link_submenu(&s_main_menu, &s_main_menu_items[1], &s_ir_menu);
+    menu_link_submenu(&s_main_menu, &s_main_menu_items[2], &s_wifi_menu);
+
+    s_active_menu = &s_main_menu;
+    menu_render(s_active_menu);
 
     while (1) {
         button_id_t event = buttons_poll();
@@ -351,22 +429,38 @@ void app_main(void)
         if (s_screen == APP_SCREEN_MENU) {
             bool needs_render = false;
             if (event != BUTTON_COUNT) {
-                menu_handle_button(&main_menu, event);
+                menu_t *next = menu_handle_button(s_active_menu, event);
+                if (next != s_active_menu) {
+                    s_active_menu = next;
+                }
                 needs_render = true;
             }
-            if (main_menu.anim_offset_px != 0) {
-                menu_animate_tick(&main_menu);
+            if (s_active_menu->anim_offset_px != 0) {
+                menu_animate_tick(s_active_menu);
                 needs_render = true;
             }
             if (needs_render) {
-                menu_render(&main_menu);
+                menu_render(s_active_menu);
             }
         } else if (event == BUTTON_BACK) {
             if (s_screen == APP_SCREEN_SCAN_1356MHZ) {
                 rc522_antenna_off();
             }
             s_screen = APP_SCREEN_MENU;
-            menu_render(&main_menu);
+            menu_render(s_active_menu);
+        } else if (s_screen == APP_SCREEN_IR_DIRECTION) {
+            uint8_t flags = 0;
+            ir_nec_frame_t frame;
+            if (ir_direction_poll(&flags, &frame)) {
+                snprintf(s_last_scan_line, sizeof(s_last_scan_line),
+                         "addr=0x%02X cmd=0x%02X", frame.address, frame.command);
+                vibration_pulse(80);
+                s_screen_dirty = true;
+            }
+            if (s_screen_dirty || flags != 0) {
+                render_ir_direction_screen(flags);
+                s_screen_dirty = false;
+            }
         } else {
             const char *title = (s_screen == APP_SCREEN_SCAN_125KHZ) ? "125kHz RFID" : "13.56MHz NFC";
             bool found = false;

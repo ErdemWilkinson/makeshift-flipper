@@ -11,7 +11,10 @@ plus a separate BACK button.
 
 - Read 125kHz RFID tags (EM4100 via RDM6300) and 13.56MHz NFC UIDs
   (Mifare via RC522), with haptic feedback on a successful scan
-- Receive and transmit infrared remote codes (NEC protocol)
+- Receive and transmit infrared remote codes (NEC protocol), plus coarse
+  4-receiver direction finding to tell roughly which way a remote is
+  pointed (see `main/ir/ir_direction.c` — needs 4x VS1838B modules, not
+  built or tested on real hardware yet)
 - Scan and connect to Wi-Fi networks through a companion ESP32-C6 radio,
   either via a phone-based web setup flow or a fully offline
   joystick-driven "scroll keyboard"
@@ -44,10 +47,19 @@ and `main/ui/display.c`)
 | GPIO (via transistor) | GPIO20 | Vibration motor |
 | RX (RMT)        | GPIO1  | VS1838B IR receiver |
 | TX (RMT, via transistor) | GPIO2 | IR LED transmitter |
+| RX (RMT)        | GPIO5  | VS1838B #2, direction find: North |
+| RX (RMT)        | GPIO6  | VS1838B #3, direction find: East |
+| RX (RMT)        | GPIO14 | VS1838B #4, direction find: South |
+| RX (RMT)        | GPIO15 | VS1838B #5, direction find: West |
 
 The IR pins (GPIO1/2) weren't in the original wiring diagram — they were
 picked from free pins. Wire to match, or change `IR_RX_GPIO`/`IR_TX_GPIO`
-at the top of `main/ir/ir_driver.c` to your own preference.
+at the top of `main/ir/ir_driver.c` to your own preference. The 4 extra
+direction-finding receivers (GPIO5/6/14/15) are likewise picked from free
+pins — change the `GPIO_NORTH`/`GPIO_EAST`/`GPIO_SOUTH`/`GPIO_WEST`
+defines at the top of `main/ir/ir_direction.c` if your wiring differs.
+These are on top of, not instead of, the single receiver on GPIO1 — the
+two modules are independent and don't share hardware.
 
 **Joystick hardware note:** the original plan assumed a 5-pin digital
 joystick; the actual hardware is a **2-axis analog joystick module**
@@ -72,14 +84,28 @@ modules).
 
 ## Menu navigation (Flipper Zero style)
 
+The menu is a small tree, not one flat list: the top level is a set of
+categories (**RFID / NFC**, **Infrared**, **WiFi**, plus the leaf items
+**Ask AI** and **About**), and each category opens its own flat submenu
+(e.g. **Infrared** → "IR Send Test" / "IR Direction Find"). See
+`main/ui/menu.c`/`menu.h` — `menu_link_submenu()` wires a category item
+to its child menu at startup (`main/main.c`'s `app_main()`), and
+`menu_handle_button()` walks that tree.
+
 - **Up/Down** (joystick Y axis): moves the cursor
-- **Right** (joystick X axis) or **center press**: activates the
-  selected item (both do the same thing in a flat menu)
-- **Left** (joystick X axis): reserved for entering a parent list once
-  submenus exist; currently a no-op at the top level
-- **BACK (separate physical button)**: exits the active screen back to
-  the main menu (used on the RFID/IR/Wi-Fi scan screens and the scroll
-  keyboard)
+- **Right** (joystick X axis) or **center press**: on a leaf item,
+  activates it (both do the same thing); on a category item, enters its
+  submenu
+- **Left** (joystick X axis): backs out to the parent menu (a no-op at
+  the top level, which has no parent)
+- **BACK (separate physical button)**: exits whatever screen/action is
+  active (a scan screen, IR direction find, the scroll keyboard, ...)
+  straight back to the menu it was launched from — this is a different
+  thing from LEFT, which only moves within the menu tree itself and
+  never touches an active screen
+
+Note the distinction: LEFT never exits a screen, and BACK never moves
+between menu levels — they don't overlap.
 
 ## Visuals: menu animations
 
@@ -113,10 +139,17 @@ idf.py -p COMx flash monitor
 - The menu's "IR Send Test" sends a fixed NEC code (addr=0x00, cmd=0x45);
   incoming codes are continuously logged in the background
   (`ir_driver_poll_rx`, in `main.c`'s main loop).
-- **Direction-finding (4-receiver array) was deliberately left out** —
-  the hardware (4x VS1838B) doesn't exist yet. It'll be added as a
-  separate module on top of the single-receiver logic without disturbing
-  the existing RX/TX path.
+- `main/ir/ir_direction.c` — coarse direction finding using 4 independent
+  VS1838B receivers (GPIO5/6/14/15, one per compass point), each running
+  its own RMT RX channel and the same `ir_nec_decode()` used by the
+  single-receiver driver. `ir_direction_poll()` reports which
+  receiver(s) caught a given transmission as a 4-bit flag set (usually
+  one, sometimes two adjacent ones for a source near the boundary
+  between them) — this is quadrant-level sensing from a wide acceptance
+  cone, not a precise bearing angle. Reachable from the menu as "IR
+  Direction Find" (under **Infrared**), which shows the live N/E/S/W
+  flags and the last decoded frame. Needs the 4-receiver hardware wired
+  up and hasn't been tested on real hardware yet.
 
 ## RFID modules
 
@@ -229,9 +262,12 @@ else text entry is needed later (e.g. naming a saved IR code).
 
 ## What currently works
 
-- An animated, joystick-driven OLED menu
+- An animated, joystick-driven OLED menu, organized as a category tree
+  (RFID/NFC, Infrared, WiFi, plus Ask AI/About) rather than one flat list
 - Buttons (joystick directions) are debounced
 - IR receive (logs incoming codes) and transmit (test code) over NEC
+- IR direction finding (4-receiver quadrant sensing) is implemented and
+  wired into the menu, pending the 4-receiver hardware and a real test
 - RC522 (13.56MHz, 4-byte UIDs only) and RDM6300 (125kHz) are wired to
   real scan screens, with haptic feedback
 - The P4 ↔ C6 UART protocol is implemented end to end
@@ -253,7 +289,10 @@ else text entry is needed later (e.g. naming a saved IR code).
    "setup in progress" state that doesn't block the joystick from
    interacting with other screens (optional improvement)
 3. IR: a screen for saving/listing received codes (currently log-only)
-4. IR: 4-receiver direction-finding module (hardware doesn't exist yet)
+4. IR direction finding: wire up the 4x VS1838B receivers on
+   GPIO5/6/14/15 (see the pin plan above) and verify `ir_direction.c` on
+   real hardware — the quadrant flags and acceptance-cone overlap
+   behavior are unverified assumptions until then
 5. On the C6 side, `c6-firmware/main/uart_link.c`'s GPIO6/7 assumption
    needs checking against your actual wiring (the P4 side is fixed at
    GPIO18/19; the C6 side depends on your board)
