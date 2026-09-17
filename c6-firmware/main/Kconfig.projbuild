@@ -1,0 +1,31 @@
+menu "Makeshift Flipper C6 -- Ask AI (Ollama bridge)"
+
+    config MAKESHIFT_OLLAMA_HOST
+        string "Ollama host (PC's LAN IP or hostname)"
+        default "192.168.4.27"
+        help
+            Where the PC running Ollama (https://ollama.com) lives on the
+            local network. Set this to that PC's actual LAN IP (or a
+            hostname, if your network resolves it) before flashing --
+            previously this was a hardcoded #define in wifi_commands.c
+            that had to be edited and rebuilt by hand; it's now set here
+            via "idf.py menuconfig" so it doesn't need a source edit, and
+            so a stale/wrong address is easier to notice and fix (see
+            KNOWN_ISSUES.md for the "Ask AI questions silently go to the
+            wrong device" risk this was flagged for).
+
+    config MAKESHIFT_OLLAMA_PORT
+        int "Ollama port"
+        default 11434
+        help
+            Ollama's default REST API port. Only change this if you've
+            reconfigured Ollama to listen elsewhere.
+
+    config MAKESHIFT_OLLAMA_MODEL
+        string "Ollama model name"
+        default "qwen2.5vl:3b"
+        help
+            Must match a model already pulled on the PC (e.g. via
+            "ollama pull qwen2.5vl:3b") -- see c6-firmware/README.md.
+
+endmenu
