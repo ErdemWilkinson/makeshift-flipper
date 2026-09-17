@@ -58,15 +58,39 @@ static int read_axis(adc_channel_t channel)
 }
 
 // Averages a few samples at startup to find each axis's actual rest point,
-// since cheap joystick modules are rarely perfectly centered.
+// since cheap joystick modules are rarely perfectly centered. Warns (but
+// still returns a usable value) if the samples disagree too much to trust
+// as "resting" -- e.g. the stick was held off-center during boot -- or if
+// the result lands too close to either ADC rail, which would make
+// axis_update()'s trigger window degenerate.
 static int calibrate_center(adc_channel_t channel)
 {
     long sum = 0;
+    int min_val = ADC_MAX;
+    int max_val = 0;
     const int samples = 16;
     for (int i = 0; i < samples; i++) {
-        sum += read_axis(channel);
+        int val = read_axis(channel);
+        sum += val;
+        if (val < min_val) min_val = val;
+        if (val > max_val) max_val = val;
     }
-    return (int)(sum / samples);
+    int center = (int)(sum / samples);
+
+    if (max_val - min_val > ADC_MAX / 16) {
+        ESP_LOGW(TAG, "channel %d: noisy calibration (spread %d..%d) -- "
+                      "was the stick held off-center at boot?", channel, min_val, max_val);
+    }
+
+    // Keep center away from the rails so the trigger/release window in
+    // axis_update() can't collapse to near-zero width.
+    int rail_margin = ADC_MAX / 8;
+    if (center < rail_margin) {
+        center = rail_margin;
+    } else if (center > ADC_MAX - rail_margin) {
+        center = ADC_MAX - rail_margin;
+    }
+    return center;
 }
 
 void buttons_init(void)
