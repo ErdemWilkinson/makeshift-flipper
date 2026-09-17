@@ -16,6 +16,10 @@ plus a separate BACK button.
   either via a phone-based web setup flow or a fully offline
   joystick-driven "scroll keyboard"
 - Animated OLED menu navigation (slide-in entrance, inverted selection bar)
+- "Ask AI": type a question on the scroll keyboard and get an answer from a
+  Turkish-capable LLM (Qwen2.5) running on a PC on the same network, via the
+  C6's Wi-Fi — see `c6-firmware/README.md`'s "AI bridge" section for the
+  one-time Ollama setup this needs
 
 None of this has been built or flashed on real hardware yet — see
 "Known issues / security notes" below and `KNOWN_ISSUES.md` for the full
@@ -231,11 +235,14 @@ else text entry is needed later (e.g. naming a saved IR code).
 - RC522 (13.56MHz, 4-byte UIDs only) and RDM6300 (125kHz) are wired to
   real scan screens, with haptic feedback
 - The P4 ↔ C6 UART protocol is implemented end to end
-  (SCAN/CONNECT/SEND/SETUP), with real Wi-Fi operations on the C6 side
+  (SCAN/CONNECT/SEND/SETUP/ASK), with real Wi-Fi operations on the C6 side
 - Web-based Wi-Fi setup (phone → AP → browser → ssid/password form) is
   implemented end to end, reachable from the menu as "WiFi Setup"
 - No-phone fallback: joystick "scroll keyboard" for picking a network and
   typing a password ("WiFi Setup Manual")
+- "Ask AI": type a question, get a scrollable answer back from a PC-hosted
+  Ollama LLM over the C6's Wi-Fi link — needs the one-time PC-side Ollama
+  setup in `c6-firmware/README.md`
 - "About" still just logs (no real screen yet)
 
 ## Next steps (not yet written)
@@ -262,6 +269,14 @@ else text entry is needed later (e.g. naming a saved IR code).
    hardware — depending on the potentiometer's noise floor and mechanical
    play, they could end up too sensitive (false triggers) or too strict
    (missing light touches)
+9. "Ask AI" needs a real IP address (`OLLAMA_HOST` in
+   `c6-firmware/main/wifi_commands.c`) and a running Ollama instance to do
+   anything — see `c6-firmware/README.md`'s "AI bridge" section
+10. On-device offline speech-to-command (TinyML keyword spotting for
+    Turkish digits/commands via a microphone) is a separate, not-yet-started
+    piece — would need new hardware (I2S mic), a new pin, an
+    `esp-tflite-micro` integration, and a trained `.tflite` model (that
+    training happens off-device, in Python, not on the ESP32 itself)
 
 ## Known issues / security notes
 
