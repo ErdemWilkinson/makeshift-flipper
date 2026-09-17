@@ -3,7 +3,9 @@ idf_component_register(
         "main.c"
         "uart_link.c"
         "wifi_commands.c"
+        "wifi_monitor.c"
         "wifi_setup_ap.c"
+        "bt_scan.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -14,8 +16,8 @@ idf_component_register(
         esp_netif
         esp_http_server
         esp_http_client
-        json
         lwip
         nvs_flash
         log
+        bt
 )
