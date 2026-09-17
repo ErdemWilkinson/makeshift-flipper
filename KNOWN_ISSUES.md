@@ -246,6 +246,55 @@ section).
   pattern (one event per poll, and bits being cleared on the next
   `connect_sta` call).
 
+## Round 7 (this session): main/input/buttons.c/h rewrite for the 2-axis
+## analog joystick + separate BACK button (a hardware-driven rewrite by
+## the other session, reviewed here for the first time)
+
+Verified first: the three `BUTTON_BACK` call sites in `main.c` (~lines
+161, 188, 280), the new ADC-based reading in `buttons.c/h`, the `esp_adc`
+component added to `CMakeLists.txt`, and the README update were all
+checked against the actual files and are consistent with what was
+reported. Findings on the new code itself:
+
+- ✅ **FIXED** (this session): `calibrate_center()` (`buttons.c`) now
+  tracks the min/max of the 16 boot samples and logs a warning if the
+  spread is too wide to trust as "resting" (the stick was likely held
+  off-center at power-on) — this doesn't correct the reading (there's no
+  way to know the true center from a noisy sample alone), but at least
+  surfaces the problem for anyone with a serial connection instead of a
+  silently wrong center. Separately, the computed center is now clamped
+  away from both ADC rails (kept at least `ADC_MAX/8` from 0 and from
+  `ADC_MAX`), which closes the degenerate-threshold-window risk noted
+  below as its own item — a miswired or faulty pot that reads near a
+  rail can no longer collapse `axis_update()`'s trigger/release window to
+  near-zero width.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `read_axis()` (`buttons.c:46-58`)
+  silently returns the calibrated center on an ADC read failure (a
+  deliberate "reads as no motion" choice), only logging via `ESP_LOGW`.
+  If the ADC fails persistently (e.g. a disconnected wire), the joystick
+  appears completely dead with no way for the user to tell why without a
+  serial connection — the device looks "frozen."
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** center calibration only happens once
+  at boot, never re-calibrated at runtime. Cheap potentiometer modules
+  can drift over time (heat, mechanical wear); a device left on for a
+  long session could develop a "stick pulls to one side" feel with no
+  way to correct it short of a reboot.
+- ✅ **FIXED** (this session): see the `calibrate_center()` fix above —
+  `center` is now clamped away from both ADC rails, so this can no
+  longer occur through the calibration path. (A pot that drifts near a
+  rail *after* boot, post-calibration, isn't covered by this fix — see
+  the "no runtime re-calibration" item above.)
+- 🟡 **NOTE, NEEDS HARDWARE VERIFICATION:** `BACK_GPIO` (GPIO23) is a
+  newly introduced pin, not present in the previous pin plan. The README
+  calls it "unused" but since no firmware here has been built or flashed,
+  whether GPIO23 collides with a strapping pin or another peripheral on
+  the ESP32-P4 is unverified — worth double-checking specifically on the
+  first flash attempt, since it's new rather than carried over.
+- ❌ **REVIEWED, LOW SEVERITY:** `buttons_poll()` (~lines 153-167) checks
+  PRESS before BACK; if both are pressed in the same poll tick, BACK is
+  missed that tick (not lost permanently — it's picked up on the next
+  poll). Practical impact is negligible.
+
 ## General
 
 - No firmware in this repo has been built or run on real hardware (also
