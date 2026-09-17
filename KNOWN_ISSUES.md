@@ -362,7 +362,7 @@ checked `menu.c/h`, `main.c`'s `app_main()` wiring (`menu_init` /
 `answer_view.c` and `ir_direction.c` are both now in `SRCS`), and
 `ir_direction.c` against the claims above — all consistent with what was
 reported, no discrepancies found. No new issues in the submenu system
-itself. Two additional findings from reviewing the surrounding code:
+itself. One additional finding from reviewing the surrounding code:
 
 - ✅ **FIXED (one-line note added)**: `ir_direction.c` puts two of its
   four receivers on GPIO5/GPIO6 — both inside the ADC1-only GPIO0-6 range
@@ -373,108 +373,48 @@ itself. Two additional findings from reviewing the surrounding code:
   editor doesn't have to rediscover it by cross-referencing `buttons.c`.
   The pin assignment itself wasn't changed — moving it would just shift
   the scarcity elsewhere on the same GPIO0-6 range.
-- ✅ **FIXED**: `OLLAMA_HOST` (and `OLLAMA_PORT`/`OLLAMA_MODEL`) moved
-  from a hardcoded `#define` in `c6-firmware/main/wifi_commands.c` to
-  `c6-firmware/main/Kconfig.projbuild`, set via `idf.py menuconfig`
-  ("Makeshift Flipper C6 -- Ask AI (Ollama bridge)"). This doesn't
-  eliminate the underlying risk (a stale address after a DHCP
-  reassignment still sends questions to whatever now holds that IP,
-  plain HTTP, no host verification) — it only removes the "requires a
-  source edit + rebuild to fix" friction, making a wrong address easier
-  to notice and correct without touching code. Real host verification
-  (pinning, TLS, or a discovery mechanism) would be a separate, larger
-  change; not attempted here.
-- ✅ **FIXED, PARTIALLY**: `wifi_commands_ask()`'s response buffer
-  (`ASK_RESPONSE_BUF_LEN`) was bumped from 4096 to 16384 bytes — a
-  multi-paragraph answer that previously got silently truncated
-  mid-JSON (causing a bare "ASKFAIL" with `cJSON_Parse()` failing on the
-  cut-off body) now has much more headroom. "Partially" because this
-  raises the ceiling rather than removing it — a sufficiently long reply
-  can still overflow 16KB and hit the same silent-truncation path. A
-  true fix (streaming/incremental JSON parse, or a dynamically-grown
-  buffer) would remove the ceiling entirely; not attempted here since it
-  touches the HTTP event-handler flow more invasively for a scenario
-  that's now much rarer in practice.
 
-## Round 9 (this session): "Debug AI" feature (new main/diag/diag.c/h,
-## c6_link_debug()/wifi_commands_debug(), c6-firmware/tools/debug_server.py,
-## background debug_ai_task in main.c)
+**[Superseded by Round 11]** The rest of this round's Ask AI findings
+(OLLAMA_HOST → Kconfig, ASK_RESPONSE_BUF_LEN bump) and all of Round 9
+("Debug AI") documented fixes/risks to code that has since been removed
+entirely — see Round 11 below. Removed by `makeshift-flipper-74` in
+commit `9d8b15b`; verified against the current tree by
+`makeshift-flipper-da` (this session): `OLLAMA_HOST`, `wifi_commands_ask`,
+`c6_link_ask`, and `action_ask_ai` no longer appear anywhere in the
+source tree (only in this file's history, intentionally, as a record of
+what used to exist). `main/diag/diag.c/h` no longer has a single-slot
+"last error"; it's the 24-entry ring buffer discussed in Round 11.
+`c6-firmware/tools/debug_server.py` no longer calls Ollama. Kept the
+paragraph and bullet list above for the historical record (a past review
+pass genuinely happened and found real things) rather than deleting it
+outright, but none of it describes code that exists in this repo anymore.
 
-Started as a standalone DEBUG button; the button was removed mid-session
-in favor of a fully automatic background task (`debug_ai_task()` in
-`main.c`) that polls `diag_get()->seq` and, on any new recorded error,
-sends it to a PC-side helper for an AI opinion (logged to
-`debug_log.md`) without any user action. The result is delivered back to
-the main loop via a depth-1 queue (`s_debug_result_queue`,
-`xQueueOverwrite`/`xQueueReceive` with 0 timeout) so the ~65s network
-call never blocks the joystick/menu. `c6_link.c` gained an internal
-mutex (`s_link_mutex`) so this background task and the main loop's own
-blocking `c6_link_*` calls can't collide on the shared UART line buffer.
-Self-reviewed (no other session available this round); flagged for a
-second look.
+- ✅ **FIXED:** `main/ui/answer_view.c`/`.h` (the scrollable text viewer
+  built specifically to display Ask AI's answers) were found still
+  present on disk and still listed in `main/CMakeLists.txt`'s `SRCS`
+  during this cleanup (flagged by `makeshift-flipper-8b`), even though
+  `main/main.c` no longer referenced `answer_view` anywhere — Ask AI was
+  its only caller, so it was dead code: still compiling, taking up flash
+  space, called by nothing. `action_error_history()`'s "Errors" screen
+  rolls its own display logic and doesn't need a generic scrollable
+  viewer, so both files were deleted and the `SRCS` entry removed by
+  `makeshift-flipper-74`.
 
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `diag.c` keeps exactly one global
-  error slot, overwritten by whatever fails next. If a user hits an RC522
-  error, then immediately triggers an unrelated WiFi Scan failure before
-  `debug_ai_task()` polls again, only the WiFi error is reported — the
-  RC522 one is silently gone with no trace it ever happened. This is the
-  documented, intended behavior (`diag.h`'s header comment: "not a
-  history/log"), not a bug, but worth remembering if this ever needs to
-  explain "several things went wrong."
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** none of the `diag_record_error()`
-  call sites added in `main.c` are reached from `ir_driver.c`/
-  `ir_direction.c` (`ir_nec_decode()` failures aren't errors worth
-  reporting -- most failed decodes are just noise/partial frames, not a
-  real problem) or `rdm6300.c` (a checksum failure there is silently
-  discarded by the driver itself, never surfacing as a distinct error
-  code the main loop could record). So "Debug AI" can only ever fire for
-  RC522/Wi-Fi/Ask-AI failures today, not IR or 125kHz RFID ones. Not
-  documented anywhere the user would see it.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `wifi_commands_debug()` and
-  `c6_link_debug()` use `'|'` as the field separator for
-  `DEBUG:<module>|<code>|<note>`, matching the reply format
-  `DIAG:<verdict>|<explanation>`. Like the existing `','`/`':'`
-  separators used by `CONNECT`/`SEND`, this isn't escaped -- a `note`
-  containing `|` would corrupt the parse on the C6 side. `note` is always
-  sent as `""` now that there's no UI moment to type one, so this is
-  currently unreachable; would need revisiting if a note field is ever
-  reintroduced.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `debug_server.py` is a bare
-  `http.server.HTTPServer` with `serve_forever()` -- single-threaded, one
-  request at a time. Since `wifi_commands_debug()`'s HTTP call already
-  blocks the C6 (and transitively `debug_ai_task()`'s call into
-  `c6_link_debug()`) for up to ~65s, this isn't a new bottleneck in
-  practice (there's only ever one device that could be calling it), but
-  it would need `ThreadingHTTPServer` if this script were ever reused for
-  more than one device.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `debug_ai_task()` polls every 500ms
-  and will retry-send on every new error regardless of whether Wi-Fi is
-  even connected -- before "WiFi Setup" has ever been run, any recorded
-  error (e.g. an RC522 read failure during normal use) triggers a
-  `c6_link_debug()` call that's expected to fail, logged as a `ESP_LOGW`
-  and otherwise silently dropped. This is intentional (no good way to
-  distinguish "not worth reporting" from "should report but network's
-  down" from inside the task), but means a user with no Wi-Fi configured
-  will see one warning log line per error with no on-screen feedback.
-- 🟡 **NOTE:** `c6_link.c`'s new `s_link_mutex` is taken with
-  `portMAX_DELAY` in every public wrapper, including inside
-  `debug_ai_task()`'s call to `c6_link_debug()`. If the main loop is
-  itself blocked inside a different `c6_link_*` call (e.g.
-  `action_wifi_setup()`'s multi-minute wait) when a new error is
-  recorded, `debug_ai_task()` simply queues behind it on the mutex and
-  sends once the main loop's call releases it -- no deadlock (nothing
-  ever takes the mutex and then blocks waiting on the background task),
-  just a delayed report. Worth confirming in practice once there's real
-  hardware to test concurrent Wi-Fi setup + a triggered error on.
-- ❌ **REVIEWED, NO RISK:** `c6_link.h` and `wifi_commands.h` briefly had
-  duplicate/conflicting `#define`s and struct definitions for
-  `C6_DEBUG_EXPLANATION_MAX_LEN`/`c6_debug_result_t`/`DEBUG_SERVER_PORT`
-  during this session, from two concurrent edits landing close together
-  (one from this session, one already on disk). Resolved before
-  committing -- the final files each define these exactly once,
-  confirmed by re-reading both after the fix. Noted here only so a
-  future `git blame` dig into near-simultaneous commits doesn't waste
-  time chasing a conflict that never made it into a commit.
+## Round 9 (historical, superseded)
+
+Removed in its entirety along with the "Debug AI" feature it documented
+— see the note above and Round 11 below. The original Round 9 text
+described `main/diag/diag.c/h`'s original single-error-slot design,
+`c6_link_debug()`/`wifi_commands_debug()`, `c6-firmware/tools/debug_server.py`'s
+original Ollama-calling version, and a background `debug_ai_task()` in
+`main.c` — none of which exist in the current tree. Removed rather than
+kept as dead text since, unlike Round 8's Ask AI paragraph, none of
+Round 9's specific findings (single-slot overwrite, missing IR/RDM6300
+error sites, `'|'` separator, single-threaded `debug_server.py`, mutex
+ordering) apply to anything in the current codebase — `diag.c` isn't
+single-slot anymore, `c6_link_debug()` doesn't exist, and
+`debug_server.py`'s threading model changed along with everything else
+about it. See Round 11 for the replacement feature's own findings.
 
 ## Round 10 (this session): RFID clone/dump (main/rfid/rc522.c/h,
 ## main/main.c's action_rfid_clone()), Wi-Fi Monitor
