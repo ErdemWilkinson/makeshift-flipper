@@ -1,49 +1,19 @@
-menu "Makeshift Flipper C6 -- Ask AI (Ollama bridge)"
+menu "Makeshift Flipper C6 -- Error Log"
 
-    config MAKESHIFT_OLLAMA_HOST
-        string "Ollama host (PC's LAN IP or hostname)"
+    config MAKESHIFT_LOG_SERVER_HOST
+        string "Log server host (PC's LAN IP or hostname)"
         default "192.168.4.27"
         help
-            Where the PC running Ollama (https://ollama.com) lives on the
-            local network. Set this to that PC's actual LAN IP (or a
-            hostname, if your network resolves it) before flashing --
-            previously this was a hardcoded #define in wifi_commands.c
-            that had to be edited and rebuilt by hand; it's now set here
-            via "idf.py menuconfig" so it doesn't need a source edit, and
-            so a stale/wrong address is easier to notice and fix (see
-            KNOWN_ISSUES.md for the "Ask AI questions silently go to the
-            wrong device" risk this was flagged for).
+            Where the log server helper (c6-firmware/tools/debug_server.py)
+            runs on the local network. Used by the on-device "Errors" ->
+            Send feature to upload the device's local error history for
+            safekeeping/inspection on a PC -- no AI/Ollama involved, just a
+            small HTTP endpoint that appends the uploaded entries to a
+            file. Entirely optional: the error history works fully offline
+            on the device without this being configured at all.
 
-    config MAKESHIFT_OLLAMA_PORT
-        int "Ollama port"
-        default 11434
-        help
-            Ollama's default REST API port. Only change this if you've
-            reconfigured Ollama to listen elsewhere.
-
-    config MAKESHIFT_OLLAMA_MODEL
-        string "Ollama model name"
-        default "qwen3:8b"
-        help
-            Must match a model already pulled on the PC (e.g. via
-            "ollama pull qwen3:8b") -- see c6-firmware/README.md.
-            qwen3:8b replaced qwen2.5vl:3b after testing showed noticeably
-            better Turkish answer quality for the same prompt.
-
-    config MAKESHIFT_DEBUG_SERVER_HOST
-        string "Debug AI server host (PC's LAN IP or hostname)"
-        default "192.168.4.27"
-        help
-            Where debug_server.py (c6-firmware/tools/debug_server.py) runs
-            on the local network -- usually the same PC as Ollama, often
-            the same address as MAKESHIFT_OLLAMA_HOST above, but kept as a
-            separate setting since it's a different port/process and
-            could run elsewhere. Used by the device's automatic "Debug AI"
-            feature to send the most recent error for diagnosis and
-            logging as soon as it happens -- see c6-firmware/README.md.
-
-    config MAKESHIFT_DEBUG_SERVER_PORT
-        int "Debug AI server port"
+    config MAKESHIFT_LOG_SERVER_PORT
+        int "Log server port"
         default 8765
         help
             Must match PORT in debug_server.py.
