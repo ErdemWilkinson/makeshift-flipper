@@ -1,0 +1,35 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "ir_nec.h"
+
+// One flag per receiver. A remote roughly in front of a receiver triggers
+// that flag (and often its immediate neighbors too, since VS1838B modules
+// have a wide-ish acceptance cone -- this is coarse quadrant sensing, not
+// precise bearing).
+typedef enum {
+    IR_DIR_NORTH = 1 << 0,
+    IR_DIR_EAST  = 1 << 1,
+    IR_DIR_SOUTH = 1 << 2,
+    IR_DIR_WEST  = 1 << 3,
+} ir_direction_flag_t;
+
+// Brings up 4 independent RMT RX channels, one per receiver. Call once at
+// startup. Requires 4 free GPIOs -- see the *_GPIO defines at the top of
+// ir_direction.c; wire your 4x VS1838B modules to match (or edit those
+// defines) before relying on this.
+void ir_direction_init(void);
+
+// Non-blocking: checks all 4 receivers for a decoded NEC frame since the
+// last call. Returns true if at least one receiver decoded a valid frame;
+// `out_flags` is an OR of ir_direction_flag_t for every receiver that saw
+// one (usually just one, sometimes two adjacent ones for a source near a
+// boundary between them), and `out_frame` is the frame decoded by
+// whichever receiver triggered first this poll (if multiple receivers
+// caught the same frame simultaneously, the payload is identical anyway --
+// this is one NEC transmission arriving at multiple receivers, not
+// separate transmissions). Call this periodically from the main loop, same
+// as ir_driver_poll_rx().
+bool ir_direction_poll(uint8_t *out_flags, ir_nec_frame_t *out_frame);
