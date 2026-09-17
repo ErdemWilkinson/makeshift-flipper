@@ -11,6 +11,9 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_http_client.h"
+
+#include "cJSON.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -22,6 +25,21 @@ static const char *TAG = "wifi_commands";
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT       BIT1
 #define CONNECT_TIMEOUT_MS  10000
+
+// Where the PC running Ollama (https://ollama.com) lives on the local
+// network. Ollama's default REST API listens on 11434 and isn't
+// network-exposed unless OLLAMA_HOST=0.0.0.0 is set on the PC -- see
+// c6-firmware/README.md for the one-time PC-side setup. Change OLLAMA_HOST
+// to that PC's LAN IP (a hostname works too if your network resolves it).
+#define OLLAMA_HOST "192.168.1.100"
+#define OLLAMA_PORT 11434
+#define OLLAMA_MODEL "qwen2.5:7b"
+#define OLLAMA_TIMEOUT_MS 60000
+#define OLLAMA_SYSTEM_PROMPT "Sen bir cihaz asistanisin. Kisa ve net turkce cevaplar ver."
+
+// Answers are split into chunks this size (comfortably under
+// UART_LINK_MAX_LINE_LEN) before being sent as "ANSWER:<chunk>" lines.
+#define ASK_CHUNK_LEN 200
 
 static EventGroupHandle_t s_wifi_event_group;
 static esp_netif_t *s_netif;
@@ -205,4 +223,137 @@ void wifi_commands_send(const char *args)
     } else {
         uart_link_write_line("FAIL");
     }
+}
+
+// Response body accumulator for the Ollama HTTP client's event callback.
+// Sized for a generous answer; a reply that overflows this is truncated
+// (the JSON will fail to parse cleanly in that case and ASKFAIL is sent --
+// acceptable for a hobby project, a streaming/incremental parse would be
+// needed to handle arbitrarily long answers).
+#define ASK_RESPONSE_BUF_LEN 4096
+
+typedef struct {
+    char *buf;
+    int len;
+} ask_response_ctx_t;
+
+static esp_err_t ask_http_event_handler(esp_http_client_event_t *evt)
+{
+    if (evt->event_id == HTTP_EVENT_ON_DATA) {
+        ask_response_ctx_t *ctx = (ask_response_ctx_t *)evt->user_data;
+        int copy_len = evt->data_len;
+        int space = ASK_RESPONSE_BUF_LEN - 1 - ctx->len;
+        if (copy_len > space) {
+            copy_len = space;
+        }
+        if (copy_len > 0) {
+            memcpy(ctx->buf + ctx->len, evt->data, copy_len);
+            ctx->len += copy_len;
+            ctx->buf[ctx->len] = '\0';
+        }
+    }
+    return ESP_OK;
+}
+
+void wifi_commands_ask(const char *question)
+{
+    char *response_buf = malloc(ASK_RESPONSE_BUF_LEN);
+    if (response_buf == NULL) {
+        uart_link_write_line("ASKFAIL");
+        return;
+    }
+    response_buf[0] = '\0';
+    ask_response_ctx_t ctx = { .buf = response_buf, .len = 0 };
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "model", OLLAMA_MODEL);
+    cJSON_AddStringToObject(req, "prompt", question);
+    cJSON_AddStringToObject(req, "system", OLLAMA_SYSTEM_PROMPT);
+    cJSON_AddBoolToObject(req, "stream", false);
+    char *req_body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+
+    if (req_body == NULL) {
+        free(response_buf);
+        uart_link_write_line("ASKFAIL");
+        return;
+    }
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s:%d/api/generate", OLLAMA_HOST, OLLAMA_PORT);
+
+    esp_http_client_config_t http_cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = OLLAMA_TIMEOUT_MS,
+        .event_handler = ask_http_event_handler,
+        .user_data = &ctx,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, req_body, strlen(req_body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(req_body);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "Ollama request failed: %s (HTTP %d)", esp_err_to_name(err), status);
+        free(response_buf);
+        uart_link_write_line("ASKFAIL");
+        return;
+    }
+
+    cJSON *resp = cJSON_Parse(response_buf);
+    free(response_buf);
+    if (resp == NULL) {
+        ESP_LOGW(TAG, "Ollama response wasn't valid JSON (truncated/oversized?)");
+        uart_link_write_line("ASKFAIL");
+        return;
+    }
+
+    cJSON *answer = cJSON_GetObjectItemCaseSensitive(resp, "response");
+    if (!cJSON_IsString(answer) || answer->valuestring == NULL) {
+        cJSON_Delete(resp);
+        uart_link_write_line("ASKFAIL");
+        return;
+    }
+
+    // Send the answer in fixed-size chunks -- the UART link is line-based
+    // and a multi-hundred-token reply would otherwise exceed
+    // UART_LINK_MAX_LINE_LEN in one line. A newline inside the answer text
+    // itself is replaced with a space first, since the wire protocol uses
+    // '\n' strictly as a line terminator.
+    const char *text = answer->valuestring;
+    size_t text_len = strlen(text);
+    char *sanitized = malloc(text_len + 1);
+    if (sanitized == NULL) {
+        cJSON_Delete(resp);
+        uart_link_write_line("ASKFAIL");
+        return;
+    }
+    for (size_t i = 0; i < text_len; i++) {
+        char c = text[i];
+        sanitized[i] = (c == '\n' || c == '\r') ? ' ' : c;
+    }
+    sanitized[text_len] = '\0';
+
+    char chunk[ASK_CHUNK_LEN + 8];
+    for (size_t offset = 0; offset < text_len; offset += ASK_CHUNK_LEN) {
+        size_t n = text_len - offset;
+        if (n > ASK_CHUNK_LEN) {
+            n = ASK_CHUNK_LEN;
+        }
+        snprintf(chunk, sizeof(chunk), "ANSWER:%.*s", (int)n, sanitized + offset);
+        uart_link_write_line(chunk);
+    }
+    if (text_len == 0) {
+        uart_link_write_line("ANSWER:");
+    }
+    uart_link_write_line("ANSWERDONE");
+
+    free(sanitized);
+    cJSON_Delete(resp);
 }

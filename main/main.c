@@ -11,6 +11,7 @@
 #include "rfid/rc522.h"
 #include "rfid/rdm6300.h"
 #include "feedback/vibration.h"
+#include "ui/answer_view.h"
 #include "ui/display.h"
 #include "ui/menu.h"
 #include "ui/text_entry.h"
@@ -225,6 +226,88 @@ static void action_about(void)
     ESP_LOGI(TAG, "Makeshift Flipper - skeleton build");
 }
 
+// Types a question on the scroll keyboard, sends it to the C6 (which relays
+// it to a PC-hosted Ollama server -- see c6-firmware/README.md), and shows
+// the answer in a scrollable view. Fully blocking, same as the other
+// network-backed actions (WiFi setup): there's nothing else to interact
+// with while waiting on a reply anyway. Requires the P4 already be
+// connected to Wi-Fi via the C6 (see "WiFi Setup"/"WiFi Setup Manual") and
+// the PC's Ollama reachable at the address baked into wifi_commands.c.
+static void action_ask_ai(void)
+{
+    text_entry_t entry;
+    text_entry_init(&entry);
+
+    bool cancelled = false;
+    for (;;) {
+        text_entry_render(&entry, "Ask AI:", /* mask = */ false);
+
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            cancelled = true;
+            break;
+        }
+        if (text_entry_handle_button(&entry, event)) {
+            break; // '^' (OK) was pressed
+        }
+    }
+
+    if (cancelled || entry.length == 0) {
+        menu_render(s_main_menu_ref);
+        return;
+    }
+
+    display_clear();
+    display_draw_text(0, 0, "Asking AI...");
+    display_draw_text(2, 0, "(may take a while)");
+    display_flush();
+
+    char answer[C6_ASK_ANSWER_MAX_LEN + 1];
+    bool ok = c6_link_ask(entry.buffer, answer);
+
+    if (!ok) {
+        display_clear();
+        display_draw_text(0, 0, "AI request failed");
+        display_draw_text(2, 0, "Check WiFi / PC");
+        display_draw_text(6, 0, "Press any key");
+        display_flush();
+        button_id_t any;
+        do {
+            any = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (any == BUTTON_COUNT);
+        menu_render(s_main_menu_ref);
+        return;
+    }
+
+    answer_view_t view;
+    answer_view_init(&view, "AI Answer", answer);
+    answer_view_render(&view, "AI Answer");
+
+    for (;;) {
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            break;
+        }
+        int delta = (event == BUTTON_DOWN) ? 1 : (event == BUTTON_UP) ? -1 : 0;
+        if (delta != 0 && answer_view_scroll(&view, delta)) {
+            answer_view_render(&view, "AI Answer");
+        }
+    }
+
+    menu_render(s_main_menu_ref);
+}
+
 static const menu_item_t s_main_menu_items[] = {
     {"Read 125kHz",   action_rfid_125khz},
     {"Read 13.56MHz", action_nfc_1356mhz},
@@ -232,6 +315,7 @@ static const menu_item_t s_main_menu_items[] = {
     {"WiFi Scan Test", action_wifi_scan_test},
     {"WiFi Setup",    action_wifi_setup},
     {"WiFi Setup Manual", action_wifi_setup_manual},
+    {"Ask AI",        action_ask_ai},
     {"About",         action_about},
 };
 
