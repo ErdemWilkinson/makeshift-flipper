@@ -308,9 +308,12 @@ else text entry is needed later (e.g. naming a saved IR code).
    hardware — depending on the potentiometer's noise floor and mechanical
    play, they could end up too sensitive (false triggers) or too strict
    (missing light touches)
-9. "Ask AI" needs a real IP address (`OLLAMA_HOST` in
-   `c6-firmware/main/wifi_commands.c`) and a running Ollama instance to do
-   anything — see `c6-firmware/README.md`'s "AI bridge" section
+9. "Ask AI" needs a real Ollama host set via `idf.py menuconfig`
+   (`MAKESHIFT_OLLAMA_HOST`, `c6-firmware/main/Kconfig.projbuild`) and a
+   running Ollama instance to do anything — see `c6-firmware/README.md`'s
+   "AI bridge" section. A stale address (e.g. after a DHCP reassignment)
+   silently sends questions to whatever device now holds that IP rather
+   than failing loudly — see `KNOWN_ISSUES.md`
 10. On-device offline speech-to-command (TinyML keyword spotting for
     Turkish digits/commands via a microphone) is a separate, not-yet-started
     piece — would need new hardware (I2S mic), a new pin, an
