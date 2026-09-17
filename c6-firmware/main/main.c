@@ -38,6 +38,8 @@ void app_main(void)
             wifi_commands_send(line + 5);
         } else if (strncmp(line, "ASK:", 4) == 0) {
             wifi_commands_ask(line + 4);
+        } else if (strncmp(line, "DEBUG:", 6) == 0) {
+            wifi_commands_debug(line + 6);
         } else if (strcmp(line, "SETUP") == 0) {
             bool ok = wifi_setup_ap_run(SETUP_TIMEOUT_MS);
             uart_link_write_line(ok ? "OK" : "FAIL");

@@ -23,6 +23,12 @@ plus a separate BACK button.
   Turkish-capable LLM (Qwen2.5) running on a PC on the same network, via the
   C6's Wi-Fi — see `c6-firmware/README.md`'s "AI bridge" section for the
   one-time Ollama setup this needs
+- **Automatic Debug AI**: no button, no manual step -- the moment any
+  action records an error (`main/diag/diag.h`), a background task sends it
+  to a PC-side helper that asks the same Ollama instance whether the
+  problem looks user-caused or system-caused, logs the verdict to
+  `debug_log.md`, and shows the result on the OLED on its own — see
+  `c6-firmware/README.md`'s "Debug AI" section
 
 None of this has been built or flashed on real hardware yet — see
 "Known issues / security notes" below and `KNOWN_ISSUES.md` for the full
@@ -71,7 +77,9 @@ defines at the top of `main/input/buttons.c`. The center button (SW)
 stayed on GPIO22. A **separate physical BACK button** was also added
 (GPIO23) — the analog joystick's X axis is now used purely for
 left/right navigation within a menu, while exiting a screen is this
-standalone button's job.
+standalone button's job. "Debug AI" (see below) has no button of its own
+— it's fully automatic, triggered by `diag_record_error()` rather than a
+GPIO read.
 
 Joystick axis reading: each axis is calibrated at boot (average of 16
 samples, since the rest point isn't guaranteed to be dead center), a
@@ -279,6 +287,13 @@ else text entry is needed later (e.g. naming a saved IR code).
 - "Ask AI": type a question, get a scrollable answer back from a PC-hosted
   Ollama LLM over the C6's Wi-Fi link — needs the one-time PC-side Ollama
   setup in `c6-firmware/README.md`
+- "Debug AI": fully automatic, no button -- a background task
+  (`debug_ai_task_fn()` in `main/main.c`) notices the moment any action
+  records an error (`main/diag/diag.c`) and sends it to a PC-side helper
+  script (`c6-firmware/tools/debug_server.py`), which asks Ollama for a
+  user-vs-system verdict, logs it to `debug_log.md`, and returns a short
+  explanation shown on the OLED — needs both the Ask AI Ollama setup and
+  the extra `debug_server.py` step in `c6-firmware/README.md`
 - "About" still just logs (no real screen yet)
 
 ## Next steps (not yet written)
@@ -314,7 +329,14 @@ else text entry is needed later (e.g. naming a saved IR code).
    "AI bridge" section. A stale address (e.g. after a DHCP reassignment)
    silently sends questions to whatever device now holds that IP rather
    than failing loudly — see `KNOWN_ISSUES.md`
-10. On-device offline speech-to-command (TinyML keyword spotting for
+10. "Debug AI" needs `debug_server.py` running on the PC alongside Ollama
+    (see `c6-firmware/README.md`'s "Debug AI" section) — untested on real
+    hardware, same as everything else here. It only ever reports the
+    single most recently recorded error (`main/diag/diag.h`): if two
+    errors happen close together, only the newer one gets reported, and
+    there's no history/log on the device side (the PC's `debug_log.md`
+    is the only persistent record)
+11. On-device offline speech-to-command (TinyML keyword spotting for
     Turkish digits/commands via a microphone) is a separate, not-yet-started
     piece — would need new hardware (I2S mic), a new pin, an
     `esp-tflite-micro` integration, and a trained `.tflite` model (that

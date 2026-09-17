@@ -53,3 +53,22 @@ bool c6_link_ask(const char *question, char *out_answer);
 // C6 reports a successful station connection or its own setup timeout
 // elapses. Returns true once connected.
 bool c6_link_setup(void);
+
+#define C6_DEBUG_VERDICT_MAX_LEN 16
+#define C6_DEBUG_EXPLANATION_MAX_LEN 400
+
+typedef struct {
+    char verdict[C6_DEBUG_VERDICT_MAX_LEN + 1];         // "user" / "system" / "unknown"
+    char explanation[C6_DEBUG_EXPLANATION_MAX_LEN + 1]; // short AI-written explanation, Turkish
+} c6_debug_result_t;
+
+// Sends "DEBUG:<module>|<code>|<note>" (see main/diag/diag.h for where
+// `module`/`code` come from) and blocks (up to a minute or so -- the
+// PC-side debug_server.py runs its own Ollama call) waiting for a
+// "DIAG:<verdict>|<explanation>" reply, which it splits into `out_result`.
+// `note` may be empty but must not itself contain '|' (the on-device
+// scroll keyboard can't produce one, so this isn't a real restriction in
+// practice). Returns true on success, false on timeout, link error, or a
+// "DIAGFAIL" reply.
+bool c6_link_debug(const char *module, const char *code, const char *note,
+                    c6_debug_result_t *out_result);
