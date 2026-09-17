@@ -5,11 +5,15 @@
 
 #include "display.h"
 
-// A read-only, scrollable text viewer for showing a long block of text (an
-// AI answer) on the small OLED. Wraps the text into DISPLAY_COLS-wide lines
-// once at open time, then lets the caller scroll through them with
-// UP/DOWN, same button vocabulary as the rest of the UI. BACK (handled by
-// the caller, like every other screen) exits back to the menu.
+// A read-only, scrollable text viewer for showing a long block of text on
+// the small OLED. Wraps the text into DISPLAY_COLS-wide lines once at open
+// time, then lets the caller scroll through them with UP/DOWN, same
+// button vocabulary as the rest of the UI. BACK (handled by the caller,
+// like every other screen) exits back to the menu.
+//
+// Not currently used by any menu action (its original caller, "Ask AI",
+// was removed -- see KNOWN_ISSUES.md) but kept as a generic component for
+// whatever next needs to show a long wrapped/scrollable string.
 
 #define ANSWER_VIEW_MAX_LINES 64
 
@@ -20,8 +24,7 @@ typedef struct {
 } answer_view_t;
 
 // Word-wraps `text` into `view`'s line buffer (truncates at
-// ANSWER_VIEW_MAX_LINES worth of content if the text is unusually long --
-// c6_link_ask()'s C6_ASK_ANSWER_MAX_LEN already bounds it well under that).
+// ANSWER_VIEW_MAX_LINES worth of content if the text is unusually long).
 void answer_view_init(answer_view_t *view, const char *title, const char *text);
 
 // UP/DOWN scroll by one line, clamped to the text's extent. Returns true if

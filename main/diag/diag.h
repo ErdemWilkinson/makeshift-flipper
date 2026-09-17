@@ -3,47 +3,43 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Tracks the single most recent error/failure the device has seen, across
-// every module (RFID/NFC, IR, Wi-Fi/C6 link), so the automatic "Debug AI"
-// background task (main.c) can pick it up and send it off for analysis
-// without every call site having to pass error details through several
-// layers of blocking action functions.
+// Tracks a rolling history of the errors/failures the device has seen,
+// across every module (RFID/NFC, IR, Wi-Fi/C6 link), so they can be
+// browsed on-device ("Errors" menu, main.c's action_error_history()) and
+// optionally uploaded to a PC for safekeeping (c6_link_send_error_log()) --
+// entirely offline otherwise, no network/AI dependency.
 //
-// This is deliberately a single global slot, not a history/log: the use
-// case is "something just went wrong, get an AI opinion on it," not
-// long-term diagnostics. Overwritten by the next recorded error -- if two
-// errors happen close together before the first one's report finishes
-// sending, only the newer one gets reported (see main.c's background task
-// for how `seq` is used to detect "a new error arrived").
+// Fixed-size ring buffer in RAM: the newest DIAG_HISTORY_CAPACITY entries
+// are kept, oldest silently dropped once full. Not persisted across a
+// reboot (see KNOWN_ISSUES.md) -- this is meant for "what went wrong this
+// session," not a permanent audit log.
 
 #define DIAG_CODE_MAX_LEN 32
 #define DIAG_MODULE_MAX_LEN 24
+#define DIAG_HISTORY_CAPACITY 24
 
 typedef struct {
-    char code[DIAG_CODE_MAX_LEN + 1];     // e.g. "RC522_SCAN_ERROR", "ASKFAIL"
+    char code[DIAG_CODE_MAX_LEN + 1];     // e.g. "RC522_SCAN_ERROR"
     char module[DIAG_MODULE_MAX_LEN + 1]; // e.g. "13.56MHz NFC", "WiFi Setup"
-    bool has_error;
-    // Incremented on every diag_record_error() call, never reset. Lets a
-    // poller detect "a new error arrived since I last checked" by
-    // comparing against a saved value, without needing its own separate
-    // dirty flag or risking missing an error that arrives and is
-    // overwritten between two polls (the seq will have visibly jumped by
-    // more than 1, at least signaling something was missed).
-    uint32_t seq;
-} diag_state_t;
+    // esp_timer_get_time() at record time -- microseconds since boot, NOT
+    // wall-clock time (no RTC/NTP on this device). Only meaningful as a
+    // relative "how long ago" within the current boot session; see
+    // KNOWN_ISSUES.md.
+    int64_t timestamp_us;
+} diag_entry_t;
 
-// Records the most recent error, overwriting whatever was there before,
-// and bumps `seq`. `code` and `module` are copied (truncated to the max
-// lengths above), so callers can pass string literals or stack buffers
-// safely.
+// Appends a new entry to the history (oldest is overwritten once
+// DIAG_HISTORY_CAPACITY is reached). `code`/`module` are copied
+// (truncated to the max lengths above), so callers can pass string
+// literals or stack buffers safely.
 void diag_record_error(const char *module, const char *code);
 
-// Clears the recorded error (e.g. after a successful retry) -- also bumps
-// `seq` so a poller doesn't mistake this for "no change."
+// Clears the entire history.
 void diag_clear(void);
 
-// Returns a pointer to the current state (module/code/has_error/seq).
-// Owned by diag.c -- valid until the next diag_record_error()/diag_clear()
-// call, so callers that hand this off across a blocking operation (like
-// the background debug task) should copy the fields they need first.
-const diag_state_t *diag_get(void);
+// Copies up to `max_entries` entries into `out_entries`, newest first.
+// Returns the number actually copied (<= diag_get_history_count()).
+int diag_get_history(diag_entry_t *out_entries, int max_entries);
+
+// Number of entries currently recorded (<= DIAG_HISTORY_CAPACITY).
+int diag_get_history_count(void);

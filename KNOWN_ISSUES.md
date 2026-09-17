@@ -476,6 +476,191 @@ second look.
   future `git blame` dig into near-simultaneous commits doesn't waste
   time chasing a conflict that never made it into a commit.
 
+## Round 10 (this session): RFID clone/dump (main/rfid/rc522.c/h,
+## main/main.c's action_rfid_clone()), Wi-Fi Monitor
+## (c6-firmware/main/wifi_monitor.c/h, main/net/c6_link.c's monitor API,
+## main/main.c's action_wifi_monitor()), and BT Scan
+## (c6-firmware/main/bt_scan.c/h, main/net/c6_link.c's bt_scan API,
+## main/main.c's action_bt_scan())
+
+Three independent features, all self-reviewed (no other session available
+this round); flagged for a second look.
+
+- 🔴 **ACCEPTABLE RISK, MITIGATED BY DEFAULT-OFF:** trailer block writes
+  (sector keys + access bits) are never issued by `action_rfid_clone()` --
+  `clone_to_card()` is always called with `write_trailers = false`, so
+  only the 3 data blocks per sector are cloned, never block 3. Getting a
+  trailer's access bits wrong can permanently lock a sector (or, for some
+  bit combinations, make Key B unrecoverable). `rc522_write_block()`
+  itself has no such guard -- it's a thin primitive that'll happily write
+  any block address it's given -- so this protection lives entirely in
+  the one call site in `main.c`. If trailer cloning is ever exposed in
+  the UI, it needs its own explicit "this is irreversible" confirmation
+  screen, not just a flag flip.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** the default-key dictionary
+  (`RC522_DEFAULT_KEYS`, rc522.c) only covers common/factory/publicly-known
+  keys. A sector using a private key is left unreadable (`sectors[i].readable
+  = false`) and simply skipped in both the dump and the write-back pass --
+  `show_dump_and_confirm()` reports "N/16 sectors read" so this is visible
+  to the user, but a partially-cloned card with silently-missing sectors is
+  the expected outcome for any card that isn't using default keys.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `rc522_gen1a_write_block0()` detects
+  "not a magic card" only by the absence of a reply to the 0x40 backdoor
+  command. Some gen1a clones are pickier about timing/framing than this
+  driver's fixed retry loops account for, and gen2 ("CUID") clones use a
+  completely different mechanism (normal MFAuthent against block 0, not a
+  backdoor) that isn't implemented at all -- a gen2 target card will
+  report `is_magic = false` and get no UID clone, indistinguishable in the
+  UI from a genuine non-magic card.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `action_rfid_clone()`'s dump
+  (`rc522_card_dump_t`, 16 sectors x 4 blocks x 16 bytes + bookkeeping,
+  ~1.1KB) is heap-allocated (`malloc`) rather than stack, specifically so
+  a stack-allocated instance wouldn't blow the calling task's stack --
+  but there's no check anywhere in this codebase for how much heap is
+  actually free at that point, and `malloc` returning `NULL` is handled
+  (bails out to the menu) but not surfaced to the user beyond just
+  silently returning -- worth a `diag_record_error()` call there too if
+  this turns out to happen in practice.
+- 🟡 **NOTE, NEEDS HARDWARE VERIFICATION:** the CRC_A hardware co-processor
+  flow (`calc_crc()`, `CMD_CALCCRC`/`REG_DIV_IRQ`/`REG_CRC_RESULT_*`) and
+  the two-phase WRITE ACK protocol (`transceive_with_crc()`'s `raw_len <=
+  1` branch) are both implemented directly from the MFRC522 datasheet with
+  no hardware to test against yet -- same blanket caveat as the rest of
+  this file's SPI register access, but worth calling out specifically
+  since authenticate/read/write are new, higher-risk operations (a bug
+  here could corrupt a card, not just fail to read one).
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** Wi-Fi Monitor
+  (`c6_link_monitor_start()`) disconnects the C6's STA connection and its
+  background `monitor_rx_task` holds `s_link_mutex` for the *entire*
+  monitor session, not just a single command -- every other `c6_link_*`
+  call (`c6_link_scan`/`connect`/`ask`/`debug`/`setup`, including the
+  automatic Debug AI background task) blocks until
+  `c6_link_monitor_stop()` is called. This is a deliberate trade-off
+  (the alternative is a second concurrent UART reader, which the wire
+  protocol doesn't support) and is surfaced in `action_wifi_monitor()`'s
+  doc comment and the C6 not auto-reconnecting after, but it does mean an
+  error recorded while Monitor is open won't get an automatic Debug AI
+  report until the user backs out of the Monitor screen.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** channel-hopping at 400ms/channel
+  across 13 channels (~5.2s per full sweep) can miss or delay seeing an AP
+  whose beacon interval doesn't line up with the dwell time -- inherent to
+  passive single-radio sniffing, not a bug, but means "AP not listed yet"
+  doesn't mean "AP isn't there."
+- 🟡 **NOTE, NEEDS HARDWARE VERIFICATION:** `wifi_monitor.c`'s
+  `promiscuous_rx_cb()` parses raw 802.11 management frames (fixed offsets
+  for addr2/BSSID at byte 10, SSID IE at byte 36) assuming every
+  beacon/probe-response has the standard fixed-field layout with no
+  optional pre-SSID IEs -- true for ordinary APs but unverified against
+  real-world edge cases (some vendors' beacons order IEs differently)
+  until tested against real traffic. A frame that doesn't match is
+  dropped (`ie_offset` tag byte check), not misparsed, so the failure mode
+  is "that AP doesn't show up" rather than corrupted data.
+- ✅ **FIXED:** `uart_link_write_line()` (C6 side) had no mutex -- with
+  only the single-threaded command dispatch loop ever calling it, this
+  was safe by construction. Wi-Fi Monitor's `uart_tx_task` (wifi_monitor.c)
+  is a second, independent writer that can now run concurrently with a
+  dispatch-loop reply, so a `SemaphoreHandle_t` was added around the two
+  `uart_write_bytes()` calls in `uart_link_write_line()` to keep a `PKT:`
+  line and e.g. `MONITORSTOP`'s `OK` reply from interleaving into one
+  garbled line on the wire. BT Scan's `bt_scan.c` writer reuses the same
+  fix, since it's a third concurrent caller of the same function.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** BT Scan and Wi-Fi Monitor share one
+  mutual-exclusion check (`c6_link_monitor_start()`/`c6_link_bt_scan_start()`
+  in `c6_link.c` each refuse to start if the other's `s_..._running` flag
+  is set) rather than a single shared lock -- there's a narrow window
+  between that check and setting the caller's own flag where, in theory,
+  both could pass the check before either flag is set if they were called
+  from two different tasks simultaneously. In practice both are only ever
+  called from `main.c`'s single-threaded menu action flow (one screen
+  open at a time), so this isn't currently reachable, but it'd need a
+  proper shared mutex if either is ever triggered from a second task.
+- 🟡 **NOTE, NEEDS HARDWARE VERIFICATION:** `bt_scan.c`'s NimBLE
+  integration (`esp_nimble_hci_and_controller_init()`, passive
+  `ble_gap_disc()`, the `sdkconfig.defaults` BT/NimBLE Kconfig options)
+  is implemented from ESP-IDF/NimBLE API documentation with no hardware
+  to test against yet -- same blanket caveat as the rest of this
+  codebase, but worth calling out since this is the first Bluetooth code
+  in the project and BLE coexistence with the existing Wi-Fi STA/
+  promiscuous code is assumed to work via the IDF's standard coexistence
+  handling, not explicitly tested.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `bt_scan.c` uses a passive scan
+  (`params.passive = 1`) specifically so it never transmits an active-scan
+  probe request -- but this also means it can only see whatever a device
+  puts in its primary advertising packet. Devices that only reveal their
+  name in a scan-response packet (requested by an active scanner) will
+  show up with an empty name (`"(no name)"` in the UI) even though they
+  do advertise one. Deliberate trade-off to keep this receive-only, not a
+  bug.
+
+## Round 11 (this session): removed Ask AI / automatic Debug AI (Ollama
+## dependency), replaced with an on-device error history
+## (main/diag/diag.c/h, main/main.c's action_error_history()) and an
+## optional PC-side upload (main/net/c6_link.c's c6_link_send_error_log(),
+## c6-firmware/main/wifi_commands.c's wifi_commands_log_line()/_flush(),
+## c6-firmware/tools/debug_server.py sans Ollama)
+
+Ask AI and the automatic Debug AI background task were removed entirely
+at the user's request -- both required a PC running Ollama (plus, for
+Debug AI, a second always-on Python process) just to make the device
+usable at all, which was judged too much setup burden for what the
+features were worth. The device now needs no PC/network dependency for
+anything except Wi-Fi/BT scanning and the brand-new optional error log
+upload. Self-reviewed (no other session available this round, though
+makeshift-flipper-8b was notified and is expected to clean up this
+round's now-stale predecessors, Round 8's Ask AI items and Round 9 in
+full); flagged for a second look.
+
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** the error history
+  (`DIAG_HISTORY_CAPACITY` = 24 entries, `main/diag/diag.c`) lives in RAM
+  only -- it does not survive a reboot. A crash or power loss right after
+  the most informative error(s) were recorded loses them permanently
+  unless the user had already run "Errors" → Send before that point.
+  Deliberate: persisting to flash (NVS wear, added complexity) wasn't
+  judged worth it for a "what went wrong this session" feature.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `diag_entry_t.timestamp_us` comes
+  from `esp_timer_get_time()` (microseconds since boot), not a wall-clock
+  time -- there's no RTC/NTP on this device. `action_error_history()`'s
+  "Xs/Xm/Xh ago" display and `c6_link_send_error_log()`'s `ago_s` field
+  are both only meaningful within the current boot session; two entries
+  from different boots can't be meaningfully compared, and the uploaded
+  `ago_s` says nothing about wall-clock time on the receiving PC (the PC
+  side stamps its own `received_at` for that reason).
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** the ring buffer overwrites its
+  oldest entry once full (24 recorded) with no warning to the user --
+  a burst of errors from one flaky module (e.g. a failing RC522 read
+  loop) can silently push older, possibly more useful, entries out
+  before the user ever opens "Errors" to see them.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** the log upload endpoint
+  (`debug_server.py`'s `/logs`, `wifi_commands_log_flush()`'s POST) has no
+  authentication or transport encryption, same trust model the old Ask
+  AI/Debug AI bridge had -- acceptable on a home LAN, not for anything
+  more exposed. The uploaded history can reveal what the device has been
+  used for (which cards were cloned, which networks/BLE devices were
+  scanned), so `error_log.jsonl` should be treated with the same care as
+  any other usage log, more so than the old Ollama-bridge questions were.
+- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `MAKESHIFT_LOG_SERVER_HOST` is a
+  build-time Kconfig value, same "stale IP after DHCP reassignment" risk
+  class as the old `MAKESHIFT_OLLAMA_HOST`/`MAKESHIFT_DEBUG_SERVER_HOST` --
+  if the configured PC's LAN IP changes, Send just fails (or, in the
+  worst case, POSTs to whatever new device now holds that IP) until the
+  firmware is reflashed with the correct address. A static DHCP lease on
+  the PC avoids this.
+- 🟡 **NOTE:** `wifi_commands_log_line()`'s batch buffer
+  (`LOG_BATCH_BUF_LEN`, 4KB) can fill before all `LOGSEND:` lines of a
+  full 24-entry history arrive if individual JSON objects run unusually
+  large (they shouldn't, given the fixed field sizes, but nothing enforces
+  it) -- entries past that point are dropped with a warning log, not
+  reported to the P4, so a partial upload could be silently incomplete
+  from the user's perspective (the P4 only ever sees the final
+  `SENT`/`FAIL`, not a partial-count).
+- ✅ **FIXED (during this round):** `c6_link.h`'s Wi-Fi Monitor/BT Scan
+  section comments referenced `c6_link_ask()`/`c6_link_debug()` (e.g.
+  "blocks every OTHER c6_link_* call (scan/connect/send/setup/ask/debug",
+  "Ask AI/Debug AI would be functionally fine to run concurrently...") --
+  updated to reference the surviving API surface
+  (`scan/connect/send/setup/send_error_log`) instead of functions that no
+  longer exist, per makeshift-flipper-84's heads-up.
+
 ## General
 
 - No firmware in this repo has been built or run on real hardware (also
