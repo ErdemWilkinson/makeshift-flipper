@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "driver/uart.h"
 #include "esp_log.h"
@@ -19,9 +20,20 @@
 #define RESPONSE_TIMEOUT_MS 8000  // SCAN/CONNECT can take a few seconds on the C6 side
 #define SETUP_TIMEOUT_MS (6 * 60 * 1000) // SETUP waits for a human on the setup page; give it more room than the C6's own 5-minute internal timeout
 #define ASK_TIMEOUT_MS (70 * 1000) // give the PC-side LLM (C6's own OLLAMA_TIMEOUT_MS is 60s) a bit of headroom
+#define DEBUG_TIMEOUT_MS (75 * 1000) // a bit more than the C6's own DEBUG_TIMEOUT_MS (65s)
 
 static const char *TAG = "c6_link";
 static char s_line_buf[LINE_BUF_LEN];
+
+// Every c6_link_* call shares s_line_buf and the one UART port, so only
+// one can be in flight at a time. Originally this was safe by
+// construction (every call came from the single main-loop task, all
+// blocking/synchronous), but the automatic "Debug AI" background task
+// (main.c) now calls c6_link_debug() from a second task, which could
+// otherwise interleave with e.g. a menu-triggered c6_link_ask() and
+// corrupt s_line_buf or the wire protocol. Held for the duration of an
+// entire command (write + wait for reply), not just the buffer access.
+static SemaphoreHandle_t s_link_mutex;
 
 void c6_link_init(void)
 {
@@ -37,6 +49,8 @@ void c6_link_init(void)
     ESP_ERROR_CHECK(uart_param_config(UART_PORT, &cfg));
     ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_TX_GPIO, UART_RX_GPIO,
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+
+    s_link_mutex = xSemaphoreCreateMutex();
 
     ESP_LOGI(TAG, "C6 link UART initialized (TX=GPIO%d, RX=GPIO%d)", UART_TX_GPIO, UART_RX_GPIO);
 }
@@ -79,7 +93,7 @@ static bool read_line(int *deadline_ms)
     return false;
 }
 
-int c6_link_scan(c6_network_t *out_networks, int max_networks)
+static int c6_link_scan_impl(c6_network_t *out_networks, int max_networks)
 {
     if (!send_line("SCAN")) {
         return -1;
@@ -118,7 +132,7 @@ int c6_link_scan(c6_network_t *out_networks, int max_networks)
     return -1;
 }
 
-bool c6_link_connect(const char *ssid, const char *password)
+static bool c6_link_connect_impl(const char *ssid, const char *password)
 {
     // The wire format is "CONNECT:<ssid>,<password>" -- a ',' inside ssid
     // would be indistinguishable from the ssid/password separator and
@@ -154,7 +168,7 @@ bool c6_link_connect(const char *ssid, const char *password)
     return strcmp(s_line_buf, "OK") == 0;
 }
 
-bool c6_link_send(const char *ip, uint16_t port, const char *data)
+static bool c6_link_send_impl(const char *ip, uint16_t port, const char *data)
 {
     // Wire format "SEND:<ip>:<port>:<data>" -- ip/port never contain ':' in
     // valid IPv4/port values, and the C6 side (wifi_commands.c) only splits
@@ -174,7 +188,7 @@ bool c6_link_send(const char *ip, uint16_t port, const char *data)
     return strcmp(s_line_buf, "SENT") == 0;
 }
 
-bool c6_link_ask(const char *question, char *out_answer)
+static bool c6_link_ask_impl(const char *question, char *out_answer)
 {
     out_answer[0] = '\0';
 
@@ -218,7 +232,7 @@ bool c6_link_ask(const char *question, char *out_answer)
     }
 }
 
-bool c6_link_setup(void)
+static bool c6_link_setup_impl(void)
 {
     if (!send_line("SETUP")) {
         return false;
@@ -230,4 +244,109 @@ bool c6_link_setup(void)
         return false;
     }
     return strcmp(s_line_buf, "OK") == 0;
+}
+
+static bool c6_link_debug_impl(const char *module, const char *code, const char *note,
+                                c6_debug_result_t *out_result)
+{
+    out_result->verdict[0] = '\0';
+    out_result->explanation[0] = '\0';
+
+    // Wire format "DEBUG:<module>|<code>|<note>" -- '|' can't appear in
+    // module/code (short fixed strings from this codebase) or note (typed
+    // on the on-device scroll keyboard, which has no '|' key), so no
+    // escaping is needed, same reasoning as ASK's lack of '\n' handling.
+    char cmd[LINE_BUF_LEN];
+    snprintf(cmd, sizeof(cmd), "DEBUG:%s|%s|%s", module, code, note);
+    if (!send_line(cmd)) {
+        return false;
+    }
+
+    int deadline = DEBUG_TIMEOUT_MS;
+    if (!read_line(&deadline)) {
+        ESP_LOGW(TAG, "DEBUG timed out");
+        return false;
+    }
+    if (strcmp(s_line_buf, "DIAGFAIL") == 0) {
+        return false;
+    }
+    if (strncmp(s_line_buf, "DIAG:", 5) != 0) {
+        ESP_LOGW(TAG, "DEBUG: unexpected reply: %s", s_line_buf);
+        return false;
+    }
+
+    // Reply format "DIAG:<verdict>|<explanation>".
+    const char *body = s_line_buf + 5;
+    const char *bar = strchr(body, '|');
+    if (bar == NULL) {
+        ESP_LOGW(TAG, "DEBUG: malformed DIAG reply (no '|')");
+        return false;
+    }
+
+    size_t verdict_len = bar - body;
+    if (verdict_len > C6_DEBUG_VERDICT_MAX_LEN) {
+        verdict_len = C6_DEBUG_VERDICT_MAX_LEN;
+    }
+    memcpy(out_result->verdict, body, verdict_len);
+    out_result->verdict[verdict_len] = '\0';
+
+    strncpy(out_result->explanation, bar + 1, C6_DEBUG_EXPLANATION_MAX_LEN);
+    out_result->explanation[C6_DEBUG_EXPLANATION_MAX_LEN] = '\0';
+
+    return true;
+}
+
+// --- Public API: each wraps its _impl with s_link_mutex, so only one
+// command (from whichever task) is ever using the UART/s_line_buf at a
+// time. Waits forever for the lock rather than timing out -- every _impl
+// already has its own timeout, so a caller can't get stuck longer than
+// that plus however long whatever's currently holding the lock takes.
+
+int c6_link_scan(c6_network_t *out_networks, int max_networks)
+{
+    xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+    int result = c6_link_scan_impl(out_networks, max_networks);
+    xSemaphoreGive(s_link_mutex);
+    return result;
+}
+
+bool c6_link_connect(const char *ssid, const char *password)
+{
+    xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+    bool result = c6_link_connect_impl(ssid, password);
+    xSemaphoreGive(s_link_mutex);
+    return result;
+}
+
+bool c6_link_send(const char *ip, uint16_t port, const char *data)
+{
+    xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+    bool result = c6_link_send_impl(ip, port, data);
+    xSemaphoreGive(s_link_mutex);
+    return result;
+}
+
+bool c6_link_ask(const char *question, char *out_answer)
+{
+    xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+    bool result = c6_link_ask_impl(question, out_answer);
+    xSemaphoreGive(s_link_mutex);
+    return result;
+}
+
+bool c6_link_setup(void)
+{
+    xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+    bool result = c6_link_setup_impl();
+    xSemaphoreGive(s_link_mutex);
+    return result;
+}
+
+bool c6_link_debug(const char *module, const char *code, const char *note,
+                    c6_debug_result_t *out_result)
+{
+    xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+    bool result = c6_link_debug_impl(module, code, note, out_result);
+    xSemaphoreGive(s_link_mutex);
+    return result;
 }

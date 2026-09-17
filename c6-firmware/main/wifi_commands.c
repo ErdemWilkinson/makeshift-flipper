@@ -43,6 +43,16 @@ static const char *TAG = "wifi_commands";
 #define OLLAMA_TIMEOUT_MS 60000
 #define OLLAMA_SYSTEM_PROMPT "Sen bir cihaz asistanisin. Kisa ve net turkce cevaplar ver."
 
+// Where debug_server.py (c6-firmware/tools/debug_server.py) runs -- a
+// separate helper process from Ollama itself, since this feature needs a
+// "diagnose, then append to a log file" step that talking to Ollama
+// directly can't do (see that script's module docstring). Usually the
+// same PC as Ollama, but kept as its own Kconfig setting (different
+// port/process, could run elsewhere).
+#define DEBUG_SERVER_HOST CONFIG_MAKESHIFT_DEBUG_SERVER_HOST
+#define DEBUG_SERVER_PORT CONFIG_MAKESHIFT_DEBUG_SERVER_PORT
+#define DEBUG_TIMEOUT_MS 65000 // debug_server.py's own Ollama call times out at 60s
+
 // Answers are split into chunks this size (comfortably under
 // UART_LINK_MAX_LINE_LEN) before being sent as "ANSWER:<chunk>" lines.
 #define ASK_CHUNK_LEN 200
@@ -371,5 +381,128 @@ void wifi_commands_ask(const char *question)
     uart_link_write_line("ANSWERDONE");
 
     free(sanitized);
+    cJSON_Delete(resp);
+}
+
+// Response accumulator for wifi_commands_debug()'s HTTP call. A verdict +
+// short explanation from debug_server.py is expected to be well under this;
+// sized the same as the (much chattier) Ask AI path for headroom.
+#define DEBUG_RESPONSE_BUF_LEN 4096
+
+void wifi_commands_debug(const char *args)
+{
+    // Wire format "DEBUG:<module>|<code>|<note>". '|' was picked (instead
+    // of ':' or ',', already used by other commands) because none of
+    // module/code/note are expected to contain it in practice (module
+    // names and error codes are short fixed strings from this codebase;
+    // `note` comes from the on-device scroll keyboard, which has no '|'
+    // key). Malformed input (missing separators) is rejected rather than
+    // guessed at.
+    const char *first_bar = strchr(args, '|');
+    if (first_bar == NULL) {
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+    const char *second_bar = strchr(first_bar + 1, '|');
+    if (second_bar == NULL) {
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+
+    char module[65];
+    size_t module_len = first_bar - args;
+    if (module_len >= sizeof(module)) {
+        module_len = sizeof(module) - 1;
+    }
+    memcpy(module, args, module_len);
+    module[module_len] = '\0';
+
+    char code[65];
+    size_t code_len = second_bar - (first_bar + 1);
+    if (code_len >= sizeof(code)) {
+        code_len = sizeof(code) - 1;
+    }
+    memcpy(code, first_bar + 1, code_len);
+    code[code_len] = '\0';
+
+    const char *note = second_bar + 1;
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "module", module);
+    cJSON_AddStringToObject(req, "code", code);
+    cJSON_AddStringToObject(req, "note", note);
+    char *req_body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+
+    if (req_body == NULL) {
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+
+    char *response_buf = malloc(DEBUG_RESPONSE_BUF_LEN);
+    if (response_buf == NULL) {
+        free(req_body);
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+    response_buf[0] = '\0';
+    ask_response_ctx_t ctx = { .buf = response_buf, .len = 0 };
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s:%d/debug", DEBUG_SERVER_HOST, DEBUG_SERVER_PORT);
+
+    esp_http_client_config_t http_cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = DEBUG_TIMEOUT_MS,
+        .event_handler = ask_http_event_handler,
+        .user_data = &ctx,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, req_body, strlen(req_body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(req_body);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "Debug AI request failed: %s (HTTP %d)", esp_err_to_name(err), status);
+        free(response_buf);
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+
+    cJSON *resp = cJSON_Parse(response_buf);
+    free(response_buf);
+    if (resp == NULL) {
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+
+    cJSON *verdict = cJSON_GetObjectItemCaseSensitive(resp, "verdict");
+    cJSON *explanation = cJSON_GetObjectItemCaseSensitive(resp, "explanation");
+    if (!cJSON_IsString(verdict) || !cJSON_IsString(explanation)) {
+        cJSON_Delete(resp);
+        uart_link_write_line("DIAGFAIL");
+        return;
+    }
+
+    // Sanitize the same way wifi_commands_ask() does -- the wire protocol
+    // is line-based, so a newline in the AI's explanation would corrupt it.
+    char line[UART_LINK_MAX_LINE_LEN];
+    int n = snprintf(line, sizeof(line), "DIAG:%s|%s", verdict->valuestring, explanation->valuestring);
+    if (n >= (int)sizeof(line)) {
+        line[sizeof(line) - 1] = '\0'; // snprintf already null-terminated; this just documents the truncation
+    }
+    for (char *p = line; *p != '\0'; p++) {
+        if (*p == '\n' || *p == '\r') {
+            *p = ' ';
+        }
+    }
+    uart_link_write_line(line);
+
     cJSON_Delete(resp);
 }

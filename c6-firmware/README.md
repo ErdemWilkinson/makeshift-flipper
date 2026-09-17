@@ -21,6 +21,9 @@ C6 -> P4: SENT   or   FAIL
 P4 -> C6: ASK:<question>
 C6 -> P4: ANSWER:<chunk>   (1 or more lines, answer split to fit the line limit)
 C6 -> P4: ANSWERDONE   or   ASKFAIL
+
+P4 -> C6: DEBUG:<module>|<code>|<note>
+C6 -> P4: DIAG:<verdict>|<explanation>   or   DIAGFAIL
 ```
 
 The P4-side counterpart to this protocol lives in `../main/net/c6_link.c`.
@@ -74,6 +77,53 @@ fine for a hobby LAN, not something to expose beyond it.
 - One request at a time, synchronous — same blocking pattern as
   `SETUP`/`CONNECT`. A slow PC or a large model can make `ASK` take up to
   `OLLAMA_TIMEOUT_MS` (60s) before giving up.
+
+## Debug AI (fully automatic) — requires debug_server.py on a PC
+
+No button, no manual step: the moment any action on the P4 records an
+error (`main/diag/diag.c`), a background task there sends it on its own to
+a small Python helper on a PC, which asks Ollama whether the problem looks
+user-caused or system-caused, appends the result to `debug_log.md`, and
+sends the verdict back to be shown on the OLED.
+
+`DEBUG:<module>|<code>|<note>` is handled by `wifi_commands_debug()` in
+`main/wifi_commands.c`, which POSTs the report to that helper script
+(`c6-firmware/tools/debug_server.py`) rather than to Ollama directly —
+Ollama's own API can't run a fixed diagnose-then-classify prompt or
+append to a log file, so a tiny separate process sits in between.
+
+**One-time PC-side setup (in addition to the Ollama setup above):**
+
+1. Ollama must already be running and reachable (see the "Ask AI"
+   section above) — `debug_server.py` calls it locally
+   (`http://127.0.0.1:11434`), so it's meant to run on the *same* PC as
+   Ollama, not a different machine.
+2. Run the helper script (no extra Python packages needed, standard
+   library only):
+   ```
+   python c6-firmware/tools/debug_server.py
+   ```
+   It listens on `0.0.0.0:8765` and logs each diagnosis to
+   `c6-firmware/tools/debug_log.md` (created on first use).
+3. Run `idf.py menuconfig` in `c6-firmware/` and set
+   `MAKESHIFT_DEBUG_SERVER_HOST` (and `MAKESHIFT_DEBUG_SERVER_PORT` if
+   you changed `PORT` in the script) under **"Makeshift Flipper C6 --
+   Ask AI (Ollama bridge)"**. Defaults to the same PC as
+   `MAKESHIFT_OLLAMA_HOST`, since that's the expected setup.
+4. Rebuild and reflash the C6 firmware after changing the config.
+
+**Known limits:**
+
+- `debug_server.py` isn't a service — it has to be started manually and
+  stays running in its own terminal (or you set it up as a background
+  service/task yourself; not covered here).
+- No auth, same trust model as the Ollama bridge itself: fine for a home
+  LAN, not for anything more exposed.
+- The AI's "user vs. system" verdict is a best-effort guess from a short
+  module name + error code (see `main/diag/diag.h` on the P4 side for
+  what gets recorded) — it has no access to logs, sensor readings, or
+  anything beyond what's in the report, so treat it as a first opinion,
+  not a diagnosis.
 
 ## Pin plan
 

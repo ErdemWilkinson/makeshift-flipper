@@ -14,6 +14,7 @@ idf_component_register(
         "rfid/rdm6300.c"
         "feedback/vibration.c"
         "net/c6_link.c"
+        "diag/diag.c"
     INCLUDE_DIRS
         "."
         "ui"
@@ -22,6 +23,7 @@ idf_component_register(
         "rfid"
         "feedback"
         "net"
+        "diag"
     REQUIRES
         driver
         esp_adc
