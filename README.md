@@ -5,7 +5,7 @@ ESP-IDF (not Arduino). OLED display, RFID/NFC, IR transceiver, and a
 companion ESP32-C6 for Wi-Fi, all driven by a 2-axis analog joystick
 plus a separate BACK button.
 
-![System architecture](makeshift_flipper_system_architecture_en.png)
+![System architecture](makeshift_flipper_system_architecture_en_white.png)
 
 ## What this can do
 
