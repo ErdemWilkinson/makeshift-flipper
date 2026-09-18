@@ -7,7 +7,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
-#include "esp_lcd_ssd1306.h"
+#include "esp_lcd_panel_ssd1306.h"
 #include "esp_log.h"
 #include "font8x8_basic.h"
 

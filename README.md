@@ -145,7 +145,7 @@ own environment)
 ```
 # Requires ESP-IDF v5.3+ installed and exported (idf.py on PATH)
 idf.py set-target esp32p4
-idf.py reconfigure   # pulls the esp_lcd_ssd1306 dependency from idf_component.yml
+idf.py reconfigure
 idf.py build
 idf.py -p COMx flash monitor
 ```

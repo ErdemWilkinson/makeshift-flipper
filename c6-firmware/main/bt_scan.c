@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_nimble_hci.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -148,12 +147,11 @@ void bt_scan_init(void)
     s_dev_queue = xQueueCreate(DEV_QUEUE_DEPTH, sizeof(dev_entry_t));
     xTaskCreate(uart_tx_task, "bt_scan_tx", 3072, NULL, tskIDLE_PRIORITY + 1, NULL);
 
-    esp_err_t err = esp_nimble_hci_and_controller_init();
+    esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_nimble_hci_and_controller_init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "nimble_port_init failed: %s", esp_err_to_name(err));
         return;
     }
-    nimble_port_init();
 
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(nimble_host_task);
