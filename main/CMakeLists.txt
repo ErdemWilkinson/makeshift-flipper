@@ -36,4 +36,5 @@ idf_component_register(
         esp_lcd
         esp_timer
         log
+        nvs_flash
 )

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 
 #include "diag/diag.h"
 #include "input/buttons.h"
@@ -783,6 +784,12 @@ static void action_error_history(void)
         }
     }
 
+    // Persist on exit rather than on every diag_record_error() -- see
+    // diag.h's comment on why saves are explicit/caller-driven. Failure is
+    // silently ignored: the on-screen history the user just looked at is
+    // already correct regardless of whether the NVS write succeeded.
+    diag_save();
+
     menu_render(s_active_menu);
 }
 
@@ -865,6 +872,17 @@ static void render_ir_direction_screen(uint8_t flags)
 
 void app_main(void)
 {
+    // NVS backs diag_load()/diag_save() (see diag.h) -- erase-and-retry on
+    // the two "partition needs reformatting" error codes, same pattern the
+    // C6 side already uses in c6-firmware/main/main.c.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_err);
+    diag_load();
+
     display_init();
     buttons_init();
     ir_driver_init();
