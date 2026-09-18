@@ -32,6 +32,7 @@ idf_component_register(
         esp_driver_rmt
         esp_driver_spi
         esp_driver_uart
+        esp_hw_support
         esp_lcd
         esp_timer
         log

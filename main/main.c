@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 
 #include "diag/diag.h"
@@ -377,21 +378,40 @@ static void action_wifi_scan_test(void)
 // Blocks (up to several minutes) while the C6 runs its web setup AP.
 // Shows instructions on the OLED since there's nothing else to do here --
 // the actual ssid/password entry happens on the user's phone browser.
-// The AP password shown here must match AP_PASSWORD in
-// c6-firmware/main/wifi_setup_ap.c -- they're two separate firmware builds
-// with no shared header, so this is a manual sync point if it's ever changed.
+// Fills `out_pin` (capacity out_cap, must be > C6_SETUP_PIN_LEN) with a
+// fresh random WPA2-PSK password for this setup session, using the P4's
+// hardware RNG (esp_random() -- true entropy, not a PRNG seeded from
+// something guessable). Alphanumeric, uppercase+digits only (no lowercase)
+// so it's unambiguous to read off the small OLED and type on a phone
+// keyboard -- this trades a little entropy for usability, still far more
+// than the single fixed password this replaced.
+static void generate_setup_pin(char *out_pin, size_t out_cap)
+{
+    static const char charset[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0/I/1 (ambiguous on-screen)
+    size_t len = out_cap - 1;
+    for (size_t i = 0; i < len; i++) {
+        out_pin[i] = charset[esp_random() % (sizeof(charset) - 1)];
+    }
+    out_pin[len] = '\0';
+}
+
 static void action_wifi_setup(void)
 {
+    char pin[C6_SETUP_PIN_LEN + 1];
+    generate_setup_pin(pin, sizeof(pin));
+
     display_clear();
     display_draw_text(0, 0, "WiFi Setup");
     display_draw_text(1, 0, "AP: MakeshiftFlip");
     display_draw_text(2, 0, "per-Setup");
-    display_draw_text(3, 0, "Pwd: flipper123");
+    char pwd_line[DISPLAY_COLS + 1];
+    snprintf(pwd_line, sizeof(pwd_line), "Pwd: %s", pin);
+    display_draw_text(3, 0, pwd_line);
     display_draw_text(5, 0, "Then open 192.168");
     display_draw_text(6, 0, ".4.1 in browser");
     display_flush();
 
-    bool ok = c6_link_setup();
+    bool ok = c6_link_setup(pin);
     if (!ok) {
         diag_record_error("WiFi Setup", "C6_LINK_SETUP_FAILED");
     }

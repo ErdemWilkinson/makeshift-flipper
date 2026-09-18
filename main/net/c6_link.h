@@ -37,12 +37,20 @@ bool c6_link_connect(const char *ssid, const char *password);
 // Sends SEND:<ip>:<port>:<data> and blocks for the result.
 bool c6_link_send(const char *ip, uint16_t port, const char *data);
 
-// Sends SETUP: tells the C6 to open its web-based Wi-Fi setup AP
-// ("MakeshiftFlipper-Setup") and a captive HTTP page at 192.168.4.1, then
-// blocks (up to several minutes -- there's a human in the loop) until the
-// C6 reports a successful station connection or its own setup timeout
-// elapses. Returns true once connected.
-bool c6_link_setup(void);
+// Sends SETUP:<pin> (`pin` becomes the setup AP's own WPA2-PSK password --
+// generated fresh per session by the caller, see action_wifi_setup() in
+// main.c, rather than a fixed value baked into the firmware): tells the C6
+// to open its web-based Wi-Fi setup AP ("MakeshiftFlipper-Setup") and a
+// captive HTTP page at 192.168.4.1, then blocks (up to several minutes --
+// there's a human in the loop) until the C6 reports a successful station
+// connection or its own setup timeout elapses. Returns true once connected.
+// `pin` must be at least C6_SETUP_PIN_LEN characters (WPA2-PSK's minimum).
+// Must match WIFI_SETUP_AP_PIN_LEN in c6-firmware/main/wifi_setup_ap.h --
+// two separate firmware builds with no shared header, so this is a manual
+// sync point if it's ever changed (same caveat that used to apply to the
+// fixed AP_PASSWORD this replaced).
+#define C6_SETUP_PIN_LEN 8
+bool c6_link_setup(const char *pin);
 
 // Uploads the device's local error history (main/diag/diag.h) to a PC-side
 // log collector for safekeeping/inspection -- entirely optional, the

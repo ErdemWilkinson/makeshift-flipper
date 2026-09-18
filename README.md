@@ -387,12 +387,18 @@ a real hardware test.
 
 **Headline points, since this repo is public:**
 
-- The Wi-Fi setup AP uses a **fixed, hardcoded password** baked into the
-  firmware source — and since this repo is public, that password is
-  visible in plain text to anyone reading the code, not just someone
-  decompiling a built firmware image. **If you build this device, change
-  `AP_PASSWORD` in `c6-firmware/main/wifi_setup_ap.c` (and the copy
-  shown in `main/main.c`) before relying on it for anything.**
+- ✅ **FIXED**: the Wi-Fi setup AP used to have a fixed, hardcoded password
+  baked into the firmware source (`AP_PASSWORD` in
+  `c6-firmware/main/wifi_setup_ap.c`) — since this repo is public, that
+  password was visible in plain text to anyone reading the code, and being
+  fixed across every unit meant an attacker who'd learned it once (or a
+  second attacker in radio range during someone else's setup window, if
+  the legitimate client's association happened to drop) could join and
+  race the real request. The P4 now generates a fresh random 8-character
+  WPA2-PSK password per setup session (`esp_random()`, the hardware RNG)
+  and sends it to the C6 as part of `SETUP:<pin>`; it's shown on the OLED
+  the same way the old fixed one was, so there's no UX change, just no
+  more shared/guessable password.
 - The Wi-Fi setup flow is **plain HTTP, no TLS** — the setup AP is
   limited to a single simultaneous client specifically to reduce the
   window for a second device to join and sniff the request that carries
@@ -401,6 +407,9 @@ a real hardware test.
 - There's **no checksum/CRC on the P4↔C6 UART link** — accepted as a
   low risk for a short, direct wired connection, but worth knowing if
   you extend that link.
-- **No firmware in this repo has been built or run on real hardware** —
-  all of the above (and everything in `KNOWN_ISSUES.md`) is the result
-  of static review, not a verified test.
+- **Both firmwares build clean under ESP-IDF v5.3.1** (`idf.py build`,
+  verified) **but neither has been flashed to or run on real hardware
+  yet** — all of the behavioral claims above (and everything in
+  `KNOWN_ISSUES.md` besides the build itself) is the result of static
+  review, not a verified test. See `HARDWARE_TEST_MATRIX.md` for the
+  checklist to work through once real hardware is available.

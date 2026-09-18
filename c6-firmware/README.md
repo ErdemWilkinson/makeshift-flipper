@@ -22,6 +22,14 @@ P4 -> C6: LOGSEND:<json-line>   (1 or more lines, one JSON object per device err
 P4 -> C6: LOGSENDDONE
 C6 -> P4: SENT   or   FAIL
 
+P4 -> C6: SETUP:<pin>   (<pin> is a fresh random WPA2-PSK password the P4
+                          generated for this session, min 8 chars -- becomes
+                          the setup AP's own password, see "Wi-Fi setup
+                          (entering a password)" in ../README.md and
+                          wifi_setup_ap.c)
+C6 -> P4: OK   or   FAIL   (blocks up to several minutes -- there's a human
+                             filling out a web form on the other end)
+
 P4 -> C6: MONITOR
 C6 -> P4: OK   or   FAIL
 C6 -> P4: PKT:<bssid_hex12>,<ssid>,<rssi>,<channel>   (unsolicited, repeating,

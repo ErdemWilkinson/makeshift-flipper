@@ -190,9 +190,14 @@ static bool c6_link_send_impl(const char *ip, uint16_t port, const char *data)
     return strcmp(s_line_buf, "SENT") == 0;
 }
 
-static bool c6_link_setup_impl(void)
+static bool c6_link_setup_impl(const char *pin)
 {
-    if (!send_line("SETUP")) {
+    char cmd[LINE_BUF_LEN];
+    int n = snprintf(cmd, sizeof(cmd), "SETUP:%s", pin);
+    if (n < 0 || n >= (int)sizeof(cmd)) {
+        return false;
+    }
+    if (!send_line(cmd)) {
         return false;
     }
 
@@ -276,10 +281,10 @@ bool c6_link_send(const char *ip, uint16_t port, const char *data)
     return result;
 }
 
-bool c6_link_setup(void)
+bool c6_link_setup(const char *pin)
 {
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
-    bool result = c6_link_setup_impl();
+    bool result = c6_link_setup_impl(pin);
     xSemaphoreGive(s_link_mutex);
     return result;
 }
