@@ -6,6 +6,7 @@ idf_component_register(
         "wifi_monitor.c"
         "wifi_setup_ap.c"
         "bt_scan.c"
+        "text_sanitize.c"
     INCLUDE_DIRS
         "."
     REQUIRES

@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "json_escape.h"
+
 // Matches the wiring report: P4 GPIO18(TX)->C6 RX, P4 GPIO19(RX)->C6 TX.
 #define UART_PORT UART_NUM_2
 #define UART_TX_GPIO 18
@@ -200,24 +202,6 @@ static bool c6_link_setup_impl(void)
         return false;
     }
     return strcmp(s_line_buf, "OK") == 0;
-}
-
-// Escapes '"' and '\' for embedding `s` in a JSON string value -- diag
-// entries' module/code fields are short fixed strings from this codebase
-// (see diag_record_error() call sites), so this is mostly defensive, but
-// cheap enough to always do rather than assume.
-static void json_escape_append(char *out, size_t out_cap, size_t *out_len, const char *s)
-{
-    for (; *s != '\0' && *out_len < out_cap - 1; s++) {
-        if (*s == '"' || *s == '\\') {
-            if (*out_len >= out_cap - 2) {
-                break;
-            }
-            out[(*out_len)++] = '\\';
-        }
-        out[(*out_len)++] = *s;
-    }
-    out[*out_len] = '\0';
 }
 
 static bool c6_link_send_error_log_impl(const diag_entry_t *entries, int count)
