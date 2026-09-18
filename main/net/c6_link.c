@@ -358,6 +358,8 @@ static void handle_pkt_line(const char *line)
 
     int rssi = atoi(comma1 + 1);
     int channel = atoi(comma2 + 1);
+    const char *comma3 = strchr(comma2 + 1, ',');
+    const char *sec = comma3 ? (comma3 + 1) : "?";
 
     xSemaphoreTake(s_monitor_data_mutex, portMAX_DELAY);
     int slot = -1;
@@ -376,6 +378,8 @@ static void handle_pkt_line(const char *line)
         s_monitor_aps[slot].ssid[C6_MONITOR_SSID_MAX_LEN] = '\0';
         s_monitor_aps[slot].rssi = (int8_t)rssi;
         s_monitor_aps[slot].channel = (uint8_t)channel;
+        strncpy(s_monitor_aps[slot].sec, sec, sizeof(s_monitor_aps[slot].sec) - 1);
+        s_monitor_aps[slot].sec[sizeof(s_monitor_aps[slot].sec) - 1] = '\0';
     }
     xSemaphoreGive(s_monitor_data_mutex);
 }

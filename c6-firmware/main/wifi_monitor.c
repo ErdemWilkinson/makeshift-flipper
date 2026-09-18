@@ -25,6 +25,7 @@ typedef struct {
     char ssid[33];
     int8_t rssi;
     uint8_t channel;
+    char sec[8];
 } pkt_entry_t;
 
 static QueueHandle_t s_pkt_queue;
@@ -33,18 +34,106 @@ static TimerHandle_t s_hop_timer;
 static volatile bool s_running = false;
 static int s_current_channel = 1;
 
-// 802.11 management frame subtypes (frame control byte 0, bits 4-7 of the
-// low byte, i.e. the whole byte masked with 0xF0 after the version/type
-// bits -- beacon and probe-response are the only ones carrying an SSID
-// element we care about here).
+// Deduplication cache to prevent flooding UART with identical BSSIDs on the same channel hop
+#define BSSID_CACHE_SIZE 16
+typedef struct {
+    uint8_t bssid[6];
+    TickType_t last_seen_tick;
+} bssid_cache_t;
+
+static bssid_cache_t s_bssid_cache[BSSID_CACHE_SIZE];
+static int s_cache_idx = 0;
+
+static bool is_recently_sent(const uint8_t *bssid)
+{
+    TickType_t now = xTaskGetTickCount();
+    for (int i = 0; i < BSSID_CACHE_SIZE; i++) {
+        if (memcmp(s_bssid_cache[i].bssid, bssid, 6) == 0) {
+            if ((now - s_bssid_cache[i].last_seen_tick) < pdMS_TO_TICKS(500)) {
+                return true;
+            }
+            s_bssid_cache[i].last_seen_tick = now;
+            return false;
+        }
+    }
+    memcpy(s_bssid_cache[s_cache_idx].bssid, bssid, 6);
+    s_bssid_cache[s_cache_idx].last_seen_tick = now;
+    s_cache_idx = (s_cache_idx + 1) % BSSID_CACHE_SIZE;
+    return false;
+}
+
+// 802.11 management frame subtypes
 #define FRAME_SUBTYPE_BEACON         0x80
 #define FRAME_SUBTYPE_PROBE_RESPONSE 0x50
 #define FRAME_SUBTYPE_MASK           0xF0
 
-// Runs in the Wi-Fi driver's own task context (not an ISR -- ESP-IDF's
-// promiscuous RX callback is a normal task callback), so a non-blocking
-// xQueueSend is enough; if the queue is full (P4/TX task falling behind)
-// the packet is just dropped rather than blocking the Wi-Fi driver.
+static const char *parse_security_mode(const uint8_t *payload, int len)
+{
+    if (len < 36) {
+        return "UNKNOWN";
+    }
+    // Capability info is at offset 34 (24-byte 802.11 header + 8-byte timestamp + 2-byte interval = 34)
+    uint16_t cap_info = (uint16_t)payload[34] | ((uint16_t)payload[35] << 8);
+    bool privacy = (cap_info & 0x0010) != 0;
+
+    if (!privacy) {
+        return "OPEN";
+    }
+
+    bool rsn_found = false;
+    bool wpa_found = false;
+    bool wpa3_found = false;
+
+    // Loop Information Elements starting right after beacon fixed fields (offset 36)
+    int ie_offset = 36;
+    while (ie_offset + 2 <= len) {
+        uint8_t id = payload[ie_offset];
+        uint8_t ie_len = payload[ie_offset + 1];
+        if (ie_offset + 2 + ie_len > len) {
+            break;
+        }
+
+        if (id == 0x30) { // RSN IE (WPA2 / WPA3)
+            rsn_found = true;
+            const uint8_t *ie_data = &payload[ie_offset + 2];
+            if (ie_len >= 10) {
+                uint16_t pairwise_count = (uint16_t)ie_data[6] | ((uint16_t)ie_data[7] << 8);
+                int akm_offset = 8 + 4 * pairwise_count;
+                if (akm_offset + 2 <= ie_len) {
+                    uint16_t akm_count = (uint16_t)ie_data[akm_offset] | ((uint16_t)ie_data[akm_offset + 1] << 8);
+                    int akm_list_offset = akm_offset + 2;
+                    for (int k = 0; k < akm_count && akm_list_offset + 4 <= ie_len; k++) {
+                        if (ie_data[akm_list_offset] == 0x00 &&
+                            ie_data[akm_list_offset + 1] == 0x0F &&
+                            ie_data[akm_list_offset + 2] == 0xAC) {
+                            uint8_t akm_type = ie_data[akm_list_offset + 3];
+                            if (akm_type == 8 || akm_type == 24) { // SAE / SAE-EXT (WPA3)
+                                wpa3_found = true;
+                            }
+                        }
+                        akm_list_offset += 4;
+                    }
+                }
+            }
+        } else if (id == 0xDD) { // Vendor Specific IE (WPA1)
+            const uint8_t *ie_data = &payload[ie_offset + 2];
+            if (ie_len >= 4 && ie_data[0] == 0x00 && ie_data[1] == 0x50 && ie_data[2] == 0xF2 && ie_data[3] == 0x01) {
+                wpa_found = true;
+            }
+        }
+        ie_offset += 2 + ie_len;
+    }
+
+    if (wpa3_found) {
+        return "WPA3";
+    } else if (rsn_found) {
+        return "WPA2";
+    } else if (wpa_found) {
+        return "WPA";
+    }
+    return "WEP";
+}
+
 static void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 {
     if (type != WIFI_PKT_MGMT) {
@@ -64,16 +153,18 @@ static void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     }
 
     pkt_entry_t entry = {0};
-    memcpy(entry.bssid, &payload[10], 6); // addr2 (transmitter/BSSID for these frame types)
+    memcpy(entry.bssid, &payload[10], 6); // addr2 (transmitter/BSSID)
+
+    if (is_recently_sent(entry.bssid)) {
+        return;
+    }
+
     entry.rssi = pkt->rx_ctrl.rssi;
     entry.channel = pkt->rx_ctrl.channel;
 
-    // SSID information element: tag(1)=0x00, length(1), then `length`
-    // bytes, starting right after the 12-byte beacon fixed fields (24-byte
-    // header + timestamp(8)+interval(2)+capabilities(2)).
     int ie_offset = 36;
     if (ie_offset + 2 > len || payload[ie_offset] != 0x00) {
-        return; // not an SSID IE where expected -- malformed/truncated frame
+        return;
     }
     int ssid_len = payload[ie_offset + 1];
     if (ssid_len > 32 || ie_offset + 2 + ssid_len > len) {
@@ -82,6 +173,10 @@ static void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     memcpy(entry.ssid, &payload[ie_offset + 2], ssid_len);
     entry.ssid[ssid_len] = '\0';
     sanitize_wire_text(entry.ssid);
+
+    const char *sec = parse_security_mode(payload, len);
+    strncpy(entry.sec, sec, sizeof(entry.sec) - 1);
+    entry.sec[sizeof(entry.sec) - 1] = '\0';
 
     xQueueSend(s_pkt_queue, &entry, 0);
 }
@@ -95,10 +190,10 @@ static void uart_tx_task(void *arg)
             continue;
         }
         char line[96];
-        snprintf(line, sizeof(line), "PKT:%02X%02X%02X%02X%02X%02X,%s,%d,%d",
+        snprintf(line, sizeof(line), "PKT:%02X%02X%02X%02X%02X%02X,%s,%d,%d,%s",
                  entry.bssid[0], entry.bssid[1], entry.bssid[2],
                  entry.bssid[3], entry.bssid[4], entry.bssid[5],
-                 entry.ssid, entry.rssi, entry.channel);
+                 entry.ssid, entry.rssi, entry.channel, entry.sec);
         uart_link_write_line(line);
     }
 }
