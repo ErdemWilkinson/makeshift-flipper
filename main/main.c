@@ -446,7 +446,7 @@ static void action_wifi_setup_manual(void)
         display_draw_text(0, 0, "Pick a network:");
         for (int i = 0; i < count && i < DISPLAY_ROWS - 1; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%c%s", (i == selected) ? '>' : ' ', networks[i].ssid);
+            snprintf(line, sizeof(line), "%c%.20s", (i == selected) ? '>' : ' ', networks[i].ssid);
             display_draw_text(1 + i, 0, line);
         }
         display_flush();
@@ -479,7 +479,7 @@ static void action_wifi_setup_manual(void)
     text_entry_t entry;
     text_entry_init(&entry);
     char title[DISPLAY_COLS + 1];
-    snprintf(title, sizeof(title), "Pwd for %s", networks[selected].ssid);
+    snprintf(title, sizeof(title), "Pwd for %.12s", networks[selected].ssid);
 
     bool entry_cancelled = false;
     for (;;) {
@@ -574,7 +574,7 @@ static void action_wifi_monitor(void)
         display_draw_text(0, 0, header);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%.12s c%d %ddBm",
+            snprintf(line, sizeof(line), "%.8s c%d %ddBm",
                      aps[i].ssid[0] ? aps[i].ssid : "(hidden)", aps[i].channel, aps[i].rssi);
             display_draw_text(1 + i, 0, line);
         }
@@ -636,7 +636,7 @@ static void action_bt_scan(void)
         display_draw_text(0, 0, header);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%.14s %ddBm",
+            snprintf(line, sizeof(line), "%.13s %ddBm",
                      devices[i].name[0] ? devices[i].name : "(no name)", devices[i].rssi);
             display_draw_text(1 + i, 0, line);
         }
@@ -738,7 +738,7 @@ static void action_error_history(void)
                 char ago[16];
                 format_relative_time(ago, sizeof(ago), e->timestamp_us);
                 char line[DISPLAY_COLS + 1];
-                snprintf(line, sizeof(line), "%.9s %.7s %s", e->module, e->code, ago);
+                snprintf(line, sizeof(line), "%.7s %.5s %.7s", e->module, e->code, ago);
                 display_draw_text(1 + i, 0, line);
             }
         }
@@ -935,7 +935,7 @@ void app_main(void)
                     found = true;
                 } else if (result == RC522_SCAN_UNSUPPORTED_UID) {
                     snprintf(s_last_scan_line, sizeof(s_last_scan_line),
-                             "7/10-byte UID: no support");
+                             "7/10-byte UID: N/A");
                     found = true;
                     diag_record_error("13.56MHz NFC", "RC522_SCAN_UNSUPPORTED_UID");
                 } else if (result == RC522_SCAN_ERROR) {
