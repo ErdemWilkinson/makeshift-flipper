@@ -52,8 +52,8 @@ void app_main(void)
             uart_link_write_line(bt_scan_start() ? "OK" : "FAIL");
         } else if (strcmp(line, "BTSCANSTOP") == 0) {
             uart_link_write_line(bt_scan_stop() ? "OK" : "FAIL");
-        } else if (strcmp(line, "SETUP") == 0) {
-            bool ok = wifi_setup_ap_run(SETUP_TIMEOUT_MS);
+        } else if (strncmp(line, "SETUP:", 6) == 0) {
+            bool ok = wifi_setup_ap_run(line + 6, SETUP_TIMEOUT_MS);
             uart_link_write_line(ok ? "OK" : "FAIL");
         } else {
             ESP_LOGW(TAG, "Unknown command: %s", line);

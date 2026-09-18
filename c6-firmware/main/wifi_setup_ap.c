@@ -18,10 +18,12 @@
 #define AP_SSID "MakeshiftFlipper-Setup"
 // Open APs let anyone in radio range POST to /connect and hijack which
 // network the device joins (and, before the html_escape fix above, run
-// script in the setup page via a malicious SSID). A fixed PIN isn't secret
-// once shipped, but it stops casual/opportunistic joins from randoms who
-// aren't standing next to the device reading its OLED.
-#define AP_PASSWORD "flipper123"
+// script in the setup page via a malicious SSID). A fixed, shipped-in-the-
+// firmware PIN would be public knowledge for every unit and wouldn't stop
+// a targeted attacker, only casual/opportunistic joins -- so the password
+// is generated fresh per setup session by the P4 (which displays it on its
+// own OLED) and passed in here via `pin`, rather than being a compile-time
+// constant.
 // Capped at 1: ESP-IDF's softAP has no real 802.11 client-isolation flag,
 // so a second device joining the same AP while setup is in progress could
 // sniff the /connect POST -- which carries the real home Wi-Fi password --
@@ -107,9 +109,20 @@ static void build_networks_html(void)
         // ESP-IDF, so don't let html_escape() (or the %s below) run past it.
         records[i].ssid[sizeof(records[i].ssid) - 1] = '\0';
         html_escape((const char *)records[i].ssid, escaped, sizeof(escaped));
-        pos += snprintf(&s_networks_html[pos], sizeof(s_networks_html) - pos,
-                         "<option value=\"%s\">%s (%d dBm)</option>",
-                         escaped, escaped, records[i].rssi);
+        int n = snprintf(&s_networks_html[pos], sizeof(s_networks_html) - pos,
+                          "<option value=\"%s\">%s (%d dBm)</option>",
+                          escaped, escaped, records[i].rssi);
+        // snprintf returns the length it WOULD have written, not the
+        // (possibly truncated) length actually written -- adding a
+        // negative or over-long value to `pos` unconditionally would let
+        // it end up larger than sizeof(s_networks_html), which happens to
+        // be harmless today (pos is never used again after this loop) but
+        // is the kind of thing that turns into a real overflow the moment
+        // someone adds a later write keyed off `pos`. Stop cleanly instead.
+        if (n < 0 || (size_t)n >= sizeof(s_networks_html) - pos) {
+            break;
+        }
+        pos += (size_t)n;
     }
     free(records);
 }
@@ -252,8 +265,13 @@ static httpd_handle_t start_http_server(void)
     return server;
 }
 
-bool wifi_setup_ap_run(int timeout_ms)
+bool wifi_setup_ap_run(const char *pin, int timeout_ms)
 {
+    if (pin == NULL || strlen(pin) < WIFI_SETUP_AP_PIN_LEN) {
+        ESP_LOGE(TAG, "pin too short for WPA2-PSK (need >= %d chars)", WIFI_SETUP_AP_PIN_LEN);
+        return false;
+    }
+
     s_setup_event_group = xEventGroupCreate();
     s_setup_succeeded = false;
 
@@ -263,12 +281,12 @@ bool wifi_setup_ap_run(int timeout_ms)
         .ap = {
             .ssid = AP_SSID,
             .ssid_len = strlen(AP_SSID),
-            .password = AP_PASSWORD,
             .channel = 1,
             .max_connection = AP_MAX_CONN,
             .authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
+    strncpy((char *)ap_cfg.ap.password, pin, sizeof(ap_cfg.ap.password) - 1);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
 

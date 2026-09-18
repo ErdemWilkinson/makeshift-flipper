@@ -601,12 +601,80 @@ full); flagged for a second look.
   (`scan/connect/send/setup/send_error_log`) instead of functions that no
   longer exist, per makeshift-flipper-84's heads-up.
 
+## Round 12 (this session): first real `idf.py build`, host tests + CI, Wi-Fi setup PIN
+
+The first actual compile of both firmwares against ESP-IDF v5.3.1 (all
+prior rounds were static-analysis-only, per every "no firmware has been
+built" note above). Both now build clean; see commits `57ad832` and
+`9644122b`.
+
+- ✅ **FIXED:** `main/ui/display.c` included a nonexistent
+  `esp_lcd_ssd1306.h` and `main/idf_component.yml` declared a dependency
+  on a component-registry package (`espressif/esp_lcd_ssd1306`) that
+  doesn't exist under that name — the actual driver ships inside
+  ESP-IDF's own `esp_lcd` component as `esp_lcd_panel_ssd1306.h`. Fixed
+  the include and dropped the bogus manifest entry.
+- ✅ **FIXED:** six `-Werror=format-truncation` build failures in
+  `main/main.c` — `snprintf` precision values (`%.12s`, `%.14s`, etc.)
+  that didn't leave enough room in their destination `char[DISPLAY_COLS+1]`
+  buffers for the rest of the format string (rssi/channel/"dBm" suffixes),
+  plus one literal string one byte over its buffer. All tightened to fit.
+- ✅ **FIXED:** `c6-firmware/main/bt_scan.c` called
+  `esp_nimble_hci_and_controller_init()`, which no longer exists in this
+  NimBLE port (ESP-IDF v5.3) — `nimble_port_init()` now does both
+  controller and host init in one call. Updated.
+- ✅ **FIXED:** the C6 binary (WiFi + NimBLE BT + HTTP client/server
+  together, ~1.37MB linked) no longer fit the default "single app"
+  partition table's 1MB app partition. Bumped
+  `c6-firmware/sdkconfig.defaults` to the "large" single-app partition
+  table (1500K) and 4MB assumed flash size.
+- ✅ **FIXED (security):** the Wi-Fi setup AP's password
+  (`AP_PASSWORD` in `c6-firmware/main/wifi_setup_ap.c`) was a fixed
+  string (`"flipper123"`) baked into the public firmware source —
+  visible to anyone reading the repo, identical across every unit built
+  from it. Combined with `AP_MAX_CONN=1`'s narrow enforcement gap (it
+  only blocks a second association while the legitimate client is still
+  associated — if that association drops transiently between the
+  setup page loading and the form being submitted, a second attacker in
+  range who already knows the fixed password could associate in that
+  window and race the real `/connect` POST), this meant the "single
+  client" mitigation the code's own comments described wasn't airtight
+  against a targeted attacker. Fixed by generating a fresh random
+  8-character WPA2-PSK password per setup session on the P4
+  (`esp_random()`, hardware RNG) and passing it to the C6 as
+  `SETUP:<pin>` instead of a compile-time constant; shown on the OLED
+  the same way the old fixed password was, so no UX change. Found during
+  a targeted security review of `wifi_setup_ap.c` (this round).
+- ✅ **HARDENED (not an active bug):** `wifi_setup_ap.c`'s
+  `build_networks_html()` added `snprintf`'s return value to `pos`
+  unconditionally across loop iterations; `snprintf` returns the length
+  it *would* have written, not what actually fit, so `pos` could end up
+  larger than `sizeof(s_networks_html)` — harmless today since `pos` is
+  discarded after the function returns and `snprintf`'s own internal
+  truncation already protects the buffer, but the classic setup for a
+  real overflow if a later edit ever uses `pos` to index/copy. Changed
+  to the standard "check the return value, stop on truncation" pattern.
+  Found during the same review as the item above.
+- Extracted host-testable pure logic (no ESP-IDF dependency) out of
+  files that previously mixed it with FreeRTOS/UART/WiFi code:
+  `main/net/json_escape.c` (JSON string escaping, out of `c6_link.c`)
+  and `c6-firmware/main/text_sanitize.c` (wire-text sanitizing + BLE
+  advertising-data name parsing, out of `wifi_monitor.c`/`bt_scan.c`,
+  previously near-duplicated between the two). 61 host-side checks
+  across 4 test files now cover these plus `diag.c`'s ring buffer and
+  `text_entry.c`'s cursor/buffer logic — see `tests/`.
+- Added `.github/workflows/build.yml`: CI now builds both firmwares
+  (via Espressif's official `esp-idf-ci-action`) and runs the host
+  tests on every push/PR.
+
 ## General
 
-- No firmware in this repo has been built or run on real hardware (also
-  noted in the README) — every finding above is the result of static
+- Both firmwares now build clean (see Round 12), but neither has been
+  **flashed to or run on real hardware** yet — every finding above (other
+  than the build fixes themselves) is still the result of static
   analysis; register timing, pin/strapping conflicts, and power
-  tolerances are all unverified.
+  tolerances are all unverified. See `HARDWARE_TEST_MATRIX.md` for the
+  checklist to work through once real hardware is available.
 - Error reporting mostly goes through `ESP_LOGW`/`ESP_LOGE` only — with
   the device's own OLED as the primary display, a user who isn't on a
   serial connection won't see these errors at all.
