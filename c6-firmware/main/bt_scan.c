@@ -14,6 +14,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "text_sanitize.h"
 #include "uart_link.h"
 
 static const char *TAG = "bt_scan";
@@ -31,45 +32,6 @@ typedef struct {
 static QueueHandle_t s_dev_queue;
 static volatile bool s_running = false;
 static bool s_host_synced = false;
-
-// Sanitizes a device name for the wire, same reasoning as
-// wifi_monitor.c's sanitize_ssid() -- advertised names come from
-// whatever device is out there and aren't trustworthy input.
-static void sanitize_name(char *name)
-{
-    for (char *p = name; *p != '\0'; p++) {
-        if (*p == ',' || *p == '\n' || *p == '\r') {
-            *p = '_';
-        }
-    }
-}
-
-// Pulls the Complete/Shortened Local Name AD structure out of a raw
-// advertising report, if present. BLE advertising data is a sequence of
-// [length][type][data...] structures; type 0x09 is "Complete Local Name",
-// 0x08 is "Shortened Local Name" -- either is good enough to show.
-static void extract_name(const uint8_t *data, uint8_t len, char *out_name, size_t out_cap)
-{
-    out_name[0] = '\0';
-    size_t i = 0;
-    while (i + 1 < len) {
-        uint8_t field_len = data[i];
-        if (field_len == 0 || i + 1 + field_len > len) {
-            break;
-        }
-        uint8_t field_type = data[i + 1];
-        if (field_type == 0x09 || field_type == 0x08) {
-            size_t name_len = field_len - 1;
-            if (name_len >= out_cap) {
-                name_len = out_cap - 1;
-            }
-            memcpy(out_name, &data[i + 2], name_len);
-            out_name[name_len] = '\0';
-            return;
-        }
-        i += 1 + field_len;
-    }
-}
 
 static void uart_tx_task(void *arg)
 {
@@ -102,8 +64,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     dev_entry_t entry = {0};
     memcpy(entry.addr, disc->addr.val, 6);
     entry.rssi = (int8_t)disc->rssi;
-    extract_name(disc->data, disc->length_data, entry.name, sizeof(entry.name));
-    sanitize_name(entry.name);
+    extract_ble_name(disc->data, disc->length_data, entry.name, sizeof(entry.name));
+    sanitize_wire_text(entry.name);
 
     xQueueSend(s_dev_queue, &entry, 0);
     return 0;

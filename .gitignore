@@ -9,3 +9,11 @@ sdkconfig.old
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Host test build output (tests/run_tests.sh)
+tests/.build/
+
+# Local Turkish voice recordings and generated ML artifacts
+voice/data/
+voice/artifacts/
+voice/.venv/

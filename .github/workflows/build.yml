@@ -1,0 +1,39 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-p4:
+    name: Build P4 firmware (main/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build main firmware for esp32p4
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32p4
+          path: '.'
+
+  build-c6:
+    name: Build C6 companion firmware (c6-firmware/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build c6-firmware for esp32c6
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32c6
+          path: 'c6-firmware'
+
+  host-tests:
+    name: Host logic tests (tests/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host tests
+        run: bash tests/run_tests.sh
