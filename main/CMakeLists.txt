@@ -13,6 +13,7 @@ idf_component_register(
         "rfid/rdm6300.c"
         "feedback/vibration.c"
         "net/c6_link.c"
+        "net/json_escape.c"
         "diag/diag.c"
     INCLUDE_DIRS
         "."

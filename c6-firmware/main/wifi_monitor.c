@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
+#include "text_sanitize.h"
 #include "uart_link.h"
 
 static const char *TAG = "wifi_monitor";
@@ -39,21 +40,6 @@ static int s_current_channel = 1;
 #define FRAME_SUBTYPE_BEACON         0x80
 #define FRAME_SUBTYPE_PROBE_RESPONSE 0x50
 #define FRAME_SUBTYPE_MASK           0xF0
-
-// Sanitizes an SSID for the wire: beacon/probe-response payloads are
-// attacker-controllable and may contain the wire protocol's own separators
-// or control bytes (unlike every other string this firmware puts on the
-// UART, which comes from this codebase or a joystick keyboard with a fixed
-// character set). ',' would break PKT's field split, '\n'/'\r' would inject
-// a fake line boundary.
-static void sanitize_ssid(char *ssid)
-{
-    for (char *p = ssid; *p != '\0'; p++) {
-        if (*p == ',' || *p == '\n' || *p == '\r') {
-            *p = '_';
-        }
-    }
-}
 
 // Runs in the Wi-Fi driver's own task context (not an ISR -- ESP-IDF's
 // promiscuous RX callback is a normal task callback), so a non-blocking
@@ -95,7 +81,7 @@ static void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     }
     memcpy(entry.ssid, &payload[ie_offset + 2], ssid_len);
     entry.ssid[ssid_len] = '\0';
-    sanitize_ssid(entry.ssid);
+    sanitize_wire_text(entry.ssid);
 
     xQueueSend(s_pkt_queue, &entry, 0);
 }
