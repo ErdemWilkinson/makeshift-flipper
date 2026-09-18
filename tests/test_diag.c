@@ -132,6 +132,68 @@ MT_TEST(clear_resets_count_and_cursor)
     MT_CHECK_EQ_STR(out[0].code, "entry");
 }
 
+MT_TEST(save_then_load_roundtrips_history)
+{
+    nvs_stub_reset();
+    diag_clear();
+    g_fake_time_us = 42;
+    diag_record_error("RFID Clone", "SAVE_ME");
+    MT_CHECK(diag_save());
+
+    // Simulate a reboot: wipe the RAM history, then load from the "flash"
+    // (stub store), which survives across this.
+    diag_clear();
+    MT_CHECK_EQ_INT(diag_get_history_count(), 0);
+
+    diag_load();
+    MT_CHECK_EQ_INT(diag_get_history_count(), 1);
+    diag_entry_t out[1];
+    diag_get_history(out, 1);
+    MT_CHECK_EQ_STR(out[0].module, "RFID Clone");
+    MT_CHECK_EQ_STR(out[0].code, "SAVE_ME");
+    MT_CHECK_EQ_INT(out[0].timestamp_us, 42);
+}
+
+MT_TEST(load_with_nothing_saved_is_a_true_no_op)
+{
+    nvs_stub_reset(); // simulates a freshly-erased device, nothing saved yet
+    diag_clear();
+    diag_record_error("still", "here_after_load");
+
+    // diag_load() must NOT clear the RAM history just because NVS is
+    // empty -- it should leave whatever's already there untouched (see
+    // diag.h's comment on why: "nothing to load" isn't the same as
+    // "clear what's there").
+    diag_load();
+    MT_CHECK_EQ_INT(diag_get_history_count(), 1);
+    diag_entry_t out[1];
+    diag_get_history(out, 1);
+    MT_CHECK_EQ_STR(out[0].code, "here_after_load");
+}
+
+MT_TEST(save_then_load_preserves_ring_buffer_order_after_wraparound)
+{
+    nvs_stub_reset();
+    diag_clear();
+    char code[8];
+    // Wrap the ring buffer past capacity before saving, so the save/load
+    // path is exercised on a non-trivial s_next_slot, not just slot 0.
+    for (int i = 0; i < DIAG_HISTORY_CAPACITY + 5; i++) {
+        snprintf(code, sizeof(code), "%d", i);
+        diag_record_error("mod", code);
+    }
+    MT_CHECK(diag_save());
+
+    diag_clear();
+    diag_load();
+
+    MT_CHECK_EQ_INT(diag_get_history_count(), DIAG_HISTORY_CAPACITY);
+    diag_entry_t out[DIAG_HISTORY_CAPACITY];
+    diag_get_history(out, DIAG_HISTORY_CAPACITY);
+    snprintf(code, sizeof(code), "%d", DIAG_HISTORY_CAPACITY + 4);
+    MT_CHECK_EQ_STR(out[0].code, code); // newest survives at index 0
+}
+
 int main(void)
 {
     printf("test_diag:\n");
@@ -142,5 +204,8 @@ int main(void)
     MT_RUN(ring_buffer_overwrites_oldest_when_full);
     MT_RUN(module_and_code_are_truncated_and_null_terminated);
     MT_RUN(clear_resets_count_and_cursor);
+    MT_RUN(save_then_load_roundtrips_history);
+    MT_RUN(load_with_nothing_saved_is_a_true_no_op);
+    MT_RUN(save_then_load_preserves_ring_buffer_order_after_wraparound);
     return MT_SUMMARY();
 }
