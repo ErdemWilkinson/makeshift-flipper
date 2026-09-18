@@ -88,6 +88,7 @@ typedef struct {
     char ssid[C6_MONITOR_SSID_MAX_LEN + 1];
     int8_t rssi;
     uint8_t channel;
+    char sec[8]; // Security mode: OPEN, WEP, WPA, WPA2, WPA3
 } c6_monitor_ap_t;
 
 // Sends "MONITOR" and blocks briefly for "OK"/"FAIL", then starts the

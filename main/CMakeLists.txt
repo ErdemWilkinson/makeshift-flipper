@@ -9,6 +9,7 @@ idf_component_register(
         "ir/ir_nec.c"
         "ir/ir_driver.c"
         "ir/ir_direction.c"
+        "ir/ir_library.c"
         "rfid/rc522.c"
         "rfid/rdm6300.c"
         "feedback/vibration.c"

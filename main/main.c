@@ -14,6 +14,7 @@
 #include "input/buttons.h"
 #include "ir/ir_direction.h"
 #include "ir/ir_driver.h"
+#include "ir/ir_library.h"
 #include "net/c6_link.h"
 #include "rfid/rc522.h"
 #include "rfid/rdm6300.h"
@@ -339,13 +340,150 @@ static void action_rfid_clone(void)
     menu_render(s_active_menu);
 }
 
-// Sends a fixed test frame. Replace with a real "pick a saved code" screen
-// once there's a way to store/browse captured IR codes.
+// Sends a fixed test frame -- a quick sanity check that the IR LED/RMT TX
+// path works at all, independent of the library below.
 static void action_ir_send_test(void)
 {
     ir_nec_frame_t frame = { .address = 0x00, .command = 0x45 };
     ESP_LOGI(TAG, "IR TX test frame: addr=0x%02X cmd=0x%02X", frame.address, frame.command);
     ir_driver_send(&frame);
+}
+
+// Blocks (BACK cancels) waiting for one NEC frame via ir_driver_poll_rx(),
+// then lets the user name it with the scroll keyboard and saves it to the
+// library. Mirrors action_wifi_setup_manual()'s "scan/pick -> name it ->
+// save" shape.
+static void action_ir_learn(void)
+{
+    ir_nec_frame_t frame;
+    bool captured = false;
+    for (;;) {
+        display_clear();
+        display_draw_text(0, 0, "IR Learn");
+        display_draw_text(2, 0, "Point remote here");
+        display_draw_text(3, 0, "and press a button");
+        display_draw_text(6, 0, "BACK: cancel");
+        display_flush();
+
+        for (int i = 0; i < 20 && !captured; i++) { // ~200ms between redraws
+            button_id_t event = buttons_poll();
+            if (event == BUTTON_BACK) {
+                menu_render(s_active_menu);
+                return;
+            }
+            if (ir_driver_poll_rx(&frame)) {
+                captured = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (captured) {
+            break;
+        }
+    }
+
+    vibration_pulse(80);
+
+    text_entry_t entry;
+    text_entry_init(&entry);
+    bool cancelled = false;
+    for (;;) {
+        text_entry_render(&entry, "Name this code", /* mask = */ false);
+
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            cancelled = true;
+            break;
+        }
+        if (text_entry_handle_button(&entry, event)) {
+            break; // '^' (OK) was pressed
+        }
+    }
+
+    display_clear();
+    display_draw_text(0, 0, "IR Learn");
+    if (cancelled) {
+        display_draw_text(2, 0, "Cancelled");
+    } else if (entry.length == 0) {
+        display_draw_text(2, 0, "Name can't be empty");
+    } else if (!ir_library_add(entry.buffer, &frame)) {
+        display_draw_text(2, 0, "Library full");
+        display_draw_text(3, 0, "Delete one first");
+        diag_record_error("IR Learn", "IR_LIBRARY_FULL");
+    } else {
+        ir_library_save(); // best-effort, same as diag_save() -- RAM copy is authoritative regardless
+        display_draw_text(2, 0, "Saved!");
+    }
+    display_draw_text(6, 0, "Press any key");
+    display_flush();
+
+    button_id_t any;
+    do {
+        any = buttons_poll();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (any == BUTTON_COUNT);
+
+    menu_render(s_active_menu);
+}
+
+// Browses saved IR codes: UP/DOWN to select, PRESS to transmit the
+// selected code, LEFT to delete it (with the ring buffer's "oldest
+// first" ordering from ir_library.h -- entries shift up after a delete).
+// BACK exits.
+static void action_ir_library(void)
+{
+    int selected = 0;
+    for (;;) {
+        int count = ir_library_count();
+        display_clear();
+        char header[DISPLAY_COLS + 1];
+        snprintf(header, sizeof(header), "IR Library (%d)", count);
+        display_draw_text(0, 0, header);
+
+        if (count == 0) {
+            display_draw_text(2, 0, "No codes saved");
+            display_draw_text(3, 0, "Use IR Learn first");
+        } else {
+            for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
+                const ir_library_entry_t *e = ir_library_get(i);
+                char line[DISPLAY_COLS + 1];
+                snprintf(line, sizeof(line), "%c%.19s", (i == selected) ? '>' : ' ', e->name);
+                display_draw_text(1 + i, 0, line);
+            }
+        }
+        display_draw_text(7, 0, count > 0 ? "PRESS:send LEFT:del" : "BACK: exit");
+        display_flush();
+
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            break;
+        } else if (event == BUTTON_UP && selected > 0) {
+            selected--;
+        } else if (event == BUTTON_DOWN && selected < count - 1) {
+            selected++;
+        } else if (event == BUTTON_PRESS && count > 0) {
+            const ir_library_entry_t *e = ir_library_get(selected);
+            ir_driver_send(&e->frame);
+            vibration_pulse(80);
+        } else if (event == BUTTON_LEFT && count > 0) {
+            ir_library_remove(selected);
+            ir_library_save(); // best-effort, see action_ir_learn()'s comment
+            if (selected >= ir_library_count() && selected > 0) {
+                selected--;
+            }
+        }
+    }
+
+    menu_render(s_active_menu);
 }
 
 // Opens the 4-receiver direction-finding screen. Requires the
@@ -595,8 +733,10 @@ static void action_wifi_monitor(void)
         display_draw_text(0, 0, header);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%.8s c%d %ddBm",
-                     aps[i].ssid[0] ? aps[i].ssid : "(hidden)", aps[i].channel, aps[i].rssi);
+            snprintf(line, sizeof(line), "%.6s %-4s c%d %d",
+                     aps[i].ssid[0] ? aps[i].ssid : "(hid)",
+                     aps[i].sec[0] ? aps[i].sec : "?",
+                     aps[i].channel, aps[i].rssi);
             display_draw_text(1 + i, 0, line);
         }
         display_draw_text(7, 0, "BACK: stop+exit");
@@ -808,6 +948,8 @@ static menu_item_t s_rfid_menu_items[] = {
 
 static menu_item_t s_ir_menu_items[] = {
     {"IR Send Test",     action_ir_send_test,      NULL},
+    {"IR Learn",          action_ir_learn,          NULL},
+    {"IR Library",        action_ir_library,        NULL},
     {"IR Direction Find", action_ir_direction_find, NULL},
 };
 
@@ -872,9 +1014,10 @@ static void render_ir_direction_screen(uint8_t flags)
 
 void app_main(void)
 {
-    // NVS backs diag_load()/diag_save() (see diag.h) -- erase-and-retry on
-    // the two "partition needs reformatting" error codes, same pattern the
-    // C6 side already uses in c6-firmware/main/main.c.
+    // NVS backs diag_load()/diag_save() and ir_library_load()/_save() (see
+    // diag.h and ir_library.h) -- erase-and-retry on the two "partition
+    // needs reformatting" error codes, same pattern the C6 side already
+    // uses in c6-firmware/main/main.c.
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -882,6 +1025,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(nvs_err);
     diag_load();
+    ir_library_load();
 
     display_init();
     buttons_init();
