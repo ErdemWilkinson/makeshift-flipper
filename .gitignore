@@ -13,7 +13,13 @@ Thumbs.db
 # Host test build output (tests/run_tests.sh)
 tests/.build/
 
-# Local Turkish voice recordings and generated ML artifacts
-voice/data/
-voice/artifacts/
-voice/.venv/
+# Generated Python files and local installation logs
+__pycache__/
+*.py[cod]
+voice/pip-install*.log
+
+# Separate OCR and ASR experiments are intentionally kept out of this
+# firmware repository. Their local files remain available in the workspace.
+ocr/
+voice/
+OCR_TINYML_NOTES.md
