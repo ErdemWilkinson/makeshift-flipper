@@ -6,3 +6,13 @@
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_CONTROLLER_ENABLED=y
+
+# The default "single app" partition table only leaves 1MB for the app;
+# WiFi + NimBLE BT + HTTP client/server together no longer fit in that
+# (observed ~1.37MB linked binary). Bump both the assumed flash size and
+# the partition table to the "large" single-app variant (1500K for the
+# app) that ships with ESP-IDF, rather than hand-rolling a custom CSV.
+# If your actual C6 board has less than 4MB flash, lower
+# CONFIG_ESPTOOLPY_FLASHSIZE to match it.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
