@@ -123,6 +123,44 @@ static void wait_for_any_key(void)
     } while (any == BUTTON_COUNT);
 }
 
+// Boot splash: DEVICE_NAME on an accent-filled bar, held for a couple
+// seconds before the main menu takes over. Purely cosmetic (no button
+// short-circuits it -- it's deliberately brief enough that waiting it out
+// isn't annoying) but it's the first thing a user sees, so it's where the
+// device's own identity (name + color theme, see display.h) actually
+// registers, rather than jumping straight to a generic menu list.
+static void render_boot_splash(void)
+{
+    display_clear();
+
+    // Accent bar roughly centered vertically, DEVICE_NAME centered inside
+    // it. DISPLAY_ROWS/COLS are 15/30 -- these row/col numbers are tuned
+    // for that grid, not derived from strlen(), since the bar's height is
+    // also a deliberate visual choice, not just "however tall the text is".
+    const int bar_row0 = 5;
+    const int bar_row1 = 9;
+    display_fill_rect(0, bar_row0 * 16, DISPLAY_WIDTH_PX, (bar_row1 - bar_row0) * 16,
+                       DISPLAY_COLOR_ACCENT);
+
+    int name_len = (int)strlen(DEVICE_NAME);
+    int name_col = (DISPLAY_COLS - name_len) / 2;
+    if (name_col < 0) {
+        name_col = 0;
+    }
+    display_draw_text_color(7, name_col, DEVICE_NAME, DISPLAY_COLOR_ACCENT_TEXT);
+
+    static const char *tagline = "RFID - IR - WiFi - BT";
+    int tagline_len = (int)strlen(tagline);
+    int tagline_col = (DISPLAY_COLS - tagline_len) / 2;
+    if (tagline_col < 0) {
+        tagline_col = 0;
+    }
+    display_draw_text_color(11, tagline_col, tagline, DISPLAY_COLOR_DIM);
+
+    display_flush();
+    vTaskDelay(pdMS_TO_TICKS(1500));
+}
+
 // Authenticates and reads all 16 sectors of `dump->uid`'s card, trying each
 // of RC522_DEFAULT_KEYS as Key A then Key B per sector. A sector whose key
 // isn't in that list is left with sectors[i].readable = false rather than
@@ -988,7 +1026,18 @@ static void action_bt_scan(void)
 
 static void action_about(void)
 {
-    ESP_LOGI(TAG, "Makeshift Flipper - skeleton build");
+    display_clear();
+    display_draw_text_color(0, 0, DEVICE_NAME, DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "DIY multi-tool");
+    display_draw_text(3, 0, "ESP32-P4 + ESP32-C6");
+    display_draw_text(5, 0, "RFID / NFC (13.56 & 125k)");
+    display_draw_text(6, 0, "Infrared TX/RX + learn");
+    display_draw_text(7, 0, "WiFi scan/setup/monitor");
+    display_draw_text(8, 0, "Bluetooth LE scan");
+    display_draw_text_color(DISPLAY_ROWS - 2, 0, "github.com/ErdemWilkinson", DISPLAY_COLOR_DIM);
+    display_draw_text_color(DISPLAY_ROWS - 1, 0, "Press any key...", DISPLAY_COLOR_DIM);
+    display_flush();
+    wait_for_any_key();
 }
 
 // Formats how long ago `timestamp_us` (an esp_timer_get_time() value) was,
@@ -1213,6 +1262,7 @@ void app_main(void)
     rfid_library_load();
 
     display_init();
+    render_boot_splash();
     buttons_init();
     ir_driver_init();
     // The P4 has no spare RMT RX channels after the regular IR receiver and

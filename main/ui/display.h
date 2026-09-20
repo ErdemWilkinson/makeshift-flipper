@@ -21,17 +21,28 @@ typedef uint16_t display_color_t;
 #define DISPLAY_RGB(r, g, b) \
     ((display_color_t)((((r) & 0x1F) << 11) | (((g) & 0x3F) << 5) | ((b) & 0x1F)))
 
+// The device's identity: name shown on the boot splash, the About screen,
+// and anywhere else the build wants to brand itself. One place to change
+// it for a rebrand/fork.
+#define DEVICE_NAME "ErdemFlip"
+
 // The device's color theme -- centralized here (rather than scattered
 // display_color_t literals through main.c) so the palette can be reviewed
 // or swapped in one place. Values are deliberately high-contrast: this is
 // a small 1.8" panel viewed at arm's length, not a phone screen.
-#define DISPLAY_COLOR_BACKGROUND DISPLAY_RGB(0, 0, 0)       // black
-#define DISPLAY_COLOR_TEXT       DISPLAY_RGB(28, 60, 28)    // near-white
-#define DISPLAY_COLOR_ACCENT     DISPLAY_RGB(31, 40, 4)     // amber/orange -- selection highlight, headers
+//
+// Warm red/orange identity (chosen over the earlier green-on-black
+// "terminal" look to make this build visually its own): near-black with a
+// faint red tint for the background, warm amber body text, and a hot
+// red-orange accent for selection/headers -- keeps error red and OK green
+// clearly distinct from the accent so status colors still read at a glance.
+#define DISPLAY_COLOR_BACKGROUND DISPLAY_RGB(2, 1, 1)       // near-black, faint warm tint
+#define DISPLAY_COLOR_TEXT       DISPLAY_RGB(30, 40, 10)    // warm amber
+#define DISPLAY_COLOR_ACCENT     DISPLAY_RGB(31, 18, 2)     // hot red-orange -- selection highlight, headers
 #define DISPLAY_COLOR_ACCENT_TEXT DISPLAY_RGB(0, 0, 0)      // text drawn on top of an accent-filled area
-#define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 8, 8)      // red -- error/failure states
-#define DISPLAY_COLOR_OK         DISPLAY_RGB(6, 50, 10)     // green -- success/connected states
-#define DISPLAY_COLOR_DIM        DISPLAY_RGB(10, 20, 10)    // dim green -- secondary/disabled text
+#define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 4, 4)      // red -- error/failure states
+#define DISPLAY_COLOR_OK         DISPLAY_RGB(10, 46, 8)     // green -- success/connected states (kept distinct from accent)
+#define DISPLAY_COLOR_DIM        DISPLAY_RGB(14, 10, 4)     // dim warm brown -- secondary/disabled text
 
 // Brings up SPI + the ST7789 panel. Call once at startup.
 void display_init(void);

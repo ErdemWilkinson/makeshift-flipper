@@ -26,6 +26,8 @@ joystick plus a separate BACK button.
 - Scan and connect to Wi-Fi networks through a companion ESP32-C6 radio,
   either via a phone-based web setup flow or a fully offline
   joystick-driven "scroll keyboard"
+- A branded boot splash (device name + tagline) and an About screen, both
+  themed off the same warm red/orange palette
 - Animated color menu navigation (slide-in entrance, amber-highlighted
   selection bar) on a 240x240 SPI LCD
 - **Errors**: a rolling on-device history of the last `DIAG_HISTORY_CAPACITY`
@@ -162,10 +164,15 @@ is needed (unlike the SSD1306, which briefly needed one).
   taller. ASCII-only; there's no Turkish-diacritic glyph coverage yet (a
   gap noted in `KNOWN_ISSUES.md`).
 - **Color theme**: centralized as `DISPLAY_COLOR_*` macros at the top of
-  `display.h` (background, text, an amber `ACCENT` used for the menu
-  selection bar and headers, plus `ERROR`/`OK`/`DIM` for status text) —
-  change the palette in one place rather than hunting for scattered color
-  literals through `main.c`.
+  `display.h` — a warm red/orange identity (near-black background, amber
+  body text, a hot red-orange `ACCENT` for the menu selection bar and
+  headers, plus `ERROR`/`OK`/`DIM` for status text, kept visually distinct
+  from `ACCENT` so status colors still read at a glance). Change the
+  palette in one place rather than hunting for scattered color literals
+  through `main.c`. `DEVICE_NAME` (also in `display.h`, currently
+  `"ErdemFlip"`) is shown on the boot splash (`render_boot_splash()` in
+  `main.c`, right after `display_init()`) and the About screen — rename it
+  there for a rebrand/fork.
 - **Drawing API**: `display_draw_text(row, col, text)` for the common case
   (default text color on the background color); `display_draw_text_color()`
   to pick an explicit color; `display_draw_text_px()`/`display_fill_rect()`
