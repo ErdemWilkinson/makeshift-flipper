@@ -913,27 +913,43 @@ markers) — this section exists so that honesty is also visible from the
 firmware side, since someone glancing at "Ask AI"/"Debug AI" being removed
 here could otherwise assume on-device AI was abandoned rather than moved.
 
-- 🔴 **NOT READY, MISSING HARDWARE:** `ocr/` (Turkish line OCR, CNN+CTC,
-  full-int8 TFLite) has a working training pipeline but **no measured
-  accuracy at all** — no `evaluate.py` output/metrics file exists in the
-  artifacts checked. Its own acceptance bar (`ocr/README.md`): CER ≤ 5%,
-  exact-line accuracy ≥ 80%. Separately, and more fundamentally: this
-  firmware has no camera driver, camera pin assignment, frame buffer, or
-  TinyML runtime (TFLite Micro/ESP-DL) integrated anywhere — the device's
-  only image-adjacent hardware is the display (`main/ui/display.c`),
-  which is output-only and cannot supply an image to the model. The model
-  cannot be evaluated as "good or bad" yet; it hasn't been run against
-  its own held-out set, and there is no hardware path to run it on-device
-  even if it had been.
-- 🔴 **NOT READY, DEPLOYMENT-TARGET MODEL UNTRAINED:** `voice/`'s actual
-  shipped target is a 12-label fixed command classifier (`train.py` —
-  wake word, menu/back/scan/etc, see `commands.v1.json`), with its own
-  acceptance gate (`voice/README.md`): whisper-volume accuracy ≥ 85%,
-  normal-volume accuracy ≥ 92%, unknown/silence false-accept rate ≤ 2%.
-  **The command dataset has not been recorded yet** (`QUALITY_RECORDING_PROTOCOL.md`
-  describes the intended ≥12-speaker/80-sentence protocol, not-yet-executed),
-  so this model doesn't exist as a trained artifact at all, let alone one
-  measured against its gate.
+- 🟡 **UPDATE (2026-09-20): now measured, below target but not garbage.**
+  `ocr/` (Turkish line OCR, CNN+CTC, full-int8 TFLite) was re-run through
+  `scripts/evaluate.py --labels labels.csv` (3681 held-out samples):
+  character error rate **13.09%**, exact-line accuracy **57.35%** — below
+  its own acceptance bar (CER ≤ 5%, exact-line accuracy ≥ 80%,
+  `ocr/README.md`), but most errors are small (a dropped trailing
+  word/character, a digit substitution), not wholesale garbage, unlike
+  `voice/`'s CTC baseline below. Reads as undertrained/underfit rather
+  than architecturally broken — see `ocr/README.md`'s new "Current
+  measured results" section for the full numbers and caveats (this is
+  still only the training pipeline's own synthetic held-out split, not an
+  independent test set). The hardware gap is unchanged and is the harder
+  blocker: this firmware still has no camera driver, camera pin
+  assignment, frame buffer, or TinyML runtime (TFLite Micro/ESP-DL)
+  integrated anywhere — the device's only image-adjacent hardware is the
+  display (`main/ui/display.c`), which is output-only. See
+  `HARDWARE_INTEGRATION_PLAN.md` (new, this round) for a concrete
+  camera + runtime selection and build order — OV2640 (DVP) + TFLite
+  Micro (`esp-tflite-micro`) are the recommendations there, with the
+  camera's 8-bit data bus **not currently fitting the documented free-pin
+  budget** (needs confirming the real P4-Pico's total GPIO count, which
+  this repo has never stated, before that's resolved either way).
+- 🟡 **UPDATE (2026-09-20): recording tooling added, dataset still not
+  collected.** `voice/`'s actual shipped target (12-label fixed command
+  classifier, `train.py` — wake word, menu/back/scan/etc, see
+  `commands.v1.json`) still has no trained artifact and no recorded
+  dataset — that part is unchanged, and collecting it needs an actual
+  human recording session, which can't happen from this environment.
+  What's new: `voice/scripts/record_commands.py`, an interactive recorder
+  that walks a speaker through every (label, style) combination
+  `commands.v1.json` needs, writing directly to the
+  `data/raw/<speaker>/<style>/<label>/*.wav` layout
+  `prepare_dataset.py` already expects (mono 16kHz WAV, keep/redo/skip
+  per take, `--resume` to continue an interrupted session). Its own
+  acceptance gate (`voice/README.md`) is unchanged: whisper-volume
+  accuracy ≥ 85%, normal-volume accuracy ≥ 92%, unknown/silence
+  false-accept rate ≤ 2%.
 - 🟡 **MEASURED AND POOR, BUT EXPLICITLY NOT THE SHIP TARGET:** `voice/`'s
   separate open-vocabulary CTC baseline (character-level Turkish
   speech-to-text on Mozilla Common Voice, `train_asr_common_voice.py`) has
