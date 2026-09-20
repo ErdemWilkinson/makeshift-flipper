@@ -6,10 +6,13 @@ RFID. Pairs with the pin plan in [README.md](README.md#pin-plan) and the
 protocol description in
 [c6-firmware/README.md](c6-firmware/README.md#protocol-p4--c6-uart-115200-8n1-line-terminated-with-n).
 
-This repo has never been flash-tested on real hardware as of this writing
-(see [KNOWN_ISSUES.md](KNOWN_ISSUES.md)) — both firmwares now build clean
-under ESP-IDF v5.3.1, but nothing below has been run on an actual board.
-Treat every row as unverified until checked off.
+Both firmwares build clean under ESP-IDF v5.3.1. The P4 main firmware has
+been flashed and booted once on real hardware (see KNOWN_ISSUES.md's
+Round 13), but that was against the now-replaced SSD1306 OLED, before the
+Round 15 switch to an ST7789 SPI LCD -- so the current display code is
+itself unverified on physical hardware, and the C6 companion firmware
+remains entirely unflashed. Treat every row below as unverified until
+checked off on your own hardware.
 
 How to use this: flash both firmwares, work through each row, and record
 pass/fail plus any deviation (wrong pin, wrong polarity, timing issue).
@@ -127,9 +130,11 @@ P4-side pin above.
 
 ## Known gaps not covered above
 
-- No physical hardware exists to run any of this against yet (see
-  [KNOWN_ISSUES.md](KNOWN_ISSUES.md)) — this matrix is the checklist for
-  whenever that changes, not a report of what's already been verified.
+- Only the P4's boot/init path has been run against real hardware so far
+  (see [KNOWN_ISSUES.md](KNOWN_ISSUES.md)'s Round 13), and that was
+  before the Round 15 display swap -- no row in this matrix has actually
+  been checked off yet. This matrix is the checklist for working through
+  that, not a report of what's already verified.
 - Timing-sensitive things (IR NEC frame decode margins, joystick ADC
   debounce/hysteresis thresholds) can only really be tuned against real
   hardware; the host tests in `tests/` intentionally don't try to fake

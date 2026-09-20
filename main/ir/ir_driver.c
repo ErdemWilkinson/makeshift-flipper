@@ -91,7 +91,11 @@ void ir_driver_init(void)
     ESP_ERROR_CHECK(rmt_apply_carrier(s_tx_channel, &carrier_cfg));
     ESP_ERROR_CHECK(rmt_enable(s_tx_channel));
 
-    rmt_copy_encoder_config_t copy_encoder_cfg = {0};
+    // rmt_copy_encoder_config_t (ESP-IDF's rmt_encoder.h) is an empty
+    // struct with no members -- `= {0}` triggers "excess elements in
+    // struct initializer" on GCC for exactly that reason. An empty
+    // initializer list is what this type actually wants.
+    rmt_copy_encoder_config_t copy_encoder_cfg = {};
     ESP_ERROR_CHECK(rmt_new_copy_encoder(&copy_encoder_cfg, &s_tx_copy_encoder));
 
     ESP_LOGI(TAG, "IR driver initialized (RX=GPIO%d, TX=GPIO%d)", IR_RX_GPIO, IR_TX_GPIO);

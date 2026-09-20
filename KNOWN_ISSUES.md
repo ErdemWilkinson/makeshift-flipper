@@ -9,10 +9,13 @@ with a code change (✅), knowingly accepted as a low-severity risk with
 reasoning (🟡/✅ "accepted risk"), or verified and confirmed not to be an
 actual conflict/risk (✅ verified). Nothing was closed silently — the
 reasoning behind every accepted risk is recorded under that item. One
-exception applies everywhere: **no firmware in this repo has been built
-or flashed on real hardware**, so even items marked "fixed" are still
-pending confirmation on the first real flash attempt (see the General
-section).
+caveat applies broadly: **the P4 main firmware has been built, flashed,
+and booted once on real hardware (Round 13), but that was against the
+now-replaced SSD1306 OLED, so the current ST7789 LCD code (Round 15) is
+still unverified on physical hardware; the C6 companion firmware remains
+entirely unflashed.** Even items marked "fixed" that touch display/UI
+code are pending confirmation on the next real flash attempt (see the
+General section).
 
 ## main/net/c6_link.c (P4↔C6 UART protocol)
 
@@ -673,43 +676,43 @@ Unlike the older static-only entries, the following findings are based on
 actual ESP32-P4-Pico serial logs and a successful build/flash through
 ESP-IDF v5.3.5.
 
-- ⚠️ **CONFIRMED, HARDWARE BLOCKER:** the original SSD1306 OLED did not
-  acknowledge I2C probes at either `0x3C` or `0x3D`. This was reproduced on
-  the normal P4 I2C pair (GPIO7/GPIO8), on a second test pair
-  (GPIO14/GPIO15), and with an Arduino Uno I2C scanner. The P4 itself is
-  healthy: it flashes, boots, configures the requested GPIOs, and continues
-  through RC522/RDM6300/C6 initialization. The display or its wiring is the
-  remaining fault domain; do not treat OLED UI features as hardware-verified
-  until a known-good display is fitted.
-- ⚠️ **TEMPORARY TEST CONFIGURATION:** `main/ui/display.c` currently uses
-  GPIO14/GPIO15, not the documented GPIO7/GPIO8, while testing the failed
-  OLED. This conflicts with the planned south/west IR direction receiver
-  pins. Before shipping or wiring a replacement display, select one display
-  profile and update `README.md`, `main/ui/display.c`, and the IR pin plan
-  together. The intended SSD1306 default remains GPIO7=SDA, GPIO8=SCL.
-- ⚠️ **CONFIRMED, FEATURE UNAVAILABLE:** the ESP32-P4 did not have a free
-  RMT RX channel after the regular IR receiver/transmitter initialized.
-  Starting the four-receiver IR direction finder caused
-  `rmt_new_rx_channel()` to return `ESP_ERR_NOT_FOUND` and reset the device.
-  The automatic `ir_direction_init()` call was removed so the base device
-  now boots, and `ir_direction_poll()` safely reports no frame when that
-  subsystem was not initialized. However, the menu still exposes “IR
-  Direction Find”, where it can only wait forever. Hide/disable that menu
-  item until the direction feature is redesigned to share/time-multiplex RMT
-  resources or the normal IR path is disabled.
-- ⚠️ **CONFIRMED, CONFIGURATION MISMATCH:** boot logs detect a 32 MB flash
-  chip, while the main firmware binary header is built for 2 MB. ESP-IDF
-  therefore limits itself to the configured 2 MB and emits a warning on every
-  boot. The current image fits, so this is not an immediate corruption risk,
-  but OTA/large assets/partition growth cannot use the installed flash until
-  the project flash-size configuration and partition layout are updated and
-  revalidated.
-- ⚠️ **DOCUMENTATION STALE:** the General section and portions of the README
-  still say firmware has never been flashed or run on hardware. That is no
-  longer true for the P4 main firmware; build, flash, boot, RC522 init,
-  RDM6300 UART init, and P4-to-C6 UART initialization have all been observed.
-  This should be edited after the replacement display test, keeping the C6
-  companion firmware's own end-to-end Wi-Fi/BT verification status separate.
+- ✅ **SUPERSEDED BY ROUND 15:** the original SSD1306 OLED did not
+  acknowledge I2C probes at either `0x3C` or `0x3D` on real hardware
+  (reproduced on GPIO7/GPIO8, on a second test pair GPIO14/GPIO15, and
+  with an Arduino Uno I2C scanner). Rather than continuing to debug that
+  specific display/wiring, the target display was replaced entirely --
+  see Round 15: `main/ui/display.c` no longer uses I2C or the SSD1306
+  driver at all, it drives a 1.8" ST7789 SPI LCD instead.
+- ✅ **SUPERSEDED BY ROUND 15:** the "temporary" GPIO14/GPIO15 test wiring
+  noted here is gone -- Round 15's SPI pin plan deliberately reuses
+  GPIO14/GPIO15 for the LCD's CS/DC (see that round's pin-conflict note
+  for why that's fine given IR direction finding's current state).
+- ✅ **FIXED:** the four-receiver IR direction finder has no free RMT RX
+  channel once the regular IR receiver/transmitter are running, so
+  `ir_direction_init()` is not called from `app_main()` and
+  `ir_direction_poll()` always safely reports no frame. The menu item
+  ("Infrared" -> "IR Direction Find") is no longer a silent infinite
+  wait: `ir_direction_is_available()` (new, `main/ir/ir_direction.h`) lets
+  `main.c`'s `render_ir_direction_screen()` detect this and show an
+  explicit "Not available on this build" message instead, with the reason
+  (RMT channels already used by IR RX/TX) so a user isn't left guessing
+  why nothing happens.
+- ✅ **FIXED:** boot logs on the first hardware bring-up detected a 32MB
+  flash chip while the build assumed 2MB, so ESP-IDF limited itself to
+  2MB and logged a mismatch warning every boot. Added
+  `sdkconfig.defaults` with `CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y` to match
+  the hardware that was actually observed -- deliberately does **not**
+  also grow the partition table (nothing currently needs the extra
+  space); a fresh `idf.py set-target esp32p4` picks this up automatically
+  the same way `c6-firmware/sdkconfig.defaults` already worked. If your
+  specific board has different flash, override via `idf.py menuconfig` ->
+  "Serial flasher config" -> "Flash size".
+- ✅ **NO LONGER STALE:** the General section below and README.md now
+  reflect that the P4 main firmware has built, flashed, and booted on
+  real hardware (RC522 init, RDM6300 UART init, and P4-to-C6 UART
+  initialization all observed) -- this is tracked separately from the C6
+  companion firmware's own end-to-end Wi-Fi/BT verification status, which
+  remains unconfirmed.
 
 ## Round 14 (2026-09-20): RFID UID library + host test/CI fixes
 
@@ -783,6 +786,11 @@ OLED everywhere in this repo. This is a from-the-ground-up rewrite of
   -- but it means re-enabling IR direction finding on this pin plan now
   requires moving those two receivers to different GPIOs first, not just
   finding spare RMT channels. See the updated README.md pin plan table.
+  (The user-facing half of this is now handled: the "IR Direction Find"
+  menu screen shows an explicit "Not available" message instead of
+  hanging, via the new `ir_direction_is_available()` -- see this round's
+  UI-polish entry below. The GPIO conflict itself is unchanged and still
+  needs resolving in code before that feature could be re-enabled.)
 - ⚠️ **UNVERIFIED ON HARDWARE:** `esp_lcd_panel_invert_color(s_panel, true)`
   is called unconditionally in `display_init()` because most 1.8" ST7789
   modules need it to show correct (non-inverted) colors -- but this
@@ -829,22 +837,68 @@ worth doing in the same pass, beyond the mechanical color-theme adoption:
   of 8 -- these screens needed zero code changes to benefit from the
   larger panel, since they were already written against the constant
   rather than a hardcoded row count.
-- ⚠️ **NOT DONE, LEFT FOR A FUTURE ROUND:** the RC522 sector-dump screen
-  (`show_dump_and_confirm()`) still only shows the first 8 of each 16-byte
-  block's bytes (`DISPLAY_COLS - 2` clamp, unchanged from the OLED era) --
-  the larger screen has room to show all 16 bytes per row now, this just
-  wasn't done in this pass to keep the display migration's diff focused.
-  Same applies to any other screen that could show more per row now but
-  wasn't specifically revisited.
+- ✅ **FIXED (follow-up pass):** the RC522 sector-dump screen
+  (`show_dump_and_confirm()`) used to show only the first 8 of each
+  16-byte block's bytes (`DISPLAY_COLS - 2` clamp, unchanged from the
+  OLED era). Now splits each block across 2 rows of 8 bytes so all 16
+  bytes of every block are visible -- guarded by a `_Static_assert` that
+  the dump body (header + 2 rows/block + footer) still fits within
+  `DISPLAY_ROWS` if `RC522_BLOCKS_PER_SECTOR` or the display size ever
+  changes. Other screens that could show more per row now but weren't
+  specifically revisited in this pass are still worth a look.
+
+## Round 16 (2026-09-20): follow-up cleanup pass on Round 13/15 open items
+
+- ✅ **FIXED:** the ESP32-P4/32MB flash-size mismatch noted in Round 13
+  (boot logs detected 32MB, the build assumed 2MB) is now addressed by a
+  new `sdkconfig.defaults` at the repo root setting
+  `CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y`, matching the hardware that was
+  actually observed -- mirrors the pattern `c6-firmware/sdkconfig.defaults`
+  already used for its own flash-size fix. Deliberately does not also
+  grow the partition table, since nothing currently needs the extra
+  space; the app binary still fits comfortably (~62% of the existing
+  1MB app partition free). A stale local `sdkconfig` has to be deleted
+  once for a fresh `idf.py set-target esp32p4` to pick this default up
+  (same one-time caveat the C6 fix already had).
+- ✅ **FIXED:** the "IR Direction Find" menu screen used to show
+  "Waiting for IR..." forever with no indication the feature was
+  disabled on this build. Added `ir_direction_is_available()`
+  (`main/ir/ir_direction.h/.c`) so `main.c`'s `render_ir_direction_screen()`
+  can detect this and show an explicit "Not available on this build /
+  (RMT channels used by IR RX/TX already)" message instead, with a normal
+  BACK-to-exit. The underlying GPIO/RMT-channel constraint this reports
+  on is unchanged (still documented in Round 13/15) -- this only fixes
+  the silent-hang UX, not the constraint itself.
+- ✅ **FIXED, DOCUMENTATION:** several places still claimed "no firmware
+  in this repo has ever been flashed on real hardware," which stopped
+  being true as of Round 13's P4 bring-up. Updated the top of this file,
+  the `## General` section below, and `HARDWARE_TEST_MATRIX.md`'s intro
+  to state precisely what has and hasn't been verified: the P4's
+  boot/init path was flashed once (Round 13), but against the
+  now-replaced SSD1306 OLED, so the current ST7789 LCD code is itself
+  still unverified, and the C6 companion firmware remains entirely
+  unflashed.
+- 🔧 **FIXED, BUILD WARNING:** `main/ir/ir_driver.c`'s
+  `rmt_copy_encoder_config_t copy_encoder_cfg = {0};` triggered
+  "excess elements in struct initializer" on every build --
+  `rmt_copy_encoder_config_t` (ESP-IDF's `rmt_encoder.h`) is an empty
+  struct with no members, so `{0}` is one initializer element too many
+  for it. Changed to `= {}` (an empty initializer list, valid under the
+  project's `-std=gnu17`), which is what an empty struct actually wants.
+  Purely a warning fix; `rmt_new_copy_encoder()`'s behavior is unchanged
+  either way since there was nothing in the struct to initialize.
 
 ## General
 
-- Both firmwares now build clean (see Round 12), but neither has been
-  **flashed to or run on real hardware** yet — every finding above (other
-  than the build fixes themselves) is still the result of static
-  analysis; register timing, pin/strapping conflicts, and power
-  tolerances are all unverified. See `HARDWARE_TEST_MATRIX.md` for the
-  checklist to work through once real hardware is available.
+- Both firmwares build clean (see Round 12). The **P4 main firmware** has
+  been flashed and booted on real hardware (see Round 13: RC522 init,
+  RDM6300 UART init, and P4-to-C6 UART initialization all observed) --
+  but that was against the old SSD1306 OLED, before the Round 15 ST7789
+  LCD swap, so the new display code itself is still unverified on
+  physical hardware (see Round 15's hardware-test caveats). The **C6
+  companion firmware**'s end-to-end Wi-Fi/BT behavior remains entirely
+  unverified on real hardware. See `HARDWARE_TEST_MATRIX.md` for the
+  checklist to work through as each piece gets tested.
 - Error reporting mostly goes through `ESP_LOGW`/`ESP_LOGE` only — with
   the device's own display as the primary output, a user who isn't on a
   serial connection won't see these errors at all.
