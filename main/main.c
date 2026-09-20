@@ -176,6 +176,13 @@ static void dump_card(rc522_card_dump_t *dump)
 // Shows the dump one sector at a time (UP/DOWN moves between sectors,
 // PRESS/RIGHT continues past the summary to the clone step, BACK cancels
 // out entirely). Returns true if the user chose to continue.
+// Row 0 is the header, rows 1..(RC522_BLOCKS_PER_SECTOR*2) are the 2-rows-
+// per-block dump body, and the footer needs 2 more rows below that --
+// catch it at compile time if a future RC522_BLOCKS_PER_SECTOR change (or
+// a smaller DISPLAY_ROWS) would make the dump body overlap the footer.
+_Static_assert(1 + RC522_BLOCKS_PER_SECTOR * 2 + 2 <= DISPLAY_ROWS,
+               "RC522 sector dump body + footer taller than the display");
+
 static bool show_dump_and_confirm(const rc522_card_dump_t *dump)
 {
     int sector = 0;
@@ -187,14 +194,21 @@ static bool show_dump_and_confirm(const rc522_card_dump_t *dump)
         display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
 
         if (dump->sectors[sector].readable) {
+            // RC522_BLOCK_SIZE is 16 bytes (32 hex chars), too wide for one
+            // DISPLAY_COLS-wide row even on the larger LCD -- split each
+            // block across 2 rows of 8 bytes, so all 16 bytes of every
+            // block are shown (the old 21-column OLED layout only ever
+            // showed the first 8 of each block's 16 bytes).
             for (int b = 0; b < RC522_BLOCKS_PER_SECTOR; b++) {
-                char line[DISPLAY_COLS + 1];
-                int n = 0;
                 const uint8_t *block = dump->sectors[sector].blocks[b];
-                for (int i = 0; i < 8 && n < DISPLAY_COLS - 2; i++) { // first 8 bytes/row (16 hex chars) fits comfortably within DISPLAY_COLS
-                    n += snprintf(&line[n], sizeof(line) - n, "%02X", block[i]);
+                for (int half = 0; half < 2; half++) {
+                    char line[DISPLAY_COLS + 1];
+                    int n = 0;
+                    for (int i = 0; i < 8 && n < DISPLAY_COLS - 2; i++) {
+                        n += snprintf(&line[n], sizeof(line) - n, "%02X", block[half * 8 + i]);
+                    }
+                    display_draw_text(1 + b * 2 + half, 0, line);
                 }
-                display_draw_text(1 + b, 0, line);
             }
         } else {
             display_draw_text(2, 0, "No default key worked");
@@ -202,8 +216,8 @@ static bool show_dump_and_confirm(const rc522_card_dump_t *dump)
 
         char footer[DISPLAY_COLS + 1];
         snprintf(footer, sizeof(footer), "%d/%d sectors read", dump->sectors_read, RC522_SECTOR_COUNT);
-        display_draw_text(6, 0, footer);
-        display_draw_text(7, 0, "PRESS:clone BACK:exit");
+        display_draw_text(DISPLAY_ROWS - 2, 0, footer);
+        display_draw_text(DISPLAY_ROWS - 1, 0, "PRESS:clone BACK:exit");
         display_flush();
 
         button_id_t event;
@@ -652,10 +666,13 @@ static void action_ir_library(void)
     menu_render(s_active_menu);
 }
 
-// Opens the 4-receiver direction-finding screen. Requires the
-// ir_direction.c hardware (4x VS1838B on GPIO5/6/14/15 by default) to be
-// wired up -- see that file's header comment. Untested on real hardware,
-// same as everything else in this repo (see README).
+// Opens the 4-receiver direction-finding screen. ir_direction_init() is not
+// called from app_main() on this build (see KNOWN_ISSUES.md's Round 13 --
+// the P4 has no spare RMT RX channel once the regular IR receiver/
+// transmitter are running, and GPIO14/15 are now also claimed by the LCD's
+// SPI wiring), so ir_direction_poll() always reports "no frame" here --
+// render_ir_direction_screen() shows that as an explicit "not available"
+// message rather than an infinite unexplained "Waiting for IR...".
 static void action_ir_direction_find(void)
 {
     s_screen = APP_SCREEN_IR_DIRECTION;
@@ -1150,6 +1167,19 @@ static void render_ir_direction_screen(uint8_t flags)
 {
     display_clear();
     display_draw_text_color(0, 0, "IR Direction Find", DISPLAY_COLOR_ACCENT);
+    if (!ir_direction_is_available()) {
+        // ir_direction_init() isn't called on this build (see
+        // KNOWN_ISSUES.md's Round 13/15) -- say so explicitly rather than
+        // leaving the user on a "Waiting for IR..." screen that can never
+        // report anything.
+        display_draw_text_color(2, 0, "Not available", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "on this build");
+        display_draw_text(5, 0, "(RMT channels used");
+        display_draw_text(6, 0, "by IR RX/TX already)");
+        display_draw_text(8, 0, "BACK button: exit");
+        display_flush();
+        return;
+    }
     if (s_last_scan_line[0]) {
         display_draw_text(2, 0, s_last_scan_line);
     } else {

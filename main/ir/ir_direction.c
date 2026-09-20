@@ -94,6 +94,11 @@ void ir_direction_init(void)
              GPIO_NORTH, GPIO_EAST, GPIO_SOUTH, GPIO_WEST);
 }
 
+bool ir_direction_is_available(void)
+{
+    return s_initialized;
+}
+
 bool ir_direction_poll(uint8_t *out_flags, ir_nec_frame_t *out_frame)
 {
     if (!s_initialized) {

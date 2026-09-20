@@ -214,8 +214,13 @@ idf.py -p COMx flash monitor
   between them) — this is quadrant-level sensing from a wide acceptance
   cone, not a precise bearing angle. Reachable from the menu as "IR
   Direction Find" (under **Infrared**), which shows the live N/E/S/W
-  flags and the last decoded frame. Needs the 4-receiver hardware wired
-  up and hasn't been tested on real hardware yet.
+  flags and the last decoded frame. **Currently disabled on this build**
+  (`ir_direction_init()` isn't called from `app_main()` -- see
+  KNOWN_ISSUES.md's Round 13/15): the menu screen shows an explicit "Not
+  available" message via `ir_direction_is_available()` rather than
+  hanging. Needs the 4-receiver hardware wired up on different GPIOs
+  than the current SPI LCD uses (see the pin plan above) before it could
+  be re-enabled, and hasn't been tested on real hardware yet.
 
 ## RFID modules
 

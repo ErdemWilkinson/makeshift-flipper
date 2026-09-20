@@ -22,6 +22,14 @@ typedef enum {
 // defines) before relying on this.
 void ir_direction_init(void);
 
+// True once ir_direction_init() has actually run. Callers that offer a
+// direction-finding screen should check this first and show an explicit
+// "not available" message if false, rather than letting the user sit on a
+// screen that will never report anything -- ir_direction_poll() is always
+// safe to call either way (it just always returns false when this is
+// false), but "safe" and "informative to the user" aren't the same thing.
+bool ir_direction_is_available(void);
+
 // Non-blocking: checks all 4 receivers for a decoded NEC frame since the
 // last call. Returns true if at least one receiver decoded a valid frame;
 // `out_flags` is an OR of ir_direction_flag_t for every receiver that saw
