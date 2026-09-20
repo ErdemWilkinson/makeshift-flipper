@@ -327,8 +327,16 @@ static void action_rfid_clone(void)
 {
     rc522_antenna_on();
 
+    // Heap-allocated (not stack) specifically because rc522_card_dump_t is
+    // ~1.1KB (16 sectors x 4 blocks x 16 bytes + bookkeeping) and this
+    // function is called from the main task's own stack, not a dedicated
+    // one -- see KNOWN_ISSUES.md. A failure here was previously silent
+    // beyond just bailing out to the menu; now it's recorded like every
+    // other failure mode in this action, so it shows up in "Errors" for
+    // anyone who hits it instead of looking like the button did nothing.
     rc522_card_dump_t *dump = malloc(sizeof(rc522_card_dump_t));
     if (dump == NULL) {
+        diag_record_error("RFID Clone", "RC522_CLONE_OUT_OF_MEMORY");
         rc522_antenna_off();
         menu_render(s_active_menu);
         return;
@@ -1289,6 +1297,14 @@ void app_main(void)
     menu_link_submenu(&s_main_menu, &s_main_menu_items[1], &s_ir_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[2], &s_wifi_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[3], &s_bluetooth_menu);
+
+    // Catches a forgotten/misindexed menu_link_submenu() call above at
+    // boot (see KNOWN_ISSUES.md) instead of leaving a menu item that
+    // silently does nothing when a user eventually selects it. Only
+    // s_main_menu has category items (NULL on_select, wired to a
+    // submenu) -- the rest are flat leaf-item menus, safe by construction,
+    // so they don't need this check.
+    menu_assert_fully_wired(&s_main_menu);
 
     s_active_menu = &s_main_menu;
     menu_render(s_active_menu);

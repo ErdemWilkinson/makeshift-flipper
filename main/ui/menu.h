@@ -38,6 +38,18 @@ void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count);
 // it later. Must be called after both menus are menu_init()'d.
 void menu_link_submenu(menu_t *parent, menu_item_t *parent_item, menu_t *child);
 
+// Aborts (ESP_ERROR_CHECK-style, via assert()) if any item in `menu` has
+// both on_select and submenu left NULL -- the one state menu_handle_button()
+// silently does nothing for on RIGHT/PRESS (see its "category item that was
+// never linked" case). Catches a menu_link_submenu() call that was
+// forgotten, or whose hardcoded index drifted out of sync after items were
+// reordered (see s_main_menu_items's comment in main.c) -- at boot, with a
+// clear assertion failure naming the item, instead of a button that looks
+// like it does nothing when a user eventually selects that item. Call once
+// per top-level menu, after every menu_link_submenu() for it has run. Does
+// NOT recurse into submenus -- call it once per menu_t that exists.
+void menu_assert_fully_wired(const menu_t *menu);
+
 // Feeds one button event into the menu (moves selection, fires on_select,
 // or enters/exits a submenu) and returns the menu_t that should be
 // rendered next (may be `menu` itself, its submenu, or its parent -- never

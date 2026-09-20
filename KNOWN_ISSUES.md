@@ -303,24 +303,32 @@ now, more later) don't keep growing a single screen. Self-reviewed since
 no other session was available for this round; flagged for a second look
 whenever one is.
 
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `menu_handle_button()`
-  (`main/ui/menu.c`) returns the *next* menu to render but still mutates
+- ✅ **FIXED (Round 18):** `menu_handle_button()` (`main/ui/menu.c`)
+  returns the *next* menu to render but still mutates
   `menu->selected_index`/`scroll_offset` on the menu passed in even for
   UP/DOWN within the same menu — this is intended (it's the same menu
   being mutated), but the split between "mutate in place" and "return a
   different pointer to switch screens" is easy to get wrong if this
-  function grows more cases later. Worth a comment-level warning for
-  future editors, not a behavior bug today.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** submenu items and their parent are
-  wired together at runtime in `app_main()` via `menu_link_submenu()`
-  rather than at compile time — if a category item in
-  `s_main_menu_items` is ever added without a matching
-  `menu_link_submenu()` call (or the index passed to it drifts out of
-  sync with the array, e.g. after reordering items), that item silently
-  does nothing when selected (`on_select` and `submenu` both stay NULL,
-  and `menu_handle_button()`'s RIGHT/PRESS case just falls through). No
-  compiler warning either way. A comment was added next to the array
-  noting the index dependency, but nothing enforces it.
+  function grows more cases later. A comment-level warning was added
+  directly above `menu_t *next = menu;` spelling out the two behaviors
+  and what breaks if a future case mixes them. Comment-only change, no
+  behavior difference.
+- ✅ **FIXED (Round 18):** submenu items and their parent used to be
+  wired together only at runtime in `app_main()` via `menu_link_submenu()`
+  — if a category item in `s_main_menu_items` was ever added without a
+  matching `menu_link_submenu()` call (or the index passed to it drifted
+  out of sync with the array, e.g. after reordering items), that item
+  would silently do nothing when selected (`on_select` and `submenu` both
+  stay NULL, and `menu_handle_button()`'s RIGHT/PRESS case just falls
+  through), with no compiler warning either way. Added
+  `menu_assert_fully_wired()` (`main/ui/menu.c/.h`) — walks a menu's items
+  and `assert()`s none has both `on_select` and `submenu` NULL. Called
+  once on `s_main_menu` in `app_main()`, right after all four
+  `menu_link_submenu()` calls. Turns a silently-dead button into an
+  assertion failure at boot, naming the problem, instead of a user
+  eventually finding a menu item that does nothing. Doesn't cover the
+  submenus themselves (`s_rfid_menu` etc.) since they're flat leaf-item
+  menus with no category items, safe by construction.
 - ✅ **VERIFIED, NO RISK:** re-entering a submenu (LEFT then RIGHT back
   into it) re-triggers its entry animation
   (`next->anim_offset_px = ANIM_START_OFFSET_PX` in
@@ -455,15 +463,19 @@ this round); flagged for a second look.
   backdoor) that isn't implemented at all -- a gen2 target card will
   report `is_magic = false` and get no UID clone, indistinguishable in the
   UI from a genuine non-magic card.
-- 🟡 **ACCEPTABLE RISK, NOT FIXED:** `action_rfid_clone()`'s dump
+- ✅ **FIXED (Round 18):** `action_rfid_clone()`'s dump
   (`rc522_card_dump_t`, 16 sectors x 4 blocks x 16 bytes + bookkeeping,
   ~1.1KB) is heap-allocated (`malloc`) rather than stack, specifically so
   a stack-allocated instance wouldn't blow the calling task's stack --
-  but there's no check anywhere in this codebase for how much heap is
-  actually free at that point, and `malloc` returning `NULL` is handled
-  (bails out to the menu) but not surfaced to the user beyond just
-  silently returning -- worth a `diag_record_error()` call there too if
-  this turns out to happen in practice.
+  there's still no check anywhere in this codebase for how much heap is
+  actually free before this runs (unchanged, and not attempted here: a
+  pre-check would only reduce the race window, not close it), but a
+  `malloc` failure is no longer silent. `diag_record_error("RFID Clone",
+  "RC522_CLONE_OUT_OF_MEMORY")` is now called before bailing out to the
+  menu, consistent with this action's other two failure modes
+  (`RC522_DUMP_NO_SECTORS`, `RC522_CLONE_WRITE_FAILED`) -- a user who hits
+  this now sees it in "Errors" instead of the button silently doing
+  nothing.
 - 🟡 **NOTE, NEEDS HARDWARE VERIFICATION:** the CRC_A hardware co-processor
   flow (`calc_crc()`, `CMD_CALCCRC`/`REG_DIV_IRQ`/`REG_CRC_RESULT_*`) and
   the two-phase WRITE ACK protocol (`transceive_with_crc()`'s `raw_len <=

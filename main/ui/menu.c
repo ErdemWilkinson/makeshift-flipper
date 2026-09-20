@@ -1,5 +1,6 @@
 #include "menu.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -25,6 +26,22 @@ void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count)
     menu->parent = NULL;
 }
 
+void menu_assert_fully_wired(const menu_t *menu)
+{
+    for (size_t i = 0; i < menu->item_count; i++) {
+        const menu_item_t *item = &menu->items[i];
+        // Both NULL means neither "leaf item with an action" nor "category
+        // item with a submenu" -- menu_handle_button()'s RIGHT/PRESS case
+        // falls through and does nothing for it. That's only ever a wiring
+        // bug (a missing/misindexed menu_link_submenu() call), never an
+        // intended state once app_main() has finished linking everything,
+        // so fail loudly here instead of leaving a dead button for a user
+        // to find later.
+        assert((item->on_select != NULL || item->submenu != NULL) &&
+               "menu item has neither on_select nor submenu -- missing menu_link_submenu() call?");
+    }
+}
+
 void menu_link_submenu(menu_t *parent, menu_item_t *parent_item, menu_t *child)
 {
     parent_item->submenu = child;
@@ -47,6 +64,16 @@ menu_t *menu_handle_button(menu_t *menu, button_id_t button)
         return menu;
     }
 
+    // `menu` (the argument) and `next` (the return value) are DIFFERENT
+    // things once a submenu/BUTTON_LEFT case runs: UP/DOWN/RIGHT-selecting-
+    // a-leaf-item mutate `menu` in place (it's staying the active menu),
+    // but entering a submenu or backing out via LEFT reassigns `next` to a
+    // *different* menu_t and leaves `menu` untouched. Every case below
+    // must pick exactly one of those two behaviors -- if a future case
+    // mutates `menu`'s fields (selected_index/scroll_offset) AND also
+    // reassigns `next` to something else, the caller ends up rendering
+    // `next` while the stale, now-mutated `menu` (the one just left) keeps
+    // state that doesn't belong to it anymore. See KNOWN_ISSUES.md.
     menu_t *next = menu;
 
     switch (button) {
