@@ -888,6 +888,62 @@ worth doing in the same pass, beyond the mechanical color-theme adoption:
   Purely a warning fix; `rmt_new_copy_encoder()`'s behavior is unchanged
   either way since there was nothing in the struct to initialize.
 
+## Round 17 (2026-09-20): quality status of the OCR and voice TinyML
+## companion projects (`ocr/`, `voice/` — separate repos from this
+## firmware, not part of the ESP-IDF build)
+
+Not a code review of this repo — a status check on the two ML projects
+that are meant to eventually feed this firmware (on-device Turkish line
+OCR, and an offline Turkish speech-command classifier), since neither has
+a results section anyone had actually read end-to-end. Both are honestly
+documented (clear acceptance thresholds, explicit "not deployable" status
+markers) — this section exists so that honesty is also visible from the
+firmware side, since someone glancing at "Ask AI"/"Debug AI" being removed
+here could otherwise assume on-device AI was abandoned rather than moved.
+
+- 🔴 **NOT READY, MISSING HARDWARE:** `ocr/` (Turkish line OCR, CNN+CTC,
+  full-int8 TFLite) has a working training pipeline but **no measured
+  accuracy at all** — no `evaluate.py` output/metrics file exists in the
+  artifacts checked. Its own acceptance bar (`ocr/README.md`): CER ≤ 5%,
+  exact-line accuracy ≥ 80%. Separately, and more fundamentally: this
+  firmware has no camera driver, camera pin assignment, frame buffer, or
+  TinyML runtime (TFLite Micro/ESP-DL) integrated anywhere — the device's
+  only image-adjacent hardware is the display (`main/ui/display.c`),
+  which is output-only and cannot supply an image to the model. The model
+  cannot be evaluated as "good or bad" yet; it hasn't been run against
+  its own held-out set, and there is no hardware path to run it on-device
+  even if it had been.
+- 🔴 **NOT READY, DEPLOYMENT-TARGET MODEL UNTRAINED:** `voice/`'s actual
+  shipped target is a 12-label fixed command classifier (`train.py` —
+  wake word, menu/back/scan/etc, see `commands.v1.json`), with its own
+  acceptance gate (`voice/README.md`): whisper-volume accuracy ≥ 85%,
+  normal-volume accuracy ≥ 92%, unknown/silence false-accept rate ≤ 2%.
+  **The command dataset has not been recorded yet** (`QUALITY_RECORDING_PROTOCOL.md`
+  describes the intended ≥12-speaker/80-sentence protocol, not-yet-executed),
+  so this model doesn't exist as a trained artifact at all, let alone one
+  measured against its gate.
+- 🟡 **MEASURED AND POOR, BUT EXPLICITLY NOT THE SHIP TARGET:** `voice/`'s
+  separate open-vocabulary CTC baseline (character-level Turkish
+  speech-to-text on Mozilla Common Voice, `train_asr_common_voice.py`) has
+  been trained and evaluated, and the numbers are bad: character error
+  rate 59-65%, word error rate ~100-101% across both the scripted and
+  spontaneous-speech eval sets (`voice/artifacts/asr_common_voice_stage2/*.json`)
+  — e.g. reference "tabii bu sadece bir ilk adım" decoded as "saramısace
+  bi diyikdadı". The artifacts' own metadata already says as much
+  (`"status": "baseline_trained_not_device_ready"`,
+  `"interpretation": "CTC baseline evaluation; this is not the ESP32
+  command-model acceptance metric."`) — flagged here only so "we have a
+  trained voice model" isn't read as "we have a working voice model." It
+  was never intended to ship; it exists to sanity-check how far a
+  from-scratch Turkish CTC model gets on public data, for context when
+  judging the command classifier's eventual numbers.
+- 🟡 **NOTE:** Both `ocr/` and `voice/` are separate repositories from this
+  firmware (their own `.git`, dependencies, and CI), referenced here only
+  because they're this device's intended AI features. Nothing in this
+  section describes code in `main/` or `c6-firmware/` — there is currently
+  no integration code in either firmware tree for OCR or voice commands,
+  automatic or otherwise.
+
 ## General
 
 - Both firmwares build clean (see Round 12). The **P4 main firmware** has
