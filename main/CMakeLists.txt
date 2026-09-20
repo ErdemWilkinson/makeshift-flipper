@@ -3,7 +3,7 @@ idf_component_register(
         "main.c"
         "ui/menu.c"
         "ui/display.c"
-        "ui/font8x8_basic.c"
+        "ui/font8x16_basic.c"
         "ui/text_entry.c"
         "input/buttons.c"
         "ir/ir_nec.c"
@@ -30,7 +30,6 @@ idf_component_register(
         driver
         esp_adc
         esp_driver_gpio
-        esp_driver_i2c
         esp_driver_rmt
         esp_driver_spi
         esp_driver_uart

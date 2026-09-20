@@ -4,8 +4,10 @@
 
 // Character grid, laid out in rows. Special cells use multi-char labels;
 // everything else is a single printable character appended verbatim.
-// Row layout chosen to fit comfortably at 8px/char on a 128px-wide OLED
-// (up to 12 columns fit with 1px gaps; we use 10 to leave breathing room).
+// Row layout chosen to fit comfortably at 8px/char on the 240px-wide panel
+// (up to 24 columns fit with no crowding; we use 10, leaving each cell a
+// generous CELL_W_PX so the touch-free joystick cursor is never fiddly to
+// land on the right key).
 #define GRID_COLS 10
 #define GRID_ROWS 6
 
@@ -21,11 +23,15 @@ static const char *const s_grid[GRID_ROWS][GRID_COLS] = {
     {"^","<","*","A","S","D","F","G","H","J"},
 };
 
-#define CELL_W_PX 12
-#define CELL_Y0_PX 16 // leave the top 2 rows (16px) for the title/buffer text
+#define CELL_W_PX 24
+#define CELL_H_PX 16 // matches the 8x16 font's row height
+#define CELL_Y0_PX 32 // leave the top 2 rows (32px) for the title/buffer text
 
-// 16px header + GRID_ROWS*8px must fit within the 64px-tall panel.
-_Static_assert(CELL_Y0_PX + GRID_ROWS * 8 <= 64, "text entry grid taller than the display");
+// 32px header + GRID_ROWS*CELL_H_PX must fit within the 240px-tall panel.
+_Static_assert(CELL_Y0_PX + GRID_ROWS * CELL_H_PX <= DISPLAY_HEIGHT_PX,
+               "text entry grid taller than the display");
+_Static_assert(GRID_COLS * CELL_W_PX <= DISPLAY_WIDTH_PX,
+               "text entry grid wider than the display");
 
 void text_entry_init(text_entry_t *entry)
 {
@@ -124,12 +130,14 @@ void text_entry_render(const text_entry_t *entry, const char *title, bool mask)
     for (int r = 0; r < GRID_ROWS; r++) {
         for (int c = 0; c < GRID_COLS; c++) {
             int x = c * CELL_W_PX;
-            int y = CELL_Y0_PX + r * 8;
+            int y = CELL_Y0_PX + r * CELL_H_PX;
             bool is_cursor = (r == entry->cursor_row && c == entry->cursor_col);
             if (is_cursor) {
-                display_fill_rect(x, y, CELL_W_PX, 8);
+                display_fill_rect(x, y, CELL_W_PX, CELL_H_PX, DISPLAY_COLOR_ACCENT);
+                display_draw_text_px(x, y, s_grid[r][c], DISPLAY_COLOR_ACCENT_TEXT, DISPLAY_COLOR_ACCENT);
+            } else {
+                display_draw_text_px(x, y, s_grid[r][c], DISPLAY_COLOR_TEXT, DISPLAY_COLOR_BACKGROUND);
             }
-            display_draw_text_px(x, y, s_grid[r][c], is_cursor);
         }
     }
 

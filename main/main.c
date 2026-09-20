@@ -90,7 +90,7 @@ static bool wait_for_card(const char *prompt_line, rc522_uid_t *out_uid)
 {
     for (;;) {
         display_clear();
-        display_draw_text(0, 0, "RFID Clone");
+        display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
         display_draw_text(2, 0, prompt_line);
         display_draw_text(6, 0, "BACK: cancel");
         display_flush();
@@ -107,6 +107,20 @@ static bool wait_for_card(const char *prompt_line, rc522_uid_t *out_uid)
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
+}
+
+// Blocks until any button is pressed. Used after a result screen (success/
+// error message, sector dump, scan results, ... already drawn and flushed
+// by the caller) so the user has time to read it before the screen
+// changes. Shared by most of the "show a result, then wait" action
+// functions below -- see individual callers for what precedes it.
+static void wait_for_any_key(void)
+{
+    button_id_t any;
+    do {
+        any = buttons_poll();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (any == BUTTON_COUNT);
 }
 
 // Authenticates and reads all 16 sectors of `dump->uid`'s card, trying each
@@ -170,14 +184,14 @@ static bool show_dump_and_confirm(const rc522_card_dump_t *dump)
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "Sector %d/%d %s", sector, RC522_SECTOR_COUNT - 1,
                   dump->sectors[sector].readable ? "" : "(locked)");
-        display_draw_text(0, 0, header);
+        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
 
         if (dump->sectors[sector].readable) {
             for (int b = 0; b < RC522_BLOCKS_PER_SECTOR; b++) {
                 char line[DISPLAY_COLS + 1];
                 int n = 0;
                 const uint8_t *block = dump->sectors[sector].blocks[b];
-                for (int i = 0; i < 8 && n < DISPLAY_COLS - 2; i++) { // first 8 bytes/row fits 21 cols
+                for (int i = 0; i < 8 && n < DISPLAY_COLS - 2; i++) { // first 8 bytes/row (16 hex chars) fits comfortably within DISPLAY_COLS
                     n += snprintf(&line[n], sizeof(line) - n, "%02X", block[i]);
                 }
                 display_draw_text(1 + b, 0, line);
@@ -276,7 +290,7 @@ static void action_rfid_clone(void)
     }
 
     display_clear();
-    display_draw_text(0, 0, "RFID Clone");
+    display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Reading sectors...");
     display_flush();
     dump_card(dump);
@@ -311,7 +325,7 @@ static void action_rfid_clone(void)
     }
 
     display_clear();
-    display_draw_text(0, 0, "RFID Clone");
+    display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Writing sectors...");
     display_flush();
     int written = clone_to_card(&target_uid, dump, /* write_trailers = */ false);
@@ -320,7 +334,7 @@ static void action_rfid_clone(void)
     }
 
     display_clear();
-    display_draw_text(0, 0, "RFID Clone");
+    display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
     char result_line[DISPLAY_COLS + 1];
     snprintf(result_line, sizeof(result_line), "%d/%d sectors cloned", written, dump->sectors_read);
     display_draw_text(2, 0, result_line);
@@ -330,12 +344,7 @@ static void action_rfid_clone(void)
     display_draw_text(7, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
-
+    wait_for_any_key();
     free(dump);
     rc522_antenna_off();
     menu_render(s_active_menu);
@@ -377,7 +386,7 @@ static void action_rfid_save_125khz(void)
     bool captured = false;
     for (;;) {
         display_clear();
-        display_draw_text(0, 0, "Save 125kHz Tag");
+        display_draw_text_color(0, 0, "Save 125kHz Tag", DISPLAY_COLOR_ACCENT);
         display_draw_text(2, 0, "Present tag now");
         display_draw_text(6, 0, "BACK: cancel");
         display_flush();
@@ -404,28 +413,23 @@ static void action_rfid_save_125khz(void)
     bool cancelled = !prompt_for_name(&entry, "Name this tag");
 
     display_clear();
-    display_draw_text(0, 0, "Save 125kHz Tag");
+    display_draw_text_color(0, 0, "Save 125kHz Tag", DISPLAY_COLOR_ACCENT);
     if (cancelled) {
-        display_draw_text(2, 0, "Cancelled");
+        display_draw_text_color(2, 0, "Cancelled", DISPLAY_COLOR_DIM);
     } else if (entry.length == 0) {
-        display_draw_text(2, 0, "Name can't be empty");
+        display_draw_text_color(2, 0, "Name can't be empty", DISPLAY_COLOR_ERROR);
     } else if (!rfid_library_add_125khz(entry.buffer, &id)) {
-        display_draw_text(2, 0, "Library full");
+        display_draw_text_color(2, 0, "Library full", DISPLAY_COLOR_ERROR);
         display_draw_text(3, 0, "Delete one first");
         diag_record_error("RFID Save", "RFID_LIBRARY_FULL");
     } else {
         rfid_library_save(); // best-effort, same as ir_library_save()
-        display_draw_text(2, 0, "Saved!");
+        display_draw_text_color(2, 0, "Saved!", DISPLAY_COLOR_OK);
     }
     display_draw_text(6, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
-
+    wait_for_any_key();
     menu_render(s_active_menu);
 }
 
@@ -452,28 +456,23 @@ static void action_rfid_save_1356mhz(void)
     bool cancelled = !prompt_for_name(&entry, "Name this tag");
 
     display_clear();
-    display_draw_text(0, 0, "Save 13.56MHz Tag");
+    display_draw_text_color(0, 0, "Save 13.56MHz Tag", DISPLAY_COLOR_ACCENT);
     if (cancelled) {
-        display_draw_text(2, 0, "Cancelled");
+        display_draw_text_color(2, 0, "Cancelled", DISPLAY_COLOR_DIM);
     } else if (entry.length == 0) {
-        display_draw_text(2, 0, "Name can't be empty");
+        display_draw_text_color(2, 0, "Name can't be empty", DISPLAY_COLOR_ERROR);
     } else if (!rfid_library_add_1356mhz(entry.buffer, &uid)) {
-        display_draw_text(2, 0, "Library full");
+        display_draw_text_color(2, 0, "Library full", DISPLAY_COLOR_ERROR);
         display_draw_text(3, 0, "Delete one first");
         diag_record_error("RFID Save", "RFID_LIBRARY_FULL");
     } else {
         rfid_library_save(); // best-effort, same as ir_library_save()
-        display_draw_text(2, 0, "Saved!");
+        display_draw_text_color(2, 0, "Saved!", DISPLAY_COLOR_OK);
     }
     display_draw_text(6, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
-
+    wait_for_any_key();
     menu_render(s_active_menu);
 }
 
@@ -489,7 +488,7 @@ static void action_rfid_library(void)
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "RFID Library (%d)", count);
-        display_draw_text(0, 0, header);
+        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
 
         if (count == 0) {
             display_draw_text(2, 0, "No tags saved");
@@ -549,7 +548,7 @@ static void action_ir_learn(void)
     bool captured = false;
     for (;;) {
         display_clear();
-        display_draw_text(0, 0, "IR Learn");
+        display_draw_text_color(0, 0, "IR Learn", DISPLAY_COLOR_ACCENT);
         display_draw_text(2, 0, "Point remote here");
         display_draw_text(3, 0, "and press a button");
         display_draw_text(6, 0, "BACK: cancel");
@@ -577,28 +576,23 @@ static void action_ir_learn(void)
     bool cancelled = !prompt_for_name(&entry, "Name this code");
 
     display_clear();
-    display_draw_text(0, 0, "IR Learn");
+    display_draw_text_color(0, 0, "IR Learn", DISPLAY_COLOR_ACCENT);
     if (cancelled) {
-        display_draw_text(2, 0, "Cancelled");
+        display_draw_text_color(2, 0, "Cancelled", DISPLAY_COLOR_DIM);
     } else if (entry.length == 0) {
-        display_draw_text(2, 0, "Name can't be empty");
+        display_draw_text_color(2, 0, "Name can't be empty", DISPLAY_COLOR_ERROR);
     } else if (!ir_library_add(entry.buffer, &frame)) {
-        display_draw_text(2, 0, "Library full");
+        display_draw_text_color(2, 0, "Library full", DISPLAY_COLOR_ERROR);
         display_draw_text(3, 0, "Delete one first");
         diag_record_error("IR Learn", "IR_LIBRARY_FULL");
     } else {
         ir_library_save(); // best-effort, same as diag_save() -- RAM copy is authoritative regardless
-        display_draw_text(2, 0, "Saved!");
+        display_draw_text_color(2, 0, "Saved!", DISPLAY_COLOR_OK);
     }
     display_draw_text(6, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
-
+    wait_for_any_key();
     menu_render(s_active_menu);
 }
 
@@ -614,7 +608,7 @@ static void action_ir_library(void)
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "IR Library (%d)", count);
-        display_draw_text(0, 0, header);
+        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
 
         if (count == 0) {
             display_draw_text(2, 0, "No codes saved");
@@ -712,7 +706,7 @@ static void action_wifi_setup(void)
     generate_setup_pin(pin, sizeof(pin));
 
     display_clear();
-    display_draw_text(0, 0, "WiFi Setup");
+    display_draw_text_color(0, 0, "WiFi Setup", DISPLAY_COLOR_ACCENT);
     display_draw_text(1, 0, "AP: MakeshiftFlip");
     display_draw_text(2, 0, "per-Setup");
     char pwd_line[DISPLAY_COLS + 1];
@@ -728,17 +722,13 @@ static void action_wifi_setup(void)
     }
 
     display_clear();
-    display_draw_text(0, 0, "WiFi Setup");
-    display_draw_text(2, 0, ok ? "Connected!" : "Failed / timed out");
+    display_draw_text_color(0, 0, "WiFi Setup", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(2, 0, ok ? "Connected!" : "Failed / timed out",
+                             ok ? DISPLAY_COLOR_OK : DISPLAY_COLOR_ERROR);
     display_draw_text(6, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
-
+    wait_for_any_key();
     menu_render(s_active_menu);
 }
 
@@ -749,21 +739,17 @@ static void action_wifi_setup(void)
 static void action_wifi_setup_manual(void)
 {
     display_clear();
-    display_draw_text(0, 0, "Scanning...");
+    display_draw_text_color(0, 0, "Scanning...", DISPLAY_COLOR_ACCENT);
     display_flush();
 
     c6_network_t networks[C6_MAX_NETWORKS];
     int count = c6_link_scan(networks, C6_MAX_NETWORKS);
     if (count <= 0) {
         display_clear();
-        display_draw_text(0, 0, "No networks found");
+        display_draw_text_color(0, 0, "No networks found", DISPLAY_COLOR_ERROR);
         display_draw_text(2, 0, "Press any key");
         display_flush();
-        button_id_t any;
-        do {
-            any = buttons_poll();
-            vTaskDelay(pdMS_TO_TICKS(10));
-        } while (any == BUTTON_COUNT);
+        wait_for_any_key();
         menu_render(s_active_menu);
         return;
     }
@@ -774,7 +760,7 @@ static void action_wifi_setup_manual(void)
     bool cancelled = false;
     for (;;) {
         display_clear();
-        display_draw_text(0, 0, "Pick a network:");
+        display_draw_text_color(0, 0, "Pick a network:", DISPLAY_COLOR_ACCENT);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 1; i++) {
             char line[DISPLAY_COLS + 1];
             snprintf(line, sizeof(line), "%c%.20s", (i == selected) ? '>' : ' ', networks[i].ssid);
@@ -837,7 +823,7 @@ static void action_wifi_setup_manual(void)
     }
 
     display_clear();
-    display_draw_text(0, 0, "Connecting...");
+    display_draw_text_color(0, 0, "Connecting...", DISPLAY_COLOR_ACCENT);
     display_flush();
 
     bool ok = c6_link_connect(networks[selected].ssid, entry.buffer);
@@ -846,16 +832,13 @@ static void action_wifi_setup_manual(void)
     }
 
     display_clear();
-    display_draw_text(0, 0, "WiFi Setup");
-    display_draw_text(2, 0, ok ? "Connected!" : "Failed");
+    display_draw_text_color(0, 0, "WiFi Setup", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(2, 0, ok ? "Connected!" : "Failed",
+                             ok ? DISPLAY_COLOR_OK : DISPLAY_COLOR_ERROR);
     display_draw_text(6, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
+    wait_for_any_key();
 
     menu_render(s_active_menu);
 }
@@ -875,22 +858,18 @@ static void action_wifi_setup_manual(void)
 static void action_wifi_monitor(void)
 {
     display_clear();
-    display_draw_text(0, 0, "WiFi Monitor");
+    display_draw_text_color(0, 0, "WiFi Monitor", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Starting...");
     display_flush();
 
     if (!c6_link_monitor_start()) {
         diag_record_error("WiFi Monitor", "C6_LINK_MONITOR_START_FAILED");
         display_clear();
-        display_draw_text(0, 0, "WiFi Monitor");
-        display_draw_text(2, 0, "Failed to start");
+        display_draw_text_color(0, 0, "WiFi Monitor", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Failed to start", DISPLAY_COLOR_ERROR);
         display_draw_text(6, 0, "Press any key");
         display_flush();
-        button_id_t any;
-        do {
-            any = buttons_poll();
-            vTaskDelay(pdMS_TO_TICKS(10));
-        } while (any == BUTTON_COUNT);
+        wait_for_any_key();
         menu_render(s_active_menu);
         return;
     }
@@ -902,11 +881,11 @@ static void action_wifi_monitor(void)
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "WiFi Monitor (%d)", count);
-        display_draw_text(0, 0, header);
+        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
             char line[DISPLAY_COLS + 1];
-            // DISPLAY_COLS is 21: clamp both text fields so the largest
-            // channel/RSSI values plus the terminator always fit.
+            // Clamp both text fields so the largest channel/RSSI values
+            // plus the terminator always fit within DISPLAY_COLS.
             snprintf(line, sizeof(line), "%.6s %.4s c%u %d",
                      aps[i].ssid[0] ? aps[i].ssid : "(hid)",
                      aps[i].sec[0] ? aps[i].sec : "?",
@@ -941,22 +920,18 @@ static void action_wifi_monitor(void)
 static void action_bt_scan(void)
 {
     display_clear();
-    display_draw_text(0, 0, "BT Scan");
+    display_draw_text_color(0, 0, "BT Scan", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Starting...");
     display_flush();
 
     if (!c6_link_bt_scan_start()) {
         diag_record_error("BT Scan", "C6_LINK_BT_SCAN_START_FAILED");
         display_clear();
-        display_draw_text(0, 0, "BT Scan");
-        display_draw_text(2, 0, "Failed to start");
+        display_draw_text_color(0, 0, "BT Scan", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Failed to start", DISPLAY_COLOR_ERROR);
         display_draw_text(6, 0, "Press any key");
         display_flush();
-        button_id_t any;
-        do {
-            any = buttons_poll();
-            vTaskDelay(pdMS_TO_TICKS(10));
-        } while (any == BUTTON_COUNT);
+        wait_for_any_key();
         menu_render(s_active_menu);
         return;
     }
@@ -968,7 +943,7 @@ static void action_bt_scan(void)
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "BT Scan (%d)", count);
-        display_draw_text(0, 0, header);
+        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
             char line[DISPLAY_COLS + 1];
             snprintf(line, sizeof(line), "%.13s %ddBm",
@@ -1023,15 +998,16 @@ static void format_relative_time(char *out, size_t out_cap, int64_t timestamp_us
 static void action_send_error_log(const diag_entry_t *entries, int count)
 {
     display_clear();
-    display_draw_text(0, 0, "Errors");
+    display_draw_text_color(0, 0, "Errors", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Sending...");
     display_flush();
 
     bool ok = c6_link_send_error_log(entries, count);
 
     display_clear();
-    display_draw_text(0, 0, "Errors");
-    display_draw_text(2, 0, ok ? "Sent!" : "Send failed");
+    display_draw_text_color(0, 0, "Errors", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(2, 0, ok ? "Sent!" : "Send failed",
+                             ok ? DISPLAY_COLOR_OK : DISPLAY_COLOR_ERROR);
     if (!ok) {
         display_draw_text(3, 0, "Check WiFi / log");
         display_draw_text(4, 0, "server config");
@@ -1039,11 +1015,7 @@ static void action_send_error_log(const diag_entry_t *entries, int count)
     display_draw_text(6, 0, "Press any key");
     display_flush();
 
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
+    wait_for_any_key();
 }
 
 // Shows the device's local error history (main/diag/diag.h), newest
@@ -1063,17 +1035,22 @@ static void action_error_history(void)
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "Errors (%d)", count);
-        display_draw_text(0, 0, header);
+        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
 
         if (count == 0) {
             display_draw_text(2, 0, "No errors recorded");
         } else {
+            // Field widths widened to use the larger DISPLAY_COLS (was
+            // 7/5/7 on the old 21-column OLED) -- still clamped with %.*s
+            // rather than assuming module/code names fit, since diag.h's
+            // DIAG_MODULE_MAX_LEN/DIAG_CODE_MAX_LEN allow longer names
+            // than any single field here.
             for (int i = 0; i < count - top && i < DISPLAY_ROWS - 2; i++) {
                 const diag_entry_t *e = &entries[top + i];
                 char ago[16];
                 format_relative_time(ago, sizeof(ago), e->timestamp_us);
                 char line[DISPLAY_COLS + 1];
-                snprintf(line, sizeof(line), "%.7s %.5s %.7s", e->module, e->code, ago);
+                snprintf(line, sizeof(line), "%.12s %.9s %.7s", e->module, e->code, ago);
                 display_draw_text(1 + i, 0, line);
             }
         }
@@ -1163,7 +1140,7 @@ static menu_t s_bluetooth_menu;
 static void render_scan_screen(const char *title)
 {
     display_clear();
-    display_draw_text(0, 0, title);
+    display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, s_last_scan_line[0] ? s_last_scan_line : "Scanning...");
     display_draw_text(6, 0, "BACK button: exit");
     display_flush();
@@ -1172,7 +1149,7 @@ static void render_scan_screen(const char *title)
 static void render_ir_direction_screen(uint8_t flags)
 {
     display_clear();
-    display_draw_text(0, 0, "IR Direction Find");
+    display_draw_text_color(0, 0, "IR Direction Find", DISPLAY_COLOR_ACCENT);
     if (s_last_scan_line[0]) {
         display_draw_text(2, 0, s_last_scan_line);
     } else {

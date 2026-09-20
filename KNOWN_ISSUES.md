@@ -727,6 +727,116 @@ ESP-IDF v5.3.5.
   files didn't need those directories; added both flags plus this round's
   `tests/test_rfid_library.c`, restoring a full, passing host test run.
 
+## Round 15 (2026-09-20): display swapped from SSD1306 OLED to ST7789 SPI LCD
+
+The target display hardware changed: a **1.8" ST7789 SPI LCD, 240x240,
+65K colors** (RGB565) replaces the earlier 128x64 monochrome SSD1306 I2C
+OLED everywhere in this repo. This is a from-the-ground-up rewrite of
+`main/ui/display.c/.h`, not a config tweak.
+
+- ✅ **CHANGED:** `main/ui/display.c/.h` now drive the panel over SPI via
+  `esp_lcd_new_panel_st7789()` (built into ESP-IDF's `esp_lcd` component,
+  same as the SSD1306 driver was, no extra managed component needed). The
+  framebuffer is `uint16_t[240*240]` RGB565 (115200 bytes, in internal
+  RAM -- see `display.c`'s comment on moving it to PSRAM if that ever
+  becomes tight). `display_init()` fails soft (logs and returns) exactly
+  like the old OLED code did if the SPI bus or panel init fails -- drawing
+  still works against the in-memory framebuffer, flushing is just a no-op.
+- ✅ **CHANGED, API:** `display_draw_text_px()` and `display_fill_rect()`
+  now take explicit foreground/background `display_color_t` arguments
+  instead of a `bool invert` -- there's no XOR/invert trick on a color
+  panel. `display_draw_text()` still exists (now a thin wrapper for
+  `DISPLAY_COLOR_TEXT`); `display_draw_text_color()` is new, for picking
+  another color explicitly. `main/ui/menu.c` and `main/ui/text_entry.c`
+  were updated for the new signatures; `main/main.c` needed no changes
+  since it never called the pixel-level API directly (grid-based
+  `display_draw_text()` only).
+- ✅ **CHANGED, grid size:** `DISPLAY_ROWS`/`DISPLAY_COLS` went from 8x21
+  to **15x30** (240px / 16px-tall font = 15 rows, 240px / 8px-wide font =
+  30 columns) -- every list screen in `main.c` (IR Library, RFID Library,
+  Errors, WiFi Monitor, BT Scan, ...) now shows roughly twice as many rows
+  without any code change, since they all compute their visible-row count
+  from `DISPLAY_ROWS` rather than a hardcoded 8. Buffer sizes (`char
+  line[DISPLAY_COLS + 1]`, etc.) scale the same way automatically.
+- ✅ **ADDED:** `main/ui/font8x16_basic.c/.h`, an 8x16 bitmap font replacing
+  `font8x8_basic.c/.h` (deleted -- nothing else needs the 8x8 source once
+  the 8x16 file exists). Derived by doubling each row of the old font (2x
+  vertical scale, same public-domain glyph shapes from the font8x8
+  project, Daniel Hepper) -- **not** a proper 8x16 typeface redesign, so
+  glyphs read as slightly blocky rather than refined. ASCII printable
+  range only (0x20-0x7E); still no Turkish-diacritic (ç ğ ı İ ö ş ü)
+  glyph coverage, same gap the 8x8 font had.
+- ✅ **ADDED:** a centralized color theme (`DISPLAY_COLOR_*` macros at the
+  top of `display.h`): background, text, an amber `ACCENT` for the menu
+  selection bar/headers, plus `ERROR`/`OK`/`DIM` for status text that
+  `main.c` doesn't use yet (defined for a future round to adopt in error/
+  success screens instead of plain white text).
+- ⚠️ **PIN REASSIGNMENT, POTENTIAL CONFLICT:** the LCD needs 5-6 SPI pins
+  (SCK, MOSI, CS, DC, RST, optionally BL) where the OLED only needed 2
+  (SDA, SCL). Landed on SCK=GPIO7, MOSI=GPIO8 (freed by removing I2C),
+  CS=GPIO14, DC=GPIO15, RST=GPIO6, BL=GPIO21 -- on its own SPI bus
+  (SPI3_HOST) separate from the RC522's SPI2_HOST (GPIO9-13), so there's
+  no chip-select contention between the two SPI peripherals. **GPIO14/15
+  are the same pins `ir_direction.c` uses for `GPIO_SOUTH`/`GPIO_WEST`.**
+  This is not a live conflict today because `ir_direction_init()` is
+  already not called from `app_main()` (Round 13, RMT channel exhaustion)
+  -- but it means re-enabling IR direction finding on this pin plan now
+  requires moving those two receivers to different GPIOs first, not just
+  finding spare RMT channels. See the updated README.md pin plan table.
+- ⚠️ **UNVERIFIED ON HARDWARE:** `esp_lcd_panel_invert_color(s_panel, true)`
+  is called unconditionally in `display_init()` because most 1.8" ST7789
+  modules need it to show correct (non-inverted) colors -- but this
+  varies by panel/PCB batch. If colors look inverted on your specific
+  module, flip that argument. Likewise, screen orientation
+  (`esp_lcd_panel_mirror()`/`esp_lcd_panel_swap_xy()`) is not called at
+  all; add it if your panel's factory orientation doesn't match
+  "menu text reads left-to-right, top-to-bottom" on first boot.
+- ⚠️ **STATIC ANALYSIS ONLY:** like everything else in this repo (see
+  Round 13's hardware caveat below), this migration compiles clean under
+  ESP-IDF v5.3.1 but has not been run against a physical ST7789 panel.
+  `HARDWARE_TEST_MATRIX.md`'s "Power-on and display" section was updated
+  with LCD-specific checks (color correctness, orientation, backlight) --
+  work through those first on new hardware.
+
+### UI/menu polish that came with the new display
+
+The larger, color panel made a few `main/main.c` cleanups and improvements
+worth doing in the same pass, beyond the mechanical color-theme adoption:
+
+- ✅ **ADDED:** `wait_for_any_key()`, replacing 9 separate copies of the
+  same 4-line "block until any button is pressed" loop scattered across
+  `main.c`'s result screens (RFID Clone, IR Learn, both RFID Save flows,
+  WiFi Setup x2, WiFi Monitor/BT Scan start-failure, Errors → Send). Purely
+  a duplication cleanup -- behavior is unchanged.
+- ✅ **ADDED:** result screens now use `DISPLAY_COLOR_OK`/`DISPLAY_COLOR_ERROR`
+  for their outcome line instead of plain text color -- "Saved!"/"Connected!"
+  in green, "Failed"/"Library full"/"No networks found" in red, "Cancelled"
+  in a dim gray (`DISPLAY_COLOR_DIM`). All 27 screen headers
+  (`display_draw_text(0, 0, ...)` calls) were converted to
+  `display_draw_text_color(..., DISPLAY_COLOR_ACCENT)` for a consistent
+  amber header treatment across every screen.
+- ✅ **IMPROVED:** the Errors screen's per-entry line format widened from
+  `%.7s %.5s %.7s` (fit for the old 21-column OLED) to `%.12s %.9s %.7s`
+  now that `DISPLAY_COLS` is 30 -- module and error-code names are far
+  less likely to be truncated illegibly. Still uses `%.*s` precision
+  clamps rather than assuming a fit, since `diag.h`'s
+  `DIAG_MODULE_MAX_LEN`/`DIAG_CODE_MAX_LEN` allow longer names than any
+  single display field here.
+- ✅ **FREE WIN, NO CODE CHANGE NEEDED:** every list screen that computes
+  its visible-row count from `DISPLAY_ROWS` (IR Library, RFID Library,
+  Errors, WiFi Monitor, BT Scan, RC522 sector dump, ...) automatically
+  shows roughly twice as many rows now that `DISPLAY_ROWS` is 15 instead
+  of 8 -- these screens needed zero code changes to benefit from the
+  larger panel, since they were already written against the constant
+  rather than a hardcoded row count.
+- ⚠️ **NOT DONE, LEFT FOR A FUTURE ROUND:** the RC522 sector-dump screen
+  (`show_dump_and_confirm()`) still only shows the first 8 of each 16-byte
+  block's bytes (`DISPLAY_COLS - 2` clamp, unchanged from the OLED era) --
+  the larger screen has room to show all 16 bytes per row now, this just
+  wasn't done in this pass to keep the display migration's diff focused.
+  Same applies to any other screen that could show more per row now but
+  wasn't specifically revisited.
+
 ## General
 
 - Both firmwares now build clean (see Round 12), but neither has been
@@ -736,7 +846,7 @@ ESP-IDF v5.3.5.
   tolerances are all unverified. See `HARDWARE_TEST_MATRIX.md` for the
   checklist to work through once real hardware is available.
 - Error reporting mostly goes through `ESP_LOGW`/`ESP_LOGE` only — with
-  the device's own OLED as the primary display, a user who isn't on a
+  the device's own display as the primary output, a user who isn't on a
   serial connection won't see these errors at all.
 
 ---

@@ -7,14 +7,16 @@
 #include <stdbool.h>
 
 #include "minitest.h"
+#include "display.h" // tests/stubs/display.h -- needed here for display_color_t before the stub fns below
 
 // Stub implementations for the display_* calls text_entry_render() makes.
 // text_entry_render() itself is never called by these tests, but the
 // translation unit needs these defined to link.
 void display_clear(void) {}
 void display_draw_text(int row, int col, const char *text) { (void)row; (void)col; (void)text; }
-void display_draw_text_px(int x, int y, const char *text, bool invert) { (void)x; (void)y; (void)text; (void)invert; }
-void display_fill_rect(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
+void display_draw_text_color(int row, int col, const char *text, display_color_t color) { (void)row; (void)col; (void)text; (void)color; }
+void display_draw_text_px(int x, int y, const char *text, display_color_t fg, display_color_t bg) { (void)x; (void)y; (void)text; (void)fg; (void)bg; }
+void display_fill_rect(int x, int y, int w, int h, display_color_t color) { (void)x; (void)y; (void)w; (void)h; (void)color; }
 void display_flush(void) {}
 
 #include "../main/ui/text_entry.c"

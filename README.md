@@ -1,9 +1,9 @@
 # Makeshift Flipper — firmware skeleton
 
 A DIY Flipper Zero-style multi-tool built on an ESP32-P4-Pico, running
-ESP-IDF (not Arduino). OLED display, RFID/NFC, IR transceiver, and a
-companion ESP32-C6 for Wi-Fi, all driven by a 2-axis analog joystick
-plus a separate BACK button.
+ESP-IDF (not Arduino). A 240x240 color SPI LCD, RFID/NFC, IR transceiver,
+and a companion ESP32-C6 for Wi-Fi, all driven by a 2-axis analog
+joystick plus a separate BACK button.
 
 ![System architecture](makeshift_flipper_system_architecture_en_white.png)
 
@@ -26,7 +26,8 @@ plus a separate BACK button.
 - Scan and connect to Wi-Fi networks through a companion ESP32-C6 radio,
   either via a phone-based web setup flow or a fully offline
   joystick-driven "scroll keyboard"
-- Animated OLED menu navigation (slide-in entrance, inverted selection bar)
+- Animated color menu navigation (slide-in entrance, amber-highlighted
+  selection bar) on a 240x240 SPI LCD
 - **Errors**: a rolling on-device history of the last `DIAG_HISTORY_CAPACITY`
   (24) recorded failures (`main/diag/diag.h`) across every module --
   browse it fully offline (Errors menu), or optionally upload the whole
@@ -35,13 +36,13 @@ plus a separate BACK button.
   `c6-firmware/README.md`'s "Error log upload" section
 - **Wi-Fi Monitor**: puts the C6 radio into passive promiscuous mode,
   hopping channels 1-13 and listing every AP it sees (SSID/BSSID/RSSI/
-  channel/security mode) live on the OLED (WiFi → WiFi Monitor). Receive-only — no
+  channel/security mode) live on the display (WiFi → WiFi Monitor). Receive-only — no
   deauth or packet injection. Starting it disconnects the C6's STA
   connection and blocks every other Wi-Fi-backed feature (WiFi Scan/Setup,
   Errors → Send) until it's stopped; WiFi Setup needs to be re-run
   afterward if a connection is needed again
 - **BT Scan**: passive BLE advertisement scan (Bluetooth → BT Scan) —
-  lists nearby BLE devices (address/name/RSSI) live on the OLED. Never
+  lists nearby BLE devices (address/name/RSSI) live on the display. Never
   connects to anything; observation only, same receive-only scope as Wi-Fi
   Monitor. Can't run at the same time as Wi-Fi Monitor (both need the
   shared C6 UART link exclusively) — see `KNOWN_ISSUES.md`'s Round 10 entry
@@ -55,39 +56,49 @@ and `main/ui/display.c`)
 
 | Signal          | GPIO   | Target            |
 |-----------------|--------|------------------|
-| 3V3, GND        | —      | OLED, joystick common GND |
-| SDA             | GPIO7  | OLED (I2C)       |
-| SCL             | GPIO8  | OLED (I2C)       |
+| 3V3, GND        | —      | LCD, joystick common GND |
+| SCK             | GPIO7  | LCD (SPI, its own bus -- SPI3_HOST) |
+| MOSI            | GPIO8  | LCD (SPI) |
+| CS              | GPIO14 | LCD (SPI) |
+| DC              | GPIO15 | LCD (SPI) |
+| RST             | GPIO6  | LCD (SPI) |
+| BL (backlight)  | GPIO21 | LCD -- tie to 3V3 instead if your module has no BL pin |
 | Joystick VRx (X axis, ADC1) | GPIO3 | 2-axis analog joystick module |
 | Joystick VRy (Y axis, ADC1) | GPIO4 | 2-axis analog joystick module |
 | Joystick SW (center press) | GPIO22 | 2-axis analog joystick module |
 | BACK button, standalone | GPIO23 | Extra digital button |
-| SPI: CS=9, SCK=10, MOSI=11, MISO=12, RST=13 | — | RC522 (13.56MHz) |
+| SPI: CS=9, SCK=10, MOSI=11, MISO=12, RST=13 | — | RC522 (13.56MHz, its own bus -- SPI2_HOST) |
 | RX              | GPIO17 | RDM6300 (125kHz) |
 | 5V/GND          | —      | LiPo + TP4056 (power input, not software-relevant) |
 | TX/RX           | GPIO18/19 | ESP32-C6 (companion radio, UART link) |
 | GPIO (via transistor) | GPIO20 | Vibration motor |
 | RX (RMT)        | GPIO1  | VS1838B IR receiver |
 | TX (RMT, via transistor) | GPIO2 | IR LED transmitter |
-| RX (RMT)        | GPIO5  | VS1838B #2, direction find: North |
-| RX (RMT)        | GPIO6  | VS1838B #3, direction find: East |
-| RX (RMT)        | GPIO14 | VS1838B #4, direction find: South |
-| RX (RMT)        | GPIO15 | VS1838B #5, direction find: West |
+| RX (RMT), **not currently wired up** | GPIO5  | VS1838B #2, direction find: North |
+| RX (RMT), **not currently wired up** | GPIO6  | VS1838B #3, direction find: East -- **conflicts with LCD RST above** |
+| RX (RMT), **not currently wired up** | GPIO14 | VS1838B #4, direction find: South -- **conflicts with LCD CS above** |
+| RX (RMT), **not currently wired up** | GPIO15 | VS1838B #5, direction find: West -- **conflicts with LCD DC above** |
 
 The IR pins (GPIO1/2) weren't in the original wiring diagram — they were
 picked from free pins. Wire to match, or change `IR_RX_GPIO`/`IR_TX_GPIO`
-at the top of `main/ir/ir_driver.c` to your own preference. The 4 extra
-direction-finding receivers (GPIO5/6/14/15) are likewise picked from free
-pins — change the `GPIO_NORTH`/`GPIO_EAST`/`GPIO_SOUTH`/`GPIO_WEST`
-defines at the top of `main/ir/ir_direction.c` if your wiring differs.
-These are on top of, not instead of, the single receiver on GPIO1 — the
-two modules are independent and don't share hardware.
+at the top of `main/ir/ir_driver.c` to your own preference.
+
+**The 4 IR direction-finding receivers (GPIO5/6/14/15) are not called from
+`app_main()` on this build** (see `KNOWN_ISSUES.md`'s Round 13 entry — the
+P4 has no spare RMT RX channel once the regular IR receiver/transmitter
+are running) **and 3 of those 4 GPIOs are now reused by the LCD's SPI
+wiring** (CS/DC/RST above). Re-enabling `ir_direction_init()` on this pin
+plan is not just a channel-budget problem anymore — it would need the
+direction-finding receivers moved to different GPIOs first, since GPIO6/14/15
+are physically the same pins the display now needs. If your build re-adds
+direction finding, change the `GPIO_NORTH`/`GPIO_EAST`/`GPIO_SOUTH`/`GPIO_WEST`
+defines at the top of `main/ir/ir_direction.c` to free pins first.
 
 **Joystick hardware note:** the original plan assumed a 5-pin digital
 joystick; the actual hardware is a **2-axis analog joystick module**
 (X/Y potentiometer + center button + power LED). Since ADC1 channels on
 the ESP32-P4 only live on GPIO0-6 (GPIO0/1/2 are already taken, GPIO7/8
-are the OLED), X/Y landed on **GPIO3/GPIO4** — picked from free pins,
+are the LCD's SCK/MOSI), X/Y landed on **GPIO3/GPIO4** — picked from free pins,
 wire to match or change the `JOY_X_ADC_CHANNEL`/`JOY_Y_ADC_CHANNEL`
 defines at the top of `main/input/buttons.c`. The center button (SW)
 stayed on GPIO22. A **separate physical BACK button** was also added
@@ -102,8 +113,9 @@ direction event fires once a reading strays 3/8 of the way from center
 toward an extreme, and it won't re-arm until back within 1/8 of center
 (hysteresis, for "button-like" behavior instead of jitter).
 
-OLED: assumes SSD1306 at I2C address 0x3C (the default on most 0.96"
-modules).
+Display: a 1.8" ST7789 SPI LCD, 240x240, RGB565 (65K colors) -- see
+"Display and UI" below for the driver, color theme, and font details, and
+`main/ui/display.h` for the pixel/character-grid constants.
 
 ## Menu navigation (Flipper Zero style)
 
@@ -131,15 +143,45 @@ to its child menu at startup (`main/main.c`'s `app_main()`), and
 Note the distinction: LEFT never exits a screen, and BACK never moves
 between menu levels — they don't overlap.
 
-## Visuals: menu animations
+## Display and UI
+
+The panel is a 1.8" **ST7789 SPI LCD, 240x240, RGB565 (65K colors)** —
+this replaced an earlier 128x64 monochrome SSD1306 OLED (see
+`KNOWN_ISSUES.md` for the migration notes and why). `esp_lcd_new_panel_st7789()`
+is built into ESP-IDF's `esp_lcd` component, so no extra managed component
+is needed (unlike the SSD1306, which briefly needed one).
+
+- **Resolution**: `main/ui/display.h`'s `DISPLAY_WIDTH_PX`/`DISPLAY_HEIGHT_PX`
+  (240x240). The framebuffer is a full `240*240` array of `uint16_t` RGB565
+  pixels (`main/ui/display.c`'s `s_framebuf`, 115200 bytes) — pushed to the
+  panel in one `esp_lcd_panel_draw_bitmap()` call per `display_flush()`.
+- **Font**: `main/ui/font8x16_basic.c` — an 8x16 monochrome bitmap font (one
+  glyph is 8 bytes wide, 16 rows tall), giving `DISPLAY_ROWS = 15` text
+  rows and `DISPLAY_COLS = 30` columns. It's derived from the earlier 8x8
+  font by doubling each row (2x vertical scale) — same glyph shapes,
+  taller. ASCII-only; there's no Turkish-diacritic glyph coverage yet (a
+  gap noted in `KNOWN_ISSUES.md`).
+- **Color theme**: centralized as `DISPLAY_COLOR_*` macros at the top of
+  `display.h` (background, text, an amber `ACCENT` used for the menu
+  selection bar and headers, plus `ERROR`/`OK`/`DIM` for status text) —
+  change the palette in one place rather than hunting for scattered color
+  literals through `main.c`.
+- **Drawing API**: `display_draw_text(row, col, text)` for the common case
+  (default text color on the background color); `display_draw_text_color()`
+  to pick an explicit color; `display_draw_text_px()`/`display_fill_rect()`
+  for pixel-level drawing with explicit foreground/background colors (no
+  invert/XOR trick — that was an SSD1306-specific 1-bit shortcut that
+  doesn't apply to a color panel).
+
+### Menu animations
 
 - On entry, the list slides in from the right with ease-out easing (a
-  slight per-row stagger/cascade, no float math needed by hand)
-- The selected row is highlighted as an inverted (filled, color-swapped)
-  bar
-- Implemented in `main/ui/menu.c`'s `menu_animate_tick()` and
-  `main/ui/display.c`'s `display_draw_text_px(..., invert)` /
-  `display_fill_rect()` — start there if you want to add more animations
+  slight per-row stagger/cascade, no float math needed by hand) —
+  `main/ui/menu.c`'s `menu_animate_tick()`
+- The selected row is highlighted as a solid `DISPLAY_COLOR_ACCENT`-filled
+  bar with `DISPLAY_COLOR_ACCENT_TEXT` text drawn on top
+- Start in `main/ui/menu.c`'s `menu_render()` if you want to add more
+  animations or restyle the selection highlight
 
 ## Building (ESP-IDF isn't installed on this machine — run this in your
 own environment)
@@ -236,7 +278,7 @@ pattern most routers use:
 
 1. Select **"WiFi Setup"** from the menu
 2. The C6 opens a temporary Wi-Fi network named `MakeshiftFlipper-Setup`,
-   WPA2-protected (password shown on the OLED) and limited to a single
+   WPA2-protected (password shown on the display) and limited to a single
    simultaneous client (AP+STA dual mode —
    `c6-firmware/main/wifi_setup_ap.c`). The password and single-client
    limit exist to reduce the risk of someone else joining the setup
@@ -249,7 +291,7 @@ pattern most routers use:
    networks as a dropdown; the user picks one, enters the password, and
    submits
 5. The C6 takes the form data, attempts to connect as an STA, and
-   reports the result back to the P4 as `OK`/`FAIL`; the OLED shows the
+   reports the result back to the P4 as `OK`/`FAIL`; the display shows the
    outcome
 6. The AP and HTTP server shut down once the connection succeeds, or
    after a 5-minute internal C6 timeout (the P4 side waits up to 6
@@ -273,14 +315,14 @@ second, fully self-contained method that only uses the device's own
 joystick: **"WiFi Setup Manual"** from the menu.
 
 1. Networks are scanned via the C6 (same `SCAN` command)
-2. Results are listed on the OLED; **Up/Down** picks a network, **Press**
+2. Results are listed on the display; **Up/Down** picks a network, **Press**
    confirms, **BACK** cancels
 3. The selected network's password is entered with the joystick-driven
    "scroll keyboard" in `main/ui/text_entry.c`: a 10x6 letter/digit grid
    navigated with **Up/Down/Left/Right**, **Press** adds a character.
    Special cells: `^` = confirm/submit, `<` = backspace, `*` = clear all
 4. On confirm, a `CONNECT:<ssid>,<password>` command is sent to the C6
-   and the result is shown on the OLED
+   and the result is shown on the display
 
 Like the web setup flow, this screen is fully blocking — nothing else on
 the device works until it's done. The scroll keyboard was written as a
@@ -289,7 +331,7 @@ else text entry is needed later (e.g. naming a saved IR code).
 
 ## What currently works
 
-- An animated, joystick-driven OLED menu, organized as a category tree
+- An animated, joystick-driven display menu, organized as a category tree
   (RFID/NFC, Infrared, WiFi, Bluetooth, plus Errors/About) rather than one flat list
 - Buttons (joystick directions) are debounced
 - IR receive and transmit over NEC, with a joystick-driven **IR Learn** flow
@@ -322,7 +364,7 @@ else text entry is needed later (e.g. naming a saved IR code).
 - "RFID / NFC → Clone": dump-and-clone flow for Mifare Classic 1K cards
   (`action_rfid_clone()` in `main.c`) — scan a source card, authenticate
   and read every sector the default-key dictionary can unlock, review the
-  dump sector-by-sector on the OLED, then place a target card to write
+  dump sector-by-sector on the display, then place a target card to write
   the data blocks (never trailers) onto it, plus a best-effort gen1a UID
   clone
 - "WiFi → WiFi Monitor": passive promiscuous AP scan
@@ -407,7 +449,7 @@ a real hardware test.
   the legitimate client's association happened to drop) could join and
   race the real request. The P4 now generates a fresh random 8-character
   WPA2-PSK password per setup session (`esp_random()`, the hardware RNG)
-  and sends it to the C6 as part of `SETUP:<pin>`; it's shown on the OLED
+  and sends it to the C6 as part of `SETUP:<pin>`; it's shown on the display
   the same way the old fixed one was, so there's no UX change, just no
   more shared/guessable password.
 - The Wi-Fi setup flow is **plain HTTP, no TLS** — the setup AP is
