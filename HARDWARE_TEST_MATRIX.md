@@ -52,8 +52,11 @@ if you rewire the joystick, keep X/Y on ADC1-capable pins.
 |---|---|---|
 | "IR Send Test" transmits a recognizable NEC frame | Verify with a second IR receiver, phone camera (IR LEDs show as faint purple on most phone cameras), or a known target device (e.g. TV power) | TX=GPIO2 (via transistor) |
 | Primary IR receiver picks up an incoming NEC frame | Decoded frame shown/logged | RX=GPIO1 |
-| "IR Direction Find" correctly identifies which of the 4 receivers saw a signal first/strongest | North/East/South/West reported correctly for a source at each compass point | North=GPIO5, East=GPIO6, South=GPIO14, West=GPIO15 |
-| No cross-talk between the 4 direction receivers (one lighting up shouldn't fire all 4) | Only the receiver actually facing the source triggers | GPIO5/6/14/15 |
+| "IR Learn" captures a remote button press and saves it under a chosen name | Entry appears in "IR Library" afterward, survives a reboot | RX=GPIO1 |
+| "IR Library" replays (PRESS) a saved code | Target device reacts the same as to the original remote | TX=GPIO2 |
+| "IR Library" delete (LEFT) removes an entry and persists the change | Entry gone from the list after a reboot | — |
+| "IR Learn"/"IR Library" behave correctly at capacity (16 entries) | "Library full" shown, existing entries untouched, no crash | — |
+| ⚠️ **"IR Direction Find" is currently non-functional on this build** — see Round 13 in [KNOWN_ISSUES.md](KNOWN_ISSUES.md): `ir_direction_init()` is no longer called from `app_main()` (the P4 has no spare RMT RX channel once the regular IR receiver/transmitter are running), so the screen waits forever. Do not test this row until that's redesigned. | — | North=GPIO5, East=GPIO6, South=GPIO14, West=GPIO15 |
 
 Note: GPIO5/GPIO6 are also in the ADC1-capable GPIO0-6 range `buttons.c`'s
 comment flags as scarce — a documented tradeoff (see `ir_direction.c`'s
@@ -70,6 +73,7 @@ nothing else on your board wants those two pins for analog input.
 | "Clone (13.56MHz)" successfully writes to a target (writable) card | Target card's UID/data matches source afterward, verify with "Read 13.56MHz" | same SPI pins |
 | Clone failure path records a diag entry with a specific failure reason rather than silently doing nothing | Check "Errors" menu shows `RC522_CLONE_WRITE_FAILED` when write fails (e.g. read-only card) | — |
 | 7-byte/10-byte UID cards are reported as unsupported, not misread as a shorter UID | "Errors" shows `RC522_SCAN_UNSUPPORTED_UID`, on-screen message reads "7/10-byte UID: N/A" | — |
+| "Save 13.56MHz" saves a scanned UID under a chosen name (UID only, no sector data) | Entry appears in "RFID Library" marked 'H' (high frequency), survives a reboot | same SPI pins |
 
 ## 6. RFID: RDM6300 (125kHz)
 
@@ -77,6 +81,9 @@ nothing else on your board wants those two pins for analog input.
 |---|---|---|
 | "Read 125kHz" detects a 125kHz EM4100-family tag in range | Tag ID displayed | RX=GPIO17 (UART, receive-only module) |
 | Read is reliable across multiple tag presentations, not just the first one after boot | Repeated reads work without a reboot | GPIO17 |
+| "Save 125kHz" saves a scanned tag ID under a chosen name | Entry appears in "RFID Library" marked 'L' (low frequency), survives a reboot | GPIO17 |
+| "RFID Library" delete (LEFT) removes an entry (either kind) and persists the change | Entry gone from the list after a reboot | — |
+| "Save 125kHz"/"Save 13.56MHz" behave correctly at capacity (16 entries total) | "Library full" shown, existing entries untouched, no crash | — |
 
 ## 7. P4 <-> C6 UART link
 

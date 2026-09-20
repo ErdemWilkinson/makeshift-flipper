@@ -110,7 +110,8 @@ modules).
 The menu is a small tree, not one flat list: the top level is a set of
 categories (**RFID / NFC**, **Infrared**, **WiFi**, **Bluetooth**, plus
 the leaf items **Errors** and **About**), and each category opens its own flat submenu
-(e.g. **Infrared** → "IR Learn" / "IR Library"). See
+(e.g. **Infrared** → "IR Learn" / "IR Library", **RFID / NFC** → "Save
+125kHz" / "Save 13.56MHz" / "RFID Library"). See
 `main/ui/menu.c`/`menu.h` — `menu_link_submenu()` wires a category item
 to its child menu at startup (`main/main.c`'s `app_main()`), and
 `menu_handle_button()` walks that tree.
@@ -294,10 +295,18 @@ else text entry is needed later (e.g. naming a saved IR code).
 - IR receive and transmit over NEC, with a joystick-driven **IR Learn** flow
   to name a received code and an **IR Library** screen to browse, send, or
   delete up to 16 saved NVS-backed codes
-- IR direction finding (4-receiver quadrant sensing) is implemented and
-  wired into the menu, pending the 4-receiver hardware and a real test
+- IR direction finding (4-receiver quadrant sensing) is implemented in code
+  but **not currently wired up** -- `ir_direction_init()` is no longer
+  called from `app_main()` because the P4 has no spare RMT RX channel once
+  the regular IR receiver/transmitter are running (see Round 13 in
+  [KNOWN_ISSUES.md](KNOWN_ISSUES.md)); the "IR Direction Find" menu entry
+  will wait forever until this is redesigned
 - RC522 (13.56MHz, 4-byte UIDs only) and RDM6300 (125kHz) are wired to
-  real scan screens, with haptic feedback
+  real scan screens, with haptic feedback, plus a **"Save"** flow on each
+  (**RFID Library**) to name and persist up to 16 scanned tag UIDs total
+  (NVS-backed, UID only -- no Mifare sector data is ever stored there,
+  unlike the separate Clone flow which is a one-shot copy, not a saved
+  library entry)
 - The P4 ↔ C6 UART protocol is implemented end to end
   (SCAN/CONNECT/SEND/SETUP/ASK), with real Wi-Fi operations on the C6 side
 - Web-based Wi-Fi setup (phone → AP → browser → ssid/password form) is

@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/.build"
 mkdir -p "$OUT"
 
-CFLAGS=(-std=c17 -Wall -Wextra -Werror -I"$HERE" -I"$HERE/stubs" -I"$HERE/../main")
+CFLAGS=(-std=c17 -Wall -Wextra -Werror -I"$HERE" -I"$HERE/stubs" -I"$HERE/../main" -I"$HERE/../main/net" -I"$HERE/../main/rfid")
 
 status=0
 for test_src in "$HERE"/test_*.c; do

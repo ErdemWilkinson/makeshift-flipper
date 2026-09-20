@@ -11,11 +11,13 @@
 #include "esp_log.h"
 #include "font8x8_basic.h"
 
-// Matches the wiring diagram: OLED SDA=GPIO7, SCL=GPIO8.
-#define I2C_SDA_GPIO 7
-#define I2C_SCL_GPIO 8
+// Test profile: use two otherwise unused pins so the OLED can be checked
+// independently of the P4-Pico's default I2C header pins.
+#define I2C_SDA_GPIO 14
+#define I2C_SCL_GPIO 15
 #define I2C_PORT     I2C_NUM_0
-#define OLED_ADDR    0x3C
+#define OLED_ADDR_PRIMARY  0x3C
+#define OLED_ADDR_FALLBACK 0x3D
 
 #define PANEL_WIDTH  128
 #define PANEL_HEIGHT 64
@@ -38,8 +40,24 @@ void display_init(void)
     i2c_master_bus_handle_t bus_handle;
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus_handle));
 
+    // SSD1306 modules are commonly wired at 0x3C, but some boards expose
+    // the alternate 0x3D address. Probe both before creating the panel.
+    uint8_t oled_addr = OLED_ADDR_PRIMARY;
+    esp_err_t probe_result = i2c_master_probe(bus_handle, oled_addr, 100);
+    if (probe_result != ESP_OK) {
+        oled_addr = OLED_ADDR_FALLBACK;
+        probe_result = i2c_master_probe(bus_handle, oled_addr, 100);
+    }
+    if (probe_result != ESP_OK) {
+        // A disconnected display must not put the whole device into a reset
+        // loop. Drawing still updates the in-memory framebuffer; flushing is
+        // simply a no-op until an OLED responds on the I2C bus.
+        ESP_LOGE(TAG, "No SSD1306 found on GPIO14/GPIO15 (tried 0x3C and 0x3D)");
+        return;
+    }
+
     esp_lcd_panel_io_i2c_config_t io_cfg = {
-        .dev_addr = OLED_ADDR,
+        .dev_addr = oled_addr,
         .scl_speed_hz = 400000,
         .control_phase_bytes = 1,
         .lcd_cmd_bits = 8,
@@ -60,7 +78,7 @@ void display_init(void)
 
     display_clear();
     display_flush();
-    ESP_LOGI(TAG, "OLED initialized");
+    ESP_LOGI(TAG, "OLED initialized at 0x%02X", oled_addr);
 }
 
 void display_clear(void)
@@ -138,5 +156,8 @@ void display_fill_rect(int x, int y, int w, int h)
 
 void display_flush(void)
 {
+    if (s_panel == NULL) {
+        return;
+    }
     esp_lcd_panel_draw_bitmap(s_panel, 0, 0, PANEL_WIDTH, PANEL_HEIGHT, s_framebuf);
 }
