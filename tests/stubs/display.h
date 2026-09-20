@@ -20,13 +20,19 @@ typedef uint16_t display_color_t;
 #define DISPLAY_RGB(r, g, b) \
     ((display_color_t)((((r) & 0x1F) << 11) | (((g) & 0x3F) << 5) | ((b) & 0x1F)))
 
-#define DISPLAY_COLOR_BACKGROUND DISPLAY_RGB(0, 0, 0)
-#define DISPLAY_COLOR_TEXT       DISPLAY_RGB(28, 60, 28)
-#define DISPLAY_COLOR_ACCENT     DISPLAY_RGB(31, 40, 4)
+// Keep these in sync with main/ui/display.h's palette -- they don't need to
+// match exactly for text_entry.c's tested logic (none of it depends on
+// actual color values), but the two headers get included into the same
+// translation unit here (see the comment below on why) and use plain
+// non-idempotent #defines, so a mismatched value here would be a
+// -Werror redefinition error, not a silent bug.
+#define DISPLAY_COLOR_BACKGROUND DISPLAY_RGB(2, 1, 1)
+#define DISPLAY_COLOR_TEXT       DISPLAY_RGB(30, 40, 10)
+#define DISPLAY_COLOR_ACCENT     DISPLAY_RGB(31, 18, 2)
 #define DISPLAY_COLOR_ACCENT_TEXT DISPLAY_RGB(0, 0, 0)
-#define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 8, 8)
-#define DISPLAY_COLOR_OK         DISPLAY_RGB(6, 50, 10)
-#define DISPLAY_COLOR_DIM        DISPLAY_RGB(10, 20, 10)
+#define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 4, 4)
+#define DISPLAY_COLOR_OK         DISPLAY_RGB(10, 46, 8)
+#define DISPLAY_COLOR_DIM        DISPLAY_RGB(14, 10, 4)
 
 void display_init(void);
 void display_clear(void);
