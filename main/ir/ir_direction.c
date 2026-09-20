@@ -39,6 +39,7 @@ typedef struct {
 } receiver_t;
 
 static receiver_t s_receivers[4];
+static bool s_initialized;
 
 static bool IRAM_ATTR rx_done_callback(rmt_channel_handle_t channel,
                                         const rmt_rx_done_event_data_t *edata,
@@ -87,12 +88,19 @@ void ir_direction_init(void)
     receiver_init(&s_receivers[2], GPIO_SOUTH, IR_DIR_SOUTH);
     receiver_init(&s_receivers[3], GPIO_WEST,  IR_DIR_WEST);
 
+    s_initialized = true;
+
     ESP_LOGI(TAG, "IR direction finder initialized (N=GPIO%d E=GPIO%d S=GPIO%d W=GPIO%d)",
              GPIO_NORTH, GPIO_EAST, GPIO_SOUTH, GPIO_WEST);
 }
 
 bool ir_direction_poll(uint8_t *out_flags, ir_nec_frame_t *out_frame)
 {
+    if (!s_initialized) {
+        *out_flags = 0;
+        return false;
+    }
+
     uint8_t flags = 0;
     bool got_frame = false;
 

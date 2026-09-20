@@ -667,6 +667,66 @@ built" note above). Both now build clean; see commits `57ad832` and
   (via Espressif's official `esp-idf-ci-action`) and runs the host
   tests on every push/PR.
 
+## Round 13 (2026-09-19): first P4-Pico hardware bring-up
+
+Unlike the older static-only entries, the following findings are based on
+actual ESP32-P4-Pico serial logs and a successful build/flash through
+ESP-IDF v5.3.5.
+
+- ⚠️ **CONFIRMED, HARDWARE BLOCKER:** the original SSD1306 OLED did not
+  acknowledge I2C probes at either `0x3C` or `0x3D`. This was reproduced on
+  the normal P4 I2C pair (GPIO7/GPIO8), on a second test pair
+  (GPIO14/GPIO15), and with an Arduino Uno I2C scanner. The P4 itself is
+  healthy: it flashes, boots, configures the requested GPIOs, and continues
+  through RC522/RDM6300/C6 initialization. The display or its wiring is the
+  remaining fault domain; do not treat OLED UI features as hardware-verified
+  until a known-good display is fitted.
+- ⚠️ **TEMPORARY TEST CONFIGURATION:** `main/ui/display.c` currently uses
+  GPIO14/GPIO15, not the documented GPIO7/GPIO8, while testing the failed
+  OLED. This conflicts with the planned south/west IR direction receiver
+  pins. Before shipping or wiring a replacement display, select one display
+  profile and update `README.md`, `main/ui/display.c`, and the IR pin plan
+  together. The intended SSD1306 default remains GPIO7=SDA, GPIO8=SCL.
+- ⚠️ **CONFIRMED, FEATURE UNAVAILABLE:** the ESP32-P4 did not have a free
+  RMT RX channel after the regular IR receiver/transmitter initialized.
+  Starting the four-receiver IR direction finder caused
+  `rmt_new_rx_channel()` to return `ESP_ERR_NOT_FOUND` and reset the device.
+  The automatic `ir_direction_init()` call was removed so the base device
+  now boots, and `ir_direction_poll()` safely reports no frame when that
+  subsystem was not initialized. However, the menu still exposes “IR
+  Direction Find”, where it can only wait forever. Hide/disable that menu
+  item until the direction feature is redesigned to share/time-multiplex RMT
+  resources or the normal IR path is disabled.
+- ⚠️ **CONFIRMED, CONFIGURATION MISMATCH:** boot logs detect a 32 MB flash
+  chip, while the main firmware binary header is built for 2 MB. ESP-IDF
+  therefore limits itself to the configured 2 MB and emits a warning on every
+  boot. The current image fits, so this is not an immediate corruption risk,
+  but OTA/large assets/partition growth cannot use the installed flash until
+  the project flash-size configuration and partition layout are updated and
+  revalidated.
+- ⚠️ **DOCUMENTATION STALE:** the General section and portions of the README
+  still say firmware has never been flashed or run on hardware. That is no
+  longer true for the P4 main firmware; build, flash, boot, RC522 init,
+  RDM6300 UART init, and P4-to-C6 UART initialization have all been observed.
+  This should be edited after the replacement display test, keeping the C6
+  companion firmware's own end-to-end Wi-Fi/BT verification status separate.
+
+## Round 14 (2026-09-20): RFID UID library + host test/CI fixes
+
+- ✅ **ADDED:** a named RFID/NFC tag library (`main/rfid/rfid_library.c/.h`),
+  mirroring `main/ir/ir_library.c`'s shape: "Save 125kHz"/"Save 13.56MHz"
+  capture-then-name a scan and persist it to NVS, "RFID Library" browses
+  and deletes entries (up to 16 total, either kind). Deliberately
+  UID-only -- unlike RFID Clone (a one-shot, not-persisted sector dump),
+  nothing saved here can reproduce a card's Mifare data, only recognize
+  that the same UID was seen again.
+- 🔧 **FIXED, TEST INFRASTRUCTURE:** `tests/run_tests.sh` was missing
+  `-I main/net` and `-I main/rfid` on its host-compiler include path, so
+  `tests/test_wifi_pkt_parse.c` (`#include "c6_link.h"`) failed to build
+  at all. Host test runs skipped straight past this since earlier test
+  files didn't need those directories; added both flags plus this round's
+  `tests/test_rfid_library.c`, restoring a full, passing host test run.
+
 ## General
 
 - Both firmwares now build clean (see Round 12), but neither has been

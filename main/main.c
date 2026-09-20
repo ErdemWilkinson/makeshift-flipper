@@ -18,6 +18,7 @@
 #include "net/c6_link.h"
 #include "rfid/rc522.h"
 #include "rfid/rdm6300.h"
+#include "rfid/rfid_library.h"
 #include "feedback/vibration.h"
 #include "ui/display.h"
 #include "ui/menu.h"
@@ -340,6 +341,195 @@ static void action_rfid_clone(void)
     menu_render(s_active_menu);
 }
 
+// Runs the scroll-keyboard text_entry_t loop with the given prompt line and
+// returns true with entry->buffer filled once '^' (OK) is pressed, or false
+// if BACK cancelled. Shared by action_ir_learn() and the RFID library save
+// actions below -- all three are "scan/capture -> name it -> save" flows
+// that differ only in what they capture and where they save it.
+static bool prompt_for_name(text_entry_t *entry, const char *prompt)
+{
+    text_entry_init(entry);
+    for (;;) {
+        text_entry_render(entry, prompt, /* mask = */ false);
+
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            return false;
+        }
+        if (text_entry_handle_button(entry, event)) {
+            return true; // '^' (OK) was pressed
+        }
+    }
+}
+
+// Blocks (BACK cancels) waiting for one 125kHz tag via rdm6300_poll(), then
+// names and saves its UID to the RFID library. Mirrors action_ir_learn()'s
+// "capture -> name it -> save" shape; unlike RFID Clone above, this never
+// reads or stores any card data beyond the UID -- see rfid_library.h.
+static void action_rfid_save_125khz(void)
+{
+    rdm6300_id_t id;
+    bool captured = false;
+    for (;;) {
+        display_clear();
+        display_draw_text(0, 0, "Save 125kHz Tag");
+        display_draw_text(2, 0, "Present tag now");
+        display_draw_text(6, 0, "BACK: cancel");
+        display_flush();
+
+        for (int i = 0; i < 20 && !captured; i++) { // ~200ms between redraws
+            button_id_t event = buttons_poll();
+            if (event == BUTTON_BACK) {
+                menu_render(s_active_menu);
+                return;
+            }
+            if (rdm6300_poll(&id)) {
+                captured = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (captured) {
+            break;
+        }
+    }
+
+    vibration_pulse(80);
+
+    text_entry_t entry;
+    bool cancelled = !prompt_for_name(&entry, "Name this tag");
+
+    display_clear();
+    display_draw_text(0, 0, "Save 125kHz Tag");
+    if (cancelled) {
+        display_draw_text(2, 0, "Cancelled");
+    } else if (entry.length == 0) {
+        display_draw_text(2, 0, "Name can't be empty");
+    } else if (!rfid_library_add_125khz(entry.buffer, &id)) {
+        display_draw_text(2, 0, "Library full");
+        display_draw_text(3, 0, "Delete one first");
+        diag_record_error("RFID Save", "RFID_LIBRARY_FULL");
+    } else {
+        rfid_library_save(); // best-effort, same as ir_library_save()
+        display_draw_text(2, 0, "Saved!");
+    }
+    display_draw_text(6, 0, "Press any key");
+    display_flush();
+
+    button_id_t any;
+    do {
+        any = buttons_poll();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (any == BUTTON_COUNT);
+
+    menu_render(s_active_menu);
+}
+
+// Same shape as action_rfid_save_125khz(), but for a 13.56MHz UID via
+// wait_for_card() (the same helper RFID Clone uses to wait for a card).
+// A 7/10-byte UID is stored as-is -- rfid_library_entry_t's rc522_uid_t
+// already carries .length for those, unlike the clone/dump path which
+// only supports 4-byte UIDs.
+static void action_rfid_save_1356mhz(void)
+{
+    rc522_antenna_on();
+
+    rc522_uid_t uid;
+    if (!wait_for_card("Present tag now", &uid)) {
+        rc522_antenna_off();
+        menu_render(s_active_menu);
+        return;
+    }
+    rc522_antenna_off();
+
+    vibration_pulse(80);
+
+    text_entry_t entry;
+    bool cancelled = !prompt_for_name(&entry, "Name this tag");
+
+    display_clear();
+    display_draw_text(0, 0, "Save 13.56MHz Tag");
+    if (cancelled) {
+        display_draw_text(2, 0, "Cancelled");
+    } else if (entry.length == 0) {
+        display_draw_text(2, 0, "Name can't be empty");
+    } else if (!rfid_library_add_1356mhz(entry.buffer, &uid)) {
+        display_draw_text(2, 0, "Library full");
+        display_draw_text(3, 0, "Delete one first");
+        diag_record_error("RFID Save", "RFID_LIBRARY_FULL");
+    } else {
+        rfid_library_save(); // best-effort, same as ir_library_save()
+        display_draw_text(2, 0, "Saved!");
+    }
+    display_draw_text(6, 0, "Press any key");
+    display_flush();
+
+    button_id_t any;
+    do {
+        any = buttons_poll();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (any == BUTTON_COUNT);
+
+    menu_render(s_active_menu);
+}
+
+// Browses saved RFID/NFC tags: UP/DOWN to select, LEFT to delete (entries
+// shift up, oldest-first ordering same as ir_library.h). There is no
+// PRESS:send here (unlike IR Library) -- RFID readers in this codebase are
+// read-only inputs, there is nothing to "replay" a UID onto. BACK exits.
+static void action_rfid_library(void)
+{
+    int selected = 0;
+    for (;;) {
+        int count = rfid_library_count();
+        display_clear();
+        char header[DISPLAY_COLS + 1];
+        snprintf(header, sizeof(header), "RFID Library (%d)", count);
+        display_draw_text(0, 0, header);
+
+        if (count == 0) {
+            display_draw_text(2, 0, "No tags saved");
+            display_draw_text(3, 0, "Use RFID Save first");
+        } else {
+            for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
+                const rfid_library_entry_t *e = rfid_library_get(i);
+                char line[DISPLAY_COLS + 1];
+                char kind = (e->kind == RFID_LIBRARY_KIND_125KHZ) ? 'L' : 'H'; // Low/High freq
+                snprintf(line, sizeof(line), "%c%c %.17s", (i == selected) ? '>' : ' ', kind, e->name);
+                display_draw_text(1 + i, 0, line);
+            }
+        }
+        display_draw_text(7, 0, count > 0 ? "LEFT: delete" : "BACK: exit");
+        display_flush();
+
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+
+        if (event == BUTTON_BACK) {
+            break;
+        } else if (event == BUTTON_UP && selected > 0) {
+            selected--;
+        } else if (event == BUTTON_DOWN && selected < count - 1) {
+            selected++;
+        } else if (event == BUTTON_LEFT && count > 0) {
+            rfid_library_remove(selected);
+            rfid_library_save(); // best-effort, see action_ir_library()'s comment
+            if (selected >= rfid_library_count() && selected > 0) {
+                selected--;
+            }
+        }
+    }
+
+    menu_render(s_active_menu);
+}
+
 // Sends a fixed test frame -- a quick sanity check that the IR LED/RMT TX
 // path works at all, independent of the library below.
 static void action_ir_send_test(void)
@@ -384,25 +574,7 @@ static void action_ir_learn(void)
     vibration_pulse(80);
 
     text_entry_t entry;
-    text_entry_init(&entry);
-    bool cancelled = false;
-    for (;;) {
-        text_entry_render(&entry, "Name this code", /* mask = */ false);
-
-        button_id_t event;
-        do {
-            event = buttons_poll();
-            vTaskDelay(pdMS_TO_TICKS(10));
-        } while (event == BUTTON_COUNT);
-
-        if (event == BUTTON_BACK) {
-            cancelled = true;
-            break;
-        }
-        if (text_entry_handle_button(&entry, event)) {
-            break; // '^' (OK) was pressed
-        }
-    }
+    bool cancelled = !prompt_for_name(&entry, "Name this code");
 
     display_clear();
     display_draw_text(0, 0, "IR Learn");
@@ -733,7 +905,9 @@ static void action_wifi_monitor(void)
         display_draw_text(0, 0, header);
         for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%.6s %-4s c%d %d",
+            // DISPLAY_COLS is 21: clamp both text fields so the largest
+            // channel/RSSI values plus the terminator always fit.
+            snprintf(line, sizeof(line), "%.6s %.4s c%u %d",
                      aps[i].ssid[0] ? aps[i].ssid : "(hid)",
                      aps[i].sec[0] ? aps[i].sec : "?",
                      aps[i].channel, aps[i].rssi);
@@ -944,6 +1118,9 @@ static menu_item_t s_rfid_menu_items[] = {
     {"Read 125kHz",   action_rfid_125khz, NULL},
     {"Read 13.56MHz", action_nfc_1356mhz, NULL},
     {"Clone (13.56MHz)", action_rfid_clone, NULL},
+    {"Save 125kHz",    action_rfid_save_125khz,  NULL},
+    {"Save 13.56MHz",  action_rfid_save_1356mhz, NULL},
+    {"RFID Library",   action_rfid_library,      NULL},
 };
 
 static menu_item_t s_ir_menu_items[] = {
@@ -1014,10 +1191,10 @@ static void render_ir_direction_screen(uint8_t flags)
 
 void app_main(void)
 {
-    // NVS backs diag_load()/diag_save() and ir_library_load()/_save() (see
-    // diag.h and ir_library.h) -- erase-and-retry on the two "partition
-    // needs reformatting" error codes, same pattern the C6 side already
-    // uses in c6-firmware/main/main.c.
+    // NVS backs diag_load()/diag_save(), ir_library_load()/_save(), and
+    // rfid_library_load()/_save() (see diag.h, ir_library.h, rfid_library.h)
+    // -- erase-and-retry on the two "partition needs reformatting" error
+    // codes, same pattern the C6 side already uses in c6-firmware/main/main.c.
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -1026,11 +1203,15 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_err);
     diag_load();
     ir_library_load();
+    rfid_library_load();
 
     display_init();
     buttons_init();
     ir_driver_init();
-    ir_direction_init();
+    // The P4 has no spare RMT RX channels after the regular IR receiver and
+    // transmitter are enabled. The four-receiver direction finder is kept
+    // available in code for a future hardware profile, but must not consume
+    // channels on this base build.
     rc522_init();
     rdm6300_init();
     vibration_init();

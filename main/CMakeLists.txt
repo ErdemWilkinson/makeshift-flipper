@@ -12,6 +12,7 @@ idf_component_register(
         "ir/ir_library.c"
         "rfid/rc522.c"
         "rfid/rdm6300.c"
+        "rfid/rfid_library.c"
         "feedback/vibration.c"
         "net/c6_link.c"
         "net/json_escape.c"
