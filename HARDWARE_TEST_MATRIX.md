@@ -20,9 +20,11 @@ differs — don't just work around it in your head.
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| Device boots without a crash loop | OLED shows the main menu | — |
-| OLED renders text cleanly, no garbled/mirrored pixels | Menu items readable | SDA=GPIO7, SCL=GPIO8 (I2C) |
-| Display contrast/orientation looks right for your specific panel | No upside-down or inverted text | — |
+| Device boots without a crash loop | LCD shows the main menu | — |
+| LCD renders text and colors cleanly, no garbled/mirrored pixels | Menu items readable, correct colors (not swapped R/B) | SCK=GPIO7, MOSI=GPIO8, CS=GPIO14, DC=GPIO15, RST=GPIO6, BL=GPIO21 (SPI) |
+| Colors are correct, not inverted (e.g. background isn't white when it should be black) | If colors look inverted, toggle `esp_lcd_panel_invert_color()`'s argument in `display_init()` -- this varies by panel batch | — |
+| Display orientation looks right for your specific panel (not upside-down or mirrored) | If wrong, adjust `esp_lcd_panel_mirror()`/`esp_lcd_panel_swap_xy()` calls (not currently called -- add if needed) | — |
+| Backlight turns on with the device (not separately wired to always-on power) | Screen is lit only when GPIO21 drives it high | GPIO21 |
 
 ## 2. Joystick and buttons
 
@@ -36,7 +38,7 @@ differs — don't just work around it in your head.
 | Text entry grid (`text_entry.c`, used by WiFi Setup Manual's password screen) navigates and appends chars correctly | Matches `tests/test_text_entry.c`'s host-tested logic | via same joystick pins |
 
 Note: `buttons.c`'s comment documents that GPIO0-6 is the only ADC1-capable
-range on the P4, already crowded by GPIO0/1/2 (IR) and GPIO7/8 (OLED) —
+range on the P4, already crowded by GPIO0/1/2 (IR) and GPIO7/8 (LCD SCK/MOSI) —
 if you rewire the joystick, keep X/Y on ADC1-capable pins.
 
 ## 3. Vibration motor

@@ -6,11 +6,13 @@
 #include "display.h"
 
 #define VISIBLE_ROWS DISPLAY_ROWS
-#define ROW_HEIGHT_PX 8
+#define ROW_HEIGHT_PX 16 // matches the 8x16 font
 
 // Entry animation: the whole list slides in from the right edge and eases
 // into place. Small and dependency-free on purpose (no float math needed).
-#define ANIM_START_OFFSET_PX 40
+// Scaled up from the old 128px-wide OLED's 40px offset to stay proportional
+// on the 240px-wide panel.
+#define ANIM_START_OFFSET_PX 75
 #define ANIM_STEP_DIVISOR 3 // higher = slower ease-out
 
 void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count)
@@ -147,10 +149,10 @@ void menu_render(const menu_t *menu)
         label[n] = '\0';
 
         if (is_selected && menu->anim_offset_px == 0) {
-            display_fill_rect(0, y, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX);
-            display_draw_text_px(x, y, label, true);
+            display_fill_rect(0, y, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX, DISPLAY_COLOR_ACCENT);
+            display_draw_text_px(x, y, label, DISPLAY_COLOR_ACCENT_TEXT, DISPLAY_COLOR_ACCENT);
         } else {
-            display_draw_text_px(x, y, label, false);
+            display_draw_text_px(x, y, label, DISPLAY_COLOR_TEXT, DISPLAY_COLOR_BACKGROUND);
         }
     }
 

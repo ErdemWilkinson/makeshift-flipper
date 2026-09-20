@@ -3,126 +3,143 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
-#include "esp_lcd_panel_ssd1306.h"
+#include "esp_lcd_panel_st7789.h"
 #include "esp_log.h"
-#include "font8x8_basic.h"
+#include "font8x16_basic.h"
 
-// Test profile: use two otherwise unused pins so the OLED can be checked
-// independently of the P4-Pico's default I2C header pins.
-#define I2C_SDA_GPIO 14
-#define I2C_SCL_GPIO 15
-#define I2C_PORT     I2C_NUM_0
-#define OLED_ADDR_PRIMARY  0x3C
-#define OLED_ADDR_FALLBACK 0x3D
+// SPI pins for the ST7789 LCD, on their own bus (SPI3_HOST) separate from
+// the RC522's SPI2_HOST (GPIO9-13) -- no bus sharing, no chip-select
+// contention between the two SPI peripherals. GPIO7/8 are free now that
+// the OLED's I2C wiring is gone; GPIO14/15 are free because
+// ir_direction_init() is not called on this build (see KNOWN_ISSUES.md
+// Round 13) -- if that ever changes, this panel's CS/DC need to move, since
+// GPIO14/15 are ir_direction.c's GPIO_SOUTH/GPIO_WEST.
+#define LCD_SCK_GPIO  7
+#define LCD_MOSI_GPIO 8
+#define LCD_CS_GPIO   14
+#define LCD_DC_GPIO   15
+#define LCD_RST_GPIO  6
+#define LCD_BL_GPIO   21 // backlight enable; tie to 3V3 instead if your module has no BL pin
 
-#define PANEL_WIDTH  128
-#define PANEL_HEIGHT 64
+#define LCD_SPI_HOST     SPI3_HOST
+#define LCD_SPI_CLOCK_HZ (40 * 1000 * 1000) // 40MHz, within the ST7789's rated SPI clock
+
+#define PANEL_WIDTH  DISPLAY_WIDTH_PX
+#define PANEL_HEIGHT DISPLAY_HEIGHT_PX
 
 static const char *TAG = "display";
 
 static esp_lcd_panel_handle_t s_panel = NULL;
-static uint8_t s_framebuf[PANEL_WIDTH * PANEL_HEIGHT / 8];
+// RGB565, one uint16_t per pixel -- 240*240*2 = 115200 bytes. Comfortably
+// within the P4's internal RAM; if that ever changes, this is the first
+// thing to move to PSRAM (heap_caps_malloc(..., MALLOC_CAP_SPIRAM)).
+static uint16_t s_framebuf[PANEL_WIDTH * PANEL_HEIGHT];
 
 void display_init(void)
 {
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_PORT,
-        .sda_io_num = I2C_SDA_GPIO,
-        .scl_io_num = I2C_SCL_GPIO,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+    gpio_config_t bl_cfg = {
+        .pin_bit_mask = (1ULL << LCD_BL_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
     };
-    i2c_master_bus_handle_t bus_handle;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus_handle));
+    gpio_config(&bl_cfg);
+    gpio_set_level(LCD_BL_GPIO, 1); // backlight on
 
-    // SSD1306 modules are commonly wired at 0x3C, but some boards expose
-    // the alternate 0x3D address. Probe both before creating the panel.
-    uint8_t oled_addr = OLED_ADDR_PRIMARY;
-    esp_err_t probe_result = i2c_master_probe(bus_handle, oled_addr, 100);
-    if (probe_result != ESP_OK) {
-        oled_addr = OLED_ADDR_FALLBACK;
-        probe_result = i2c_master_probe(bus_handle, oled_addr, 100);
-    }
-    if (probe_result != ESP_OK) {
-        // A disconnected display must not put the whole device into a reset
-        // loop. Drawing still updates the in-memory framebuffer; flushing is
-        // simply a no-op until an OLED responds on the I2C bus.
-        ESP_LOGE(TAG, "No SSD1306 found on GPIO14/GPIO15 (tried 0x3C and 0x3D)");
+    spi_bus_config_t bus_cfg = {
+        .sclk_io_num = LCD_SCK_GPIO,
+        .mosi_io_num = LCD_MOSI_GPIO,
+        .miso_io_num = -1, // write-only panel, no MISO line used
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = PANEL_WIDTH * PANEL_HEIGHT * sizeof(uint16_t),
+    };
+    esp_err_t err = spi_bus_initialize(LCD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    if (err != ESP_OK) {
+        // A failed bus init (e.g. pins already claimed) must not wedge the
+        // whole device. Drawing still updates the in-memory framebuffer;
+        // flushing is simply a no-op until a panel is attached.
+        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(err));
         return;
     }
 
-    esp_lcd_panel_io_i2c_config_t io_cfg = {
-        .dev_addr = oled_addr,
-        .scl_speed_hz = 400000,
-        .control_phase_bytes = 1,
+    esp_lcd_panel_io_spi_config_t io_cfg = {
+        .dc_gpio_num = LCD_DC_GPIO,
+        .cs_gpio_num = LCD_CS_GPIO,
+        .pclk_hz = LCD_SPI_CLOCK_HZ,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
-        .dc_bit_offset = 6,
+        .spi_mode = 0,
+        .trans_queue_depth = 10,
     };
     esp_lcd_panel_io_handle_t io_handle;
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(bus_handle, &io_cfg, &io_handle));
+    err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST, &io_cfg, &io_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SPI panel IO init failed: %s", esp_err_to_name(err));
+        return;
+    }
 
     esp_lcd_panel_dev_config_t panel_cfg = {
-        .bits_per_pixel = 1,
-        .reset_gpio_num = -1,
+        .reset_gpio_num = LCD_RST_GPIO,
+        .rgb_endian = LCD_RGB_ENDIAN_RGB,
+        .bits_per_pixel = 16,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(io_handle, &panel_cfg, &s_panel));
+    err = esp_lcd_new_panel_st7789(io_handle, &panel_cfg, &s_panel);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ST7789 panel init failed: %s", esp_err_to_name(err));
+        s_panel = NULL;
+        return;
+    }
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true)); // most 1.8" ST7789 modules need this to show true colors
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     display_clear();
     display_flush();
-    ESP_LOGI(TAG, "OLED initialized at 0x%02X", oled_addr);
+    ESP_LOGI(TAG, "ST7789 LCD initialized (SCK=%d MOSI=%d CS=%d DC=%d RST=%d)",
+             LCD_SCK_GPIO, LCD_MOSI_GPIO, LCD_CS_GPIO, LCD_DC_GPIO, LCD_RST_GPIO);
 }
 
 void display_clear(void)
 {
-    memset(s_framebuf, 0, sizeof(s_framebuf));
+    for (int i = 0; i < PANEL_WIDTH * PANEL_HEIGHT; i++) {
+        s_framebuf[i] = DISPLAY_COLOR_BACKGROUND;
+    }
 }
 
-static inline void set_pixel(int x, int y, bool invert)
+static inline void set_pixel(int x, int y, display_color_t color)
 {
     if (x < 0 || x >= PANEL_WIDTH || y < 0 || y >= PANEL_HEIGHT) {
         return;
     }
-    int byte_idx = (y / 8) * PANEL_WIDTH + x;
-    uint8_t mask = 1 << (y % 8);
-    if (invert) {
-        s_framebuf[byte_idx] ^= mask;
-    } else {
-        s_framebuf[byte_idx] |= mask;
-    }
+    s_framebuf[y * PANEL_WIDTH + x] = color;
 }
 
-void display_draw_text_px(int x0, int y0, const char *text, bool invert)
+void display_draw_text_px(int x0, int y0, const char *text, display_color_t fg, display_color_t bg)
 {
     for (int i = 0; text[i] != '\0'; i++) {
-        const uint8_t *glyph = font8x8_basic[(uint8_t)text[i]];
+        const uint8_t *glyph = font8x16_basic[(uint8_t)text[i]];
         int cx0 = x0 + i * 8;
 
         if (cx0 >= PANEL_WIDTH || cx0 + 8 <= 0) {
             continue; // fully off-screen horizontally
         }
 
-        for (int gy = 0; gy < 8; gy++) {
+        for (int gy = 0; gy < 16; gy++) {
             uint8_t bits = glyph[gy];
             for (int gx = 0; gx < 8; gx++) {
-                if (!(bits & (1 << gx))) {
-                    continue;
-                }
-                set_pixel(cx0 + gx, y0 + gy, invert);
+                bool on = (bits & (1 << gx)) != 0;
+                set_pixel(cx0 + gx, y0 + gy, on ? fg : bg);
             }
         }
     }
 }
 
-void display_draw_text(int row, int col, const char *text)
+void display_draw_text_color(int row, int col, const char *text, display_color_t color)
 {
     if (row < 0 || row >= DISPLAY_ROWS || col < 0) {
         return;
@@ -142,14 +159,19 @@ void display_draw_text(int row, int col, const char *text)
     }
     clipped[i] = '\0';
 
-    display_draw_text_px(col * 8, row * 8, clipped, false);
+    display_draw_text_px(col * 8, row * 16, clipped, color, DISPLAY_COLOR_BACKGROUND);
 }
 
-void display_fill_rect(int x, int y, int w, int h)
+void display_draw_text(int row, int col, const char *text)
+{
+    display_draw_text_color(row, col, text, DISPLAY_COLOR_TEXT);
+}
+
+void display_fill_rect(int x, int y, int w, int h, display_color_t color)
 {
     for (int yy = y; yy < y + h; yy++) {
         for (int xx = x; xx < x + w; xx++) {
-            set_pixel(xx, yy, false);
+            set_pixel(xx, yy, color);
         }
     }
 }

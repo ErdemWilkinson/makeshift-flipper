@@ -22,7 +22,7 @@
 // firmware PIN would be public knowledge for every unit and wouldn't stop
 // a targeted attacker, only casual/opportunistic joins -- so the password
 // is generated fresh per setup session by the P4 (which displays it on its
-// own OLED) and passed in here via `pin`, rather than being a compile-time
+// own screen) and passed in here via `pin`, rather than being a compile-time
 // constant.
 // Capped at 1: ESP-IDF's softAP has no real 802.11 client-isolation flag,
 // so a second device joining the same AP while setup is in progress could
