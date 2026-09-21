@@ -4,6 +4,20 @@ An open, two-MCU handheld for authorized, local hardware experiments. The
 main MCU runs the interface and peripheral logic; an ESP32-C6 provides
 Wi-Fi and passive Bluetooth Low Energy discovery.
 
+> **Responsibility disclaimer:** The hardware and firmware in this
+> repository are technically capable of more than the intended, authorized
+> uses described below — that is true of any RFID reader, IR transceiver,
+> or Wi-Fi/BLE radio, and no firmware control can fully prevent someone
+> from repurposing what they hold in their hands. Nothing here grants
+> permission to act beyond what the law and the target's owner allow. If
+> you use this device — or code derived from it — to read, clone,
+> transmit, or monitor something you do not own or are not explicitly
+> authorized to test, that is your action and your legal responsibility
+> alone. Neither the author(s) of this project nor any state or authority
+> approves, endorses, or is responsible for unauthorized or unlawful use;
+> building or owning this device does not authorize anything it is
+> technically able to do.
+
 > **Prototype status:** The firmware has CI builds and host-side logic tests,
 > but the current ST7789 display configuration and the C6 integration still
 > require real-hardware validation. Features described below are implemented
@@ -37,24 +51,23 @@ local, consent-based use:
 See the [capability and use-boundary assessment](YETENEK_VE_UYUM_DEGERLENDIRMESI.md)
 for the detailed feature, privacy, safety, and added-component evaluation.
 
-## Built to stay on the right side of the line
+## What this hardware can do — legitimate use vs. what it can be misused for
 
-Every capability below was a deliberate design choice, not a missing
-feature — each row is something the firmware could technically do more of,
-and doesn't:
+The right-hand column is not a feature list or how-to; it exists so you
+know what to explicitly avoid. Doing any of it without owning the target
+or holding the owner's explicit, recorded authorization is on you — see
+the disclaimer above and the
+[full assessment](YETENEK_VE_UYUM_DEGERLENDIRMESI.md) for details and
+built-in limits.
 
-| Capability | What it does | What it deliberately doesn't do |
+| Capability | Legitimate, authorized use | Possible with this hardware, but unauthorized/unlawful — do not do this |
 | --- | --- | --- |
-| Wi-Fi monitor | Passively logs nearby beacon/probe SSID, BSSID, RSSI, channel | No deauthentication, no management-frame injection, no password capture or cracking |
-| Bluetooth scan | Passively discovers nearby BLE advertisements (address, name, RSSI) | No pairing, no connecting, no GATT read/write, no classic Bluetooth |
-| RFID/NFC | Reads EM4100 (125 kHz) and MIFARE Classic UIDs; limited clone flow for owned test cards | No general-purpose card emulation, no writing 125 kHz tags, no writing target trailer blocks |
-| Infrared | Learns and replays NEC remote codes, up to 16 saved entries | No arbitrary protocol brute-forcing, no unbounded code library |
-| Diagnostics export | Optional local-LAN upload of the on-device error history | No cloud upload, no telemetry phone-home, off by default |
-| Data retention | IR/RFID libraries and error history stay on-device in flash | No default persistent storage of Wi-Fi/BLE scan results; cleared at session end unless explicitly saved |
-
-Camera/OCR, microphone, GPS, Sub-GHz, remote control, and cellular radios
-are not present in the firmware at all — see the assessment linked above
-for what would be required to add any of them responsibly.
+| 125 kHz RFID (RDM6300) | Reading your own EM4100 tags; lab asset inventory | Reading someone else's access card or fob without their permission |
+| 13.56 MHz NFC (RC522) | Inspecting/backing up your own MIFARE Classic test card | Cloning another person's or an organization's access card to gain entry you're not authorized for |
+| Infrared (learn + NEC transmit) | Backing up your own remote; home-automation testing | Controlling or disrupting someone else's TV, A/C, or other IR device without consent |
+| Wi-Fi scan/monitor (via C6) | Surveying your own network's coverage/channels | Passively logging neighboring networks or devices for tracking or profiling purposes |
+| Passive BLE scan (via C6) | Checking your own BLE devices' advertisement visibility | Using nearby device addresses/RSSI to track people's presence or movement |
+| Diagnostics / local log export | Keeping your own device's error history for debugging | Exporting or retaining scan/card data about people or networks you have no authorization over |
 
 ## Current firmware scope
 
