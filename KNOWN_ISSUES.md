@@ -972,6 +972,62 @@ here could otherwise assume on-device AI was abandoned rather than moved.
   no integration code in either firmware tree for OCR or voice commands,
   automatic or otherwise.
 
+## Round 18 (2026-09-21): follow-up on Round 17 — one more voice CTC
+## training attempt found, and a bug in its new evaluation script
+
+Checked whether any of Round 17's open items had moved. OCR's numbers
+(13.09% CER, 57.35% exact-line accuracy) are unchanged since Round 17 —
+nothing new to report there. The voice command classifier (the actual
+ship target) still has no recorded dataset and no trained artifact —
+also unchanged; `voice/scripts/record_commands.py` (added this round,
+see its own commit) is tooling to make that recording possible, not a
+substitute for someone actually sitting down and using it.
+
+What's new is a second voice CTC baseline attempt, found already in
+progress on disk:
+
+- 🔴 **INCOMPLETE, NOT EVALUABLE:** `voice/artifacts/asr_common_voice_full_v3/`
+  (a newer, from-scratch training attempt, different/smaller architecture
+  than `stage0-2` — a single Conv1D+BiGRU block per
+  `train_asr_common_voice.py`'s `build_models()`, vs. `stage2`'s
+  presumably larger network) stopped partway through: it has
+  `best_training.keras` (a mid-training checkpoint) and a 10-row
+  `history.csv`, but **no `inference.keras`** — the file
+  `train_asr_common_voice.py` only writes after its training loop
+  finishes normally. Its `.err.log` shows a `No Python at "C:\Users\...\
+  python.exe` path error from an earlier, separate failed launch attempt
+  (timestamped ~2 hours before the checkpoint files), so the run that
+  actually produced `history.csv`/`best_training.keras` happened outside
+  that logged invocation and was itself cut short before finishing —
+  exactly how or why isn't recoverable from what's on disk. **This model
+  cannot be scored**: `evaluate.py`/`evaluate_asr.py` need an inference
+  model, and only a mid-training checkpoint with the training-time CTC
+  loss layer attached exists. One point of interest for whoever resumes
+  this: `history.csv`'s last logged `val_loss` (64.6) is already lower
+  than `stage2`'s final `val_loss` (77.4, from `stage2/metrics.json`) at
+  fewer epochs (10 vs. `stage2`'s presumably-longer run) — loss values
+  aren't comparable across different architectures/data splits with
+  certainty, but it's at least consistent with this attempt being on a
+  reasonable track before it was interrupted, not a dead end.
+- 🔴 **CONFIRMED BUG:** `voice/scripts/evaluate_asr.py` (added this round
+  by another session) calls
+  `tf.keras.models.load_model(args.model, compile=False)` with no
+  `custom_objects` argument. Any `.keras` file saved as a *training*
+  model (i.e. anything wrapped in `train_asr_common_voice.py`'s
+  `CtcLoss(tf.keras.layers.Layer)`, like `best_training.keras` above)
+  fails to load with `TypeError: Cannot deserialize object of type
+  'CtcLoss'` — confirmed by attempting exactly that load. The training
+  script itself already knows how to load these correctly
+  (`train_asr_common_voice.py`'s own `--warm-start` path passes
+  `custom_objects={"CtcLoss": CtcLoss}`), so the fix is mechanical: import
+  `CtcLoss` from `train_asr_common_voice` (or duplicate the tiny class)
+  and pass the same `custom_objects` dict in `evaluate_asr.py`. This
+  doesn't affect `stage0-2`'s already-reported CER/WER numbers, which
+  were measured against properly-saved `inference.keras` files with a
+  different, working evaluation path — it only blocks evaluating a
+  training-format checkpoint like `full_v3`'s, which is exactly the case
+  that would have surfaced it.
+
 ## General
 
 - Both firmwares build clean (see Round 12). The **P4 main firmware** has
