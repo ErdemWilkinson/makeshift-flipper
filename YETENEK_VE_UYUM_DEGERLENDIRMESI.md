@@ -63,6 +63,31 @@ These absences are not a security guarantee: MIFARE Classic cloning, IR replay,
 and wireless-environment observation can still cause harm in an unauthorized
 context.
 
+## High-risk capabilities intentionally excluded from the product
+
+The hardware platform could be changed by a third party, like any
+general-purpose embedded system. The following capabilities are often
+marketed as attention-grabbing "multi-tool" features, but they are **not
+implemented, planned, or supported** in this repository. They are listed here
+to make the project boundary explicit, not as a usage or implementation guide.
+
+| Excluded capability | Why it is high risk | Product position | Safe, authorized alternative |
+|---|---|---|---|
+| Wi-Fi deauthentication / disassociation | Can intentionally disconnect people and devices from a network and disrupt service | Prohibited; no management-frame injection exists in this project | Passive channel/AP inventory on a network you administer |
+| Rogue access point or captive-portal impersonation | Can mislead users into joining a fake network and expose credentials or traffic | Prohibited; setup AP is limited to configuring the owner's device | Use the documented owner-managed setup flow with a unique session password |
+| Wi-Fi credential capture, cracking, or password attacks | Targets access credentials and can enable unauthorized network entry | Prohibited; no capture, handshake-collection, or cracking workflow exists | Audit the owner's Wi-Fi configuration and use strong WPA2/WPA3 credentials |
+| Active Wi-Fi packet injection or disruptive probing | Can alter nearby network behavior, degrade service, or interfere with other users | Prohibited; monitor mode is receive-only by design | Perform passive site surveys and inspect the owner's AP configuration |
+| BLE spoofing, pairing attacks, or GATT access | Can impersonate, track, or access another person's BLE device/data | Prohibited; BLE support is advertisement-only and never connects | Passive visibility testing for devices you own |
+| General RFID/NFC emulation or payment/access-card bypass | Could imitate credentials or undermine physical-access and payment controls | Not implemented and outside product scope | Test owned training cards and document system weaknesses through authorized channels |
+| RF jamming or high-power transmission | Can interfere with communications, safety systems, and regulated spectrum use | Strictly prohibited; no jamming or external high-gain RF design is included | Receiver-first measurements in a controlled, regulation-compliant lab |
+| USB HID injection or malicious peripheral behavior | Can issue unwanted commands to a connected computer or collect data | Not implemented; USB should remain limited to approved update/data-transfer roles | Signed firmware updates and an explicitly selected data-export mode |
+| Covert camera, microphone, or location tracking | Enables non-consensual collection of sensitive visual, audio, or location data | Not implemented; any future sensor design needs hardware indicators and explicit consent controls | Visible, user-initiated accessibility or lab features with no default recording |
+
+These boundaries are part of the product identity: the project is intended to
+be technically interesting because it integrates multiple local peripherals
+and a two-MCU architecture, not because it disrupts, impersonates, or secretly
+collects data from other people or systems.
+
 ## If a component is added: likely capabilities and boundaries
 
 This table is not a purchasing or implementation plan. Each row also states
