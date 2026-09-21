@@ -23,3 +23,5 @@ voice/pip-install*.log
 ocr/
 voice/
 OCR_TINYML_NOTES.md
+OCR_TRAINING_SLOWDOWN_REPORT.md
+ASR_TRAINING_REPORT.md
