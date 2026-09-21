@@ -4,7 +4,7 @@ Makeshift Flipper is an open DIY handheld for safely exploring the everyday radi
 
 > **Prototype status:** both ESP-IDF projects compile, but this firmware has not yet been flashed to or validated on the target hardware. The visual below is a system overview, not a hardware demo; a real device GIF/video will be added after the first on-device test.
 
-![Conceptual system overview](docs/makeshift-flipper-system-overview.png)
+![Technical overview](docs/makeshift-flipper-technical-overview.jpg)
 
 ## Run it
 
