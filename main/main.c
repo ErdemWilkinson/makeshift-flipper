@@ -540,11 +540,42 @@ static void action_rfid_save_1356mhz(void)
 // shift up, oldest-first ordering same as ir_library.h). There is no
 // PRESS:send here (unlike IR Library) -- RFID readers in this codebase are
 // read-only inputs, there is nothing to "replay" a UID onto. BACK exits.
+// Visible rows for a "header + scrolling list + 1 footer line" screen:
+// row 0 is the header, the last row is the footer, everything between is
+// list body. Shared by action_rfid_library()/action_ir_library()/
+// action_error_history() below, all of which can hold more entries
+// (RFID/IR: up to 16, Errors: up to DIAG_HISTORY_CAPACITY=24) than fit on
+// screen at once -- see LIST_VISIBLE_ROWS's callers for the scroll-window
+// logic this enables. Previously these three screens hardcoded their
+// footer to row 7 while letting the list use rows 1..(DISPLAY_ROWS-2)
+// (i.e. up to row 13) with no scroll window at all: past 7 entries the
+// footer text got overwritten by list rows drawn on top of it, and once
+// `selected`/`top` moved past what fit on screen the cursor became
+// invisible with no way to tell where it was.
+#define LIST_HEADER_ROWS 1
+#define LIST_FOOTER_ROWS 1
+#define LIST_VISIBLE_ROWS (DISPLAY_ROWS - LIST_HEADER_ROWS - LIST_FOOTER_ROWS)
+
+// Keeps `top` (the index of the first visible row) such that `selected`
+// stays within the LIST_VISIBLE_ROWS-tall window -- same clamping logic as
+// menu.c's menu_clamp_scroll(), reimplemented here since these screens
+// aren't menu_t-backed.
+static void list_clamp_scroll(int selected, int *top)
+{
+    if (selected < *top) {
+        *top = selected;
+    } else if (selected >= *top + LIST_VISIBLE_ROWS) {
+        *top = selected - LIST_VISIBLE_ROWS + 1;
+    }
+}
+
 static void action_rfid_library(void)
 {
     int selected = 0;
+    int top = 0;
     for (;;) {
         int count = rfid_library_count();
+        list_clamp_scroll(selected, &top);
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "RFID Library (%d)", count);
@@ -554,15 +585,15 @@ static void action_rfid_library(void)
             display_draw_text(2, 0, "No tags saved");
             display_draw_text(3, 0, "Use RFID Save first");
         } else {
-            for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
-                const rfid_library_entry_t *e = rfid_library_get(i);
+            for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
+                const rfid_library_entry_t *e = rfid_library_get(top + i);
                 char line[DISPLAY_COLS + 1];
                 char kind = (e->kind == RFID_LIBRARY_KIND_125KHZ) ? 'L' : 'H'; // Low/High freq
-                snprintf(line, sizeof(line), "%c%c %.17s", (i == selected) ? '>' : ' ', kind, e->name);
-                display_draw_text(1 + i, 0, line);
+                snprintf(line, sizeof(line), "%c%c %.17s", (top + i == selected) ? '>' : ' ', kind, e->name);
+                display_draw_text(LIST_HEADER_ROWS + i, 0, line);
             }
         }
-        display_draw_text(7, 0, count > 0 ? "LEFT: delete" : "BACK: exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, count > 0 ? "LEFT: delete" : "BACK: exit");
         display_flush();
 
         button_id_t event;
@@ -663,8 +694,10 @@ static void action_ir_learn(void)
 static void action_ir_library(void)
 {
     int selected = 0;
+    int top = 0;
     for (;;) {
         int count = ir_library_count();
+        list_clamp_scroll(selected, &top);
         display_clear();
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "IR Library (%d)", count);
@@ -674,14 +707,14 @@ static void action_ir_library(void)
             display_draw_text(2, 0, "No codes saved");
             display_draw_text(3, 0, "Use IR Learn first");
         } else {
-            for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
-                const ir_library_entry_t *e = ir_library_get(i);
+            for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
+                const ir_library_entry_t *e = ir_library_get(top + i);
                 char line[DISPLAY_COLS + 1];
-                snprintf(line, sizeof(line), "%c%.19s", (i == selected) ? '>' : ' ', e->name);
-                display_draw_text(1 + i, 0, line);
+                snprintf(line, sizeof(line), "%c%.19s", (top + i == selected) ? '>' : ' ', e->name);
+                display_draw_text(LIST_HEADER_ROWS + i, 0, line);
             }
         }
-        display_draw_text(7, 0, count > 0 ? "PRESS:send LEFT:del" : "BACK: exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, count > 0 ? "PRESS:send LEFT:del" : "BACK: exit");
         display_flush();
 
         button_id_t event;
@@ -818,15 +851,25 @@ static void action_wifi_setup_manual(void)
     }
 
     // --- Network picker: UP/DOWN moves, PRESS selects, LEFT cancels. ---
+    // count can be up to C6_MAX_NETWORKS (16), more than fit in
+    // DISPLAY_ROWS-1 (14) rows below the header -- scroll the window with
+    // `top` the same way action_rfid_library()/action_ir_library() do, so
+    // `selected` never lands on a row that isn't drawn.
     int selected = 0;
+    int top = 0;
     bool picked = false;
     bool cancelled = false;
     for (;;) {
+        if (selected < top) {
+            top = selected;
+        } else if (selected >= top + (DISPLAY_ROWS - 1)) {
+            top = selected - (DISPLAY_ROWS - 1) + 1;
+        }
         display_clear();
         display_draw_text_color(0, 0, "Pick a network:", DISPLAY_COLOR_ACCENT);
-        for (int i = 0; i < count && i < DISPLAY_ROWS - 1; i++) {
+        for (int i = 0; i < count - top && i < DISPLAY_ROWS - 1; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%c%.20s", (i == selected) ? '>' : ' ', networks[i].ssid);
+            snprintf(line, sizeof(line), "%c%.20s", (top + i == selected) ? '>' : ' ', networks[top + i].ssid);
             display_draw_text(1 + i, 0, line);
         }
         display_flush();
@@ -945,7 +988,11 @@ static void action_wifi_monitor(void)
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "WiFi Monitor (%d)", count);
         display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
-        for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
+        // count can be up to C6_MONITOR_MAX_APS (32); only the first
+        // LIST_VISIBLE_ROWS fit without drawing over the footer below (this
+        // list has no scroll -- it's a live, order-shifting feed, not
+        // something to page through with a cursor).
+        for (int i = 0; i < count && i < LIST_VISIBLE_ROWS; i++) {
             char line[DISPLAY_COLS + 1];
             // Clamp both text fields so the largest channel/RSSI values
             // plus the terminator always fit within DISPLAY_COLS.
@@ -953,9 +1000,9 @@ static void action_wifi_monitor(void)
                      aps[i].ssid[0] ? aps[i].ssid : "(hid)",
                      aps[i].sec[0] ? aps[i].sec : "?",
                      aps[i].channel, aps[i].rssi);
-            display_draw_text(1 + i, 0, line);
+            display_draw_text(LIST_HEADER_ROWS + i, 0, line);
         }
-        display_draw_text(7, 0, "BACK: stop+exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "BACK: stop+exit");
         display_flush();
 
         bool stop = false;
@@ -1007,13 +1054,15 @@ static void action_bt_scan(void)
         char header[DISPLAY_COLS + 1];
         snprintf(header, sizeof(header), "BT Scan (%d)", count);
         display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
-        for (int i = 0; i < count && i < DISPLAY_ROWS - 2; i++) {
+        // Same LIST_VISIBLE_ROWS clamp as action_wifi_monitor() above --
+        // count can be up to C6_BT_MAX_DEVICES (32).
+        for (int i = 0; i < count && i < LIST_VISIBLE_ROWS; i++) {
             char line[DISPLAY_COLS + 1];
             snprintf(line, sizeof(line), "%.13s %ddBm",
                      devices[i].name[0] ? devices[i].name : "(no name)", devices[i].rssi);
-            display_draw_text(1 + i, 0, line);
+            display_draw_text(LIST_HEADER_ROWS + i, 0, line);
         }
-        display_draw_text(7, 0, "BACK: stop+exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "BACK: stop+exit");
         display_flush();
 
         bool stop = false;
@@ -1119,16 +1168,16 @@ static void action_error_history(void)
             // rather than assuming module/code names fit, since diag.h's
             // DIAG_MODULE_MAX_LEN/DIAG_CODE_MAX_LEN allow longer names
             // than any single field here.
-            for (int i = 0; i < count - top && i < DISPLAY_ROWS - 2; i++) {
+            for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
                 const diag_entry_t *e = &entries[top + i];
                 char ago[16];
                 format_relative_time(ago, sizeof(ago), e->timestamp_us);
                 char line[DISPLAY_COLS + 1];
                 snprintf(line, sizeof(line), "%.12s %.9s %.7s", e->module, e->code, ago);
-                display_draw_text(1 + i, 0, line);
+                display_draw_text(LIST_HEADER_ROWS + i, 0, line);
             }
         }
-        display_draw_text(7, 0, count > 0 ? "PRESS:send BACK:exit" : "BACK: exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, count > 0 ? "PRESS:send BACK:exit" : "BACK: exit");
         display_flush();
 
         button_id_t event;
@@ -1144,7 +1193,12 @@ static void action_error_history(void)
             action_send_error_log(entries, count);
         } else if (event == BUTTON_UP && top > 0) {
             top--;
-        } else if (event == BUTTON_DOWN && top < count - 1) {
+        } else if (event == BUTTON_DOWN && top < count - LIST_VISIBLE_ROWS) {
+            // Stop once the last row is on screen -- previously this
+            // allowed `top` up to count-1, which (now that the list only
+            // shows LIST_VISIBLE_ROWS rows instead of drawing over the
+            // footer) would scroll a mostly-blank page into view with
+            // only the very last entry showing at the top.
             top++;
         }
     }
