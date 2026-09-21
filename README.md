@@ -1,13 +1,22 @@
 # ErdemFlip / Makeshift Flipper
 
-An open, two-MCU ESP32 handheld for authorized, local hardware experiments.
-The ESP32-P4 runs the interface and peripheral logic; an ESP32-C6 provides
+An open, two-MCU handheld for authorized, local hardware experiments. The
+main MCU runs the interface and peripheral logic; an ESP32-C6 provides
 Wi-Fi and passive Bluetooth Low Energy discovery.
 
 > **Prototype status:** The firmware has CI builds and host-side logic tests,
 > but the current ST7789 display configuration and the C6 integration still
 > require real-hardware validation. Features described below are implemented
 > scope, not claims of field-proven operation.
+
+> **Migration in progress:** the main MCU is being moved from ESP32-P4
+> (`main/`, ESP-IDF) to a Raspberry Pi Pico / RP2040 (`pico/`, Pico SDK) to
+> use the Waveshare Pico-LCD-1.3 display module (built-in digital 5-way
+> joystick + 4 buttons, dropping the separate analog joystick). The ESP32-C6
+> companion and its UART wire protocol are unchanged by this migration. The
+> `main/` ESP32-P4 tree stays intact and buildable throughout; `pico/` is the
+> new tree, currently mid-port and not yet hardware-validated. See
+> [pico/README.md](pico/README.md) for its status.
 
 ![Technical overview](docs/makeshift-flipper-technical-overview.jpg)
 
@@ -33,6 +42,7 @@ for the detailed feature, privacy, safety, and added-component evaluation.
 | Area | Implemented scope | Validation status |
 | --- | --- | --- |
 | Interface | 240x240 ST7789 color UI, analog joystick navigation, standalone BACK button, error history | Current display wiring needs hardware validation |
+| Interface (`pico/`, in progress) | Same UI on a Waveshare Pico-LCD-1.3 (240x240 ST7789), digital 5-way joystick + B=BACK button, built into the display module | Not yet hardware-validated, see [pico/README.md](pico/README.md) |
 | RFID/NFC | 125 kHz EM4100 reads; RC522 MIFARE Classic UID read, saved UID library, limited authorized clone flow | Hardware validation pending |
 | Infrared | NEC receive, learn, save, browse, delete, and transmit | Hardware validation pending |
 | Wi-Fi | C6-assisted scan, owner-managed setup, passive channel-hopping AP monitor | C6 end-to-end validation pending |
@@ -52,6 +62,12 @@ ESP32-P4 (main/)                         ESP32-C6 (c6-firmware/)
 The two targets are independent ESP-IDF projects. Build and flash each one
 separately; see [the C6 README](c6-firmware/README.md) for its commands and
 UART protocol.
+
+A Raspberry Pi Pico (RP2040) main-MCU replacement for `main/` is being
+built in parallel in [`pico/`](pico/README.md) — same role split (main MCU
+handles UI/input/display/RFID/IR, C6 handles Wi-Fi/BLE over the same UART
+protocol), different chip and SDK. See that directory's README for pin
+plan and current port status.
 
 ## Build
 
@@ -100,7 +116,8 @@ hardware test matrix.
 | Path | Role |
 | --- | --- |
 | `main/` | ESP32-P4 firmware: UI, input, RFID/NFC, IR, diagnostics, and C6 link |
-| `c6-firmware/` | ESP32-C6 companion firmware: Wi-Fi and passive BLE work |
+| `pico/` | Raspberry Pi Pico (RP2040) port of `main/`, in progress — see [pico/README.md](pico/README.md) |
+| `c6-firmware/` | ESP32-C6 companion firmware: Wi-Fi and passive BLE work (unchanged by the Pico migration) |
 | `tests/` | Hardware-independent host tests for parsers, storage libraries, UI entry, and diagnostics |
 | `.github/workflows/build.yml` | CI for both ESP-IDF targets and the host tests |
 | `HARDWARE_TEST_MATRIX.md` | Hardware acceptance checklist |
