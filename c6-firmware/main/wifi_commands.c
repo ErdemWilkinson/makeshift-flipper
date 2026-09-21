@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
+#include "text_sanitize.h"
 #include "uart_link.h"
 
 static const char *TAG = "wifi_commands";
@@ -103,6 +104,19 @@ void wifi_commands_scan(void)
         // but that isn't a documented guarantee -- force it explicitly so
         // a non-terminated SSID can't run %s past the array.
         records[i].ssid[sizeof(records[i].ssid) - 1] = '\0';
+        // An SSID is arbitrary 802.11 octets, not text -- a nearby AP can
+        // legally broadcast one containing ',' or CR/LF, which would
+        // otherwise split or terminate this NET: line early (and, if the
+        // user picks that network, corrupt the CONNECT:<ssid>,<password>
+        // line sent back later). wifi_monitor.c/bt_scan.c already apply
+        // this same sanitize_wire_text() to untrusted SSID/name text on
+        // this same UART link; SCAN was missed. This is lossy (the
+        // original bytes aren't recoverable), which is fine for display
+        // and for re-sending the same sanitized copy back in CONNECT, but
+        // means a network whose real SSID needs a comma/CR/LF can't be
+        // connected to by name through this protocol -- see
+        // KNOWN_ISSUES.md's Round 19 entry.
+        sanitize_wire_text((char *)records[i].ssid);
         snprintf(line, sizeof(line), "NET:%s,%d", (const char *)records[i].ssid, records[i].rssi);
         uart_link_write_line(line);
     }
@@ -333,6 +347,20 @@ void wifi_commands_log_flush(void)
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (client == NULL) {
+        // esp_http_client_init() can return NULL under memory pressure --
+        // every call below this dereferences the handle, so unlike the
+        // explicit malloc checks above this one, a missed check here
+        // wouldn't just fail the upload, it would crash the C6. The log
+        // upload is entirely optional (the on-device Errors history works
+        // without it), so this should degrade to FAIL, not a reboot -- see
+        // KNOWN_ISSUES.md's Round 19 entry.
+        ESP_LOGW(TAG, "esp_http_client_init failed (out of memory?)");
+        free(req_body);
+        free(response_buf);
+        uart_link_write_line("FAIL");
+        return;
+    }
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, req_body, strlen(req_body));
 
