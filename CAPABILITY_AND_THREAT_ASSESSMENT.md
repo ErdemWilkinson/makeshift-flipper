@@ -1,4 +1,4 @@
-# Makeshifter-Emag: Capability, Use-Boundary, and Added-Component Impact Assessment
+# Makeshift Flipper: Capability, Use-Boundary, and Added-Component Impact Assessment
 
 **Date:** 2026-09-21  
 **Scope:** This document is a design and compliance assessment based on the P4

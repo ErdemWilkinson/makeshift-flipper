@@ -1243,6 +1243,46 @@ current scripts.
   round as an open gap in the Round 19 fix; verified fixed in the current
   source, not just re-asserted -- see the file/function names above.)
 
+## Round 24 (2026-09-21): missing-test and workflow self-audit
+
+- 🟠 **CONFIRMED FALSE HOST-TEST COVERAGE CLAIM:** `tests/run_tests.sh` says
+  every `test_*.c` directly includes the corresponding production source, but
+  `tests/test_wifi_pkt_parse.c` instead contains its own copied
+  `parse_pkt_wire_line()` implementation. The production parser is the
+  `static handle_pkt_line()` in `main/net/c6_link.c`; changes to it can break
+  shipping behavior while this test suite stays green. **Required fix:**
+  extract wire parsing into a small production module shared by P4 and the
+  host test, or include `c6_link.c` with UART/FreeRTOS test seams. Do not
+  present this copied-parser test as coverage of production code.
+
+- 🟠 **CONFIRMED OCR REAL-DATA WORKFLOW GAP:** `ocr/scripts/prepare_real_lines.py`
+  writes `data/real_labels.csv`, while `train.py` defaults to only
+  `data/labels.csv`. The OCR README's normal command sequence runs
+  `prepare_real_lines.py` then `train.py` and says real rows are merged, but
+  no merge occurs; real crops are excluded unless the operator separately
+  configures `OCR_LABELS_CSV` with both manifests. This makes the promised
+  real/synthetic calibration balance and real-photo fine-tuning easy to miss.
+  **Required fix:** merge explicitly, make multi-manifest input the default,
+  or make the README command include the required environment variable and
+  print each source's train/validation count.
+
+- 🟡 **CONFIRMED VOICE DOCUMENTATION/METRIC MISMATCH:** `voice/README.md`
+  says normal-volume and whisper-subset accuracy are both reported, whereas
+  `voice/scripts/train.py` writes only overall and whisper validation
+  accuracy. This overlaps the Round 20 acceptance-gap issue but matters on
+  its own: a reader following the documented workflow can mistakenly believe
+  the normal-volume gate has been measured. **Required fix:** either implement
+  normal/quiet metrics and retain the wording, or correct the README until
+  the acceptance evaluator exists.
+
+- 🟡 **STALE OCR HARDWARE TEXT:** the OCR README still describes the device's
+  image-adjacent hardware as a 128x64 SSD1306 OLED, while the firmware was
+  moved to a 240x240 ST7789 LCD. This does not change the core blocker (there
+  is still no camera or inference integration), but stale board descriptions
+  make later pin/memory planning less trustworthy. **Required fix:** update
+  the documentation to distinguish the current ST7789 output panel from the
+  still-missing camera path.
+
 ## General
 
 - Both firmwares build clean (see Round 12). The **P4 main firmware** has
