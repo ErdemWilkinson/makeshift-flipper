@@ -16,6 +16,7 @@ idf_component_register(
         "feedback/vibration.c"
         "net/c6_link.c"
         "net/json_escape.c"
+        "net/pkt_line_parse.c"
         "diag/diag.c"
     INCLUDE_DIRS
         "."

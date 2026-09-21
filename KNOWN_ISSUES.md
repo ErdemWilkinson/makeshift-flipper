@@ -1245,43 +1245,101 @@ current scripts.
 
 ## Round 24 (2026-09-21): missing-test and workflow self-audit
 
-- 🟠 **CONFIRMED FALSE HOST-TEST COVERAGE CLAIM:** `tests/run_tests.sh` says
-  every `test_*.c` directly includes the corresponding production source, but
-  `tests/test_wifi_pkt_parse.c` instead contains its own copied
-  `parse_pkt_wire_line()` implementation. The production parser is the
-  `static handle_pkt_line()` in `main/net/c6_link.c`; changes to it can break
-  shipping behavior while this test suite stays green. **Required fix:**
-  extract wire parsing into a small production module shared by P4 and the
-  host test, or include `c6_link.c` with UART/FreeRTOS test seams. Do not
-  present this copied-parser test as coverage of production code.
+- ✅ **FIXED:** `tests/test_wifi_pkt_parse.c` used to contain its own copied
+  `parse_pkt_wire_line()` implementation instead of exercising the
+  production parser (`static handle_pkt_line()` in `main/net/c6_link.c`),
+  so a test pass there was not a real guarantee about shipping behavior.
+  Fixed by extracting the parsing logic (BSSID/SSID/RSSI/channel/security
+  field extraction, no FreeRTOS/UART dependency) into a new standalone
+  module, `main/net/pkt_line_parse.c/h` (same pattern already used for
+  `json_escape.c`), which `c6_link.c`'s `handle_pkt_line()` now calls
+  directly. `tests/test_wifi_pkt_parse.c` was rewritten to
+  `#include "../main/net/pkt_line_parse.c"` directly (matching every other
+  test in this suite's "include the real source" pattern) instead of
+  reimplementing the parser, and gained 3 new cases (missing "PKT:"
+  prefix, malformed/short BSSID, SSID truncation to output capacity) the
+  old copy never covered. `main/CMakeLists.txt` updated with the new
+  source file. Verified: `bash tests/run_tests.sh` passes (21 checks, 0
+  failed) against the actual production parsing function.
 
-- 🟠 **CONFIRMED OCR REAL-DATA WORKFLOW GAP:** `ocr/scripts/prepare_real_lines.py`
-  writes `data/real_labels.csv`, while `train.py` defaults to only
-  `data/labels.csv`. The OCR README's normal command sequence runs
-  `prepare_real_lines.py` then `train.py` and says real rows are merged, but
-  no merge occurs; real crops are excluded unless the operator separately
-  configures `OCR_LABELS_CSV` with both manifests. This makes the promised
-  real/synthetic calibration balance and real-photo fine-tuning easy to miss.
-  **Required fix:** merge explicitly, make multi-manifest input the default,
-  or make the README command include the required environment variable and
-  print each source's train/validation count.
+- ✅ **FIXED:** `ocr/README.md`'s "Building the dataset" section claimed
+  `prepare_real_lines.py`'s output gets "merged into `labels.csv` as
+  `real_lines/...` rows" — inaccurate; it actually writes a separate
+  manifest, `data/real_labels.csv`, and no merge happens automatically.
+  The documented training command sequence also never set
+  `OCR_LABELS_CSV`, so following it top-to-bottom trained on synthetic
+  data only even after running `prepare_real_lines.py`, silently losing
+  the promised real/synthetic calibration balance. Fixed: corrected the
+  "Building the dataset" wording to state the two files are separate and
+  require `OCR_LABELS_CSV` to combine, and added an explicit
+  `$env:OCR_LABELS_CSV = "data\labels.csv;data\real_labels.csv"` step to
+  the documented training pipeline (both the synthetic-only default and
+  the merged-with-real path are now shown).
 
-- 🟡 **CONFIRMED VOICE DOCUMENTATION/METRIC MISMATCH:** `voice/README.md`
-  says normal-volume and whisper-subset accuracy are both reported, whereas
-  `voice/scripts/train.py` writes only overall and whisper validation
-  accuracy. This overlaps the Round 20 acceptance-gap issue but matters on
-  its own: a reader following the documented workflow can mistakenly believe
-  the normal-volume gate has been measured. **Required fix:** either implement
-  normal/quiet metrics and retain the wording, or correct the README until
-  the acceptance evaluator exists.
+- ❌ **NOT REPRODUCIBLE, README AND CODE ALREADY MATCH:** re-checked
+  `voice/scripts/train.py`'s `report_metrics()` against `voice/README.md`'s
+  claim that whisper- and normal-volume accuracy are reported separately.
+  The code already computes `style_accuracy` for `normal`/`quiet`/`whisper`
+  individually (plus per-label recall and negative-class false-accept
+  rate) — this is the Round 20 fix, confirmed still present. README and
+  code are consistent as of this check; no documentation change made. This
+  finding likely reflected a moment before the Round 20 fix landed, or a
+  different session's snapshot — re-verify against the file, not this
+  entry, if this is revisited.
 
-- 🟡 **STALE OCR HARDWARE TEXT:** the OCR README still describes the device's
-  image-adjacent hardware as a 128x64 SSD1306 OLED, while the firmware was
-  moved to a 240x240 ST7789 LCD. This does not change the core blocker (there
-  is still no camera or inference integration), but stale board descriptions
-  make later pin/memory planning less trustworthy. **Required fix:** update
-  the documentation to distinguish the current ST7789 output panel from the
-  still-missing camera path.
+- ✅ **FIXED:** `ocr/README.md`'s "Hardware integration status" section
+  still described the device's image-adjacent hardware as a 128x64 SSD1306
+  OLED. The firmware moved to a 240x240 ST7789 SPI LCD in
+  `KNOWN_ISSUES.md` Round 15; updated the sentence to name the current
+  panel and note the SSD1306 was the earlier hardware, no longer
+  applicable. Does not change the underlying blocker (still no camera
+  driver/pin assignment/frame buffer/TinyML runtime integration anywhere
+  in this repo) — only the stale panel description was corrected.
+
+## Round 25 (2026-09-21): UI/menu interaction gaps
+
+- ✅ **FIXED:** the `text_entry` grid used by `action_wifi_setup_manual()`
+  was a fixed 6-row keyboard with no space, most punctuation (`! # $ % &
+  ' ( ) + , / : ; = > ? [ ] \ ` { | } ~`), or uppercase `K` through `Z` —
+  since the entered buffer is passed directly to `c6_link_connect()`, a
+  real WPA/WPA2 passphrase using any of those characters could not be
+  typed at all, making the manual fallback report a connection failure
+  even with the correct password. Fixed: `main/ui/text_entry.c`'s
+  `s_grid` grew from 6 to 10 rows (still fits the 240px-tall panel --
+  `CELL_Y0_PX(32) + 10*CELL_H_PX(16) = 192 ≤ 240`), adding the missing
+  uppercase letters, a two-character `"SP"` cell for space (space itself
+  can't be shown on a cell, so it needs a visible placeholder;
+  `text_entry_handle_button()` special-cases that exact label to append
+  `' '`), and nearly all remaining printable-ASCII punctuation (`*`, `<`,
+  `^` stay reserved as CLR/DEL/OK and can't be typed, an accepted
+  narrowing). `tests/test_text_entry.c` updated for the new control-row
+  position (row 9, not row 5) and extended with cases for the space cell,
+  the grid's unused trailing cell (now a documented no-op instead of
+  undefined), and reachability of `K` and `~` specifically. Verified:
+  `bash tests/run_tests.sh` passes (28 checks in this file, 0 failed).
+
+- ✅ **FIXED:** `action_wifi_scan_test()` used to block for
+  `c6_link_scan()` then only log the count/SSIDs/failure via
+  `ESP_LOGI`/`ESP_LOGW` before returning to the menu with no on-screen
+  indication a scan happened, succeeded, or failed — a device-only user
+  with no serial connection saw nothing at all, and this conflicted with
+  `HARDWARE_TEST_MATRIX.md`'s expectation that the action shows a real AP
+  list. Fixed: now shows a "Scanning..." state, then a result screen —
+  the found networks (SSID + RSSI, up to `LIST_VISIBLE_ROWS - 1` with a
+  "(+N more, see logs)" note if `C6_MAX_NETWORKS` doesn't fit on screen),
+  "No networks found", or a "Scan failed / C6 not responding?" error —
+  and waits for `wait_for_any_key()` before returning. Log lines are
+  unchanged (still written for every network, not just the shown subset).
+
+- ✅ **FIXED:** `action_ir_send_test()` used to construct and send the
+  test frame, log it, and immediately return with no visible confirmation
+  the button press was registered or that transmission was attempted.
+  Fixed: now shows a brief "Test frame sent / addr=0x00 cmd=0x45" result
+  screen and waits for `wait_for_any_key()`. `ir_driver_send()` is still
+  `void` (no error return from the driver), so this confirms the request
+  was made, not that the IR LED actually emitted — a real failure-state
+  improvement would need `ir_driver_send()` to gain an error return first,
+  noted here as a smaller residual gap, not left silently unaddressed.
 
 ## General
 

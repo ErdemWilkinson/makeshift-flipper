@@ -81,10 +81,11 @@ MT_TEST(backspace_cell_removes_last_character)
     text_entry_handle_button(&e, BUTTON_PRESS); // types '2' -> buffer "12"
     MT_CHECK_EQ_STR(e.buffer, "12");
 
-    // Navigate to the DEL cell: row 5, col 1 (grid row {"^","<","*",...}).
+    // Navigate to the DEL cell: row 9, col 1 (grid row {"^","<","*",...}).
     // Cursor is already at col 1 from the "2" entry above; only the row
-    // needs to move.
-    for (int i = 0; i < 5; i++) text_entry_handle_button(&e, BUTTON_DOWN);
+    // needs to move. (GRID_ROWS grew from 6 to 10 in Round 25's full-ASCII
+    // keyboard expansion -- the control row is now row 9, not row 5.)
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_DOWN);
     bool submitted = text_entry_handle_button(&e, BUTTON_PRESS);
     MT_CHECK(!submitted);
     MT_CHECK_EQ_STR(e.buffer, "1");
@@ -93,7 +94,7 @@ MT_TEST(backspace_cell_removes_last_character)
 MT_TEST(backspace_on_empty_buffer_is_a_no_op)
 {
     text_entry_t e = new_entry();
-    for (int i = 0; i < 5; i++) text_entry_handle_button(&e, BUTTON_DOWN);
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_DOWN);
     text_entry_handle_button(&e, BUTTON_RIGHT); // '<' cell
     text_entry_handle_button(&e, BUTTON_PRESS);
     MT_CHECK_EQ_STR(e.buffer, "");
@@ -104,7 +105,7 @@ MT_TEST(clear_cell_empties_the_buffer)
 {
     text_entry_t e = new_entry();
     text_entry_handle_button(&e, BUTTON_PRESS); // "1"
-    for (int i = 0; i < 5; i++) text_entry_handle_button(&e, BUTTON_DOWN);
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_DOWN);
     for (int i = 0; i < 2; i++) text_entry_handle_button(&e, BUTTON_RIGHT); // col 2 == '*'
     text_entry_handle_button(&e, BUTTON_PRESS);
     MT_CHECK_EQ_STR(e.buffer, "");
@@ -113,10 +114,50 @@ MT_TEST(clear_cell_empties_the_buffer)
 MT_TEST(ok_cell_returns_true_without_appending)
 {
     text_entry_t e = new_entry();
-    for (int i = 0; i < 5; i++) text_entry_handle_button(&e, BUTTON_DOWN); // row 5, col 0 == '^'
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_DOWN); // row 9, col 0 == '^'
     bool submitted = text_entry_handle_button(&e, BUTTON_PRESS);
     MT_CHECK(submitted);
     MT_CHECK_EQ_STR(e.buffer, "");
+}
+
+MT_TEST(space_cell_appends_a_space_character)
+{
+    text_entry_t e = new_entry();
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_DOWN);
+    for (int i = 0; i < 3; i++) text_entry_handle_button(&e, BUTTON_RIGHT); // col 3 == "SP"
+    text_entry_handle_button(&e, BUTTON_PRESS);
+    MT_CHECK_EQ_STR(e.buffer, " ");
+    MT_CHECK_EQ_INT(e.length, 1);
+}
+
+MT_TEST(unused_trailing_control_row_cell_is_a_no_op)
+{
+    text_entry_t e = new_entry();
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_DOWN);
+    for (int i = 0; i < 9; i++) text_entry_handle_button(&e, BUTTON_RIGHT); // col 9, an empty "" cell
+    bool submitted = text_entry_handle_button(&e, BUTTON_PRESS);
+    MT_CHECK(!submitted);
+    MT_CHECK_EQ_STR(e.buffer, "");
+    MT_CHECK_EQ_INT(e.length, 0);
+}
+
+MT_TEST(uppercase_k_through_z_and_punctuation_are_reachable)
+{
+    // Round 25 finding: the old 6-row grid had no uppercase K-Z and was
+    // missing most punctuation. Confirm the expanded grid actually reaches
+    // 'K' (row 5, col 7) and '~' (row 8, col 6) instead of asserting on
+    // the static array directly, so this stays a behavioral check.
+    text_entry_t e1 = new_entry();
+    for (int i = 0; i < 5; i++) text_entry_handle_button(&e1, BUTTON_DOWN);
+    for (int i = 0; i < 7; i++) text_entry_handle_button(&e1, BUTTON_RIGHT);
+    text_entry_handle_button(&e1, BUTTON_PRESS);
+    MT_CHECK_EQ_STR(e1.buffer, "K");
+
+    text_entry_t e2 = new_entry();
+    for (int i = 0; i < 8; i++) text_entry_handle_button(&e2, BUTTON_DOWN);
+    for (int i = 0; i < 6; i++) text_entry_handle_button(&e2, BUTTON_RIGHT);
+    text_entry_handle_button(&e2, BUTTON_PRESS);
+    MT_CHECK_EQ_STR(e2.buffer, "~");
 }
 
 MT_TEST(buffer_stops_growing_at_max_len)
@@ -143,6 +184,9 @@ int main(void)
     MT_RUN(backspace_on_empty_buffer_is_a_no_op);
     MT_RUN(clear_cell_empties_the_buffer);
     MT_RUN(ok_cell_returns_true_without_appending);
+    MT_RUN(space_cell_appends_a_space_character);
+    MT_RUN(unused_trailing_control_row_cell_is_a_no_op);
+    MT_RUN(uppercase_k_through_z_and_punctuation_are_reachable);
     MT_RUN(buffer_stops_growing_at_max_len);
     return MT_SUMMARY();
 }
