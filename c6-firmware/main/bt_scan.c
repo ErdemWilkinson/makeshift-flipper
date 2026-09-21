@@ -107,7 +107,14 @@ static void nimble_host_task(void *param)
 void bt_scan_init(void)
 {
     s_dev_queue = xQueueCreate(DEV_QUEUE_DEPTH, sizeof(dev_entry_t));
-    xTaskCreate(uart_tx_task, "bt_scan_tx", 3072, NULL, tskIDLE_PRIORITY + 1, NULL);
+    // Boot-time, one-shot (unlike the P4 side's per-session monitor/BT-scan
+    // tasks) -- if this fails there's no retry path, just a device that logs
+    // scan results into a queue nothing ever drains. Not worth aborting boot
+    // over (xTaskCreate failing here means the system is already critically
+    // low on memory), but worth a loud log instead of silence.
+    if (xTaskCreate(uart_tx_task, "bt_scan_tx", 3072, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate(bt_scan_tx) failed -- BT scan results won't reach the P4");
+    }
 
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
