@@ -1,4 +1,4 @@
-# ErdemFlip / Makeshift Flipper
+# Makeshift Flipper / EMAG
 
 An open, two-MCU handheld for authorized, local hardware experiments. The
 main MCU runs the interface and peripheral logic; an ESP32-C6 provides
