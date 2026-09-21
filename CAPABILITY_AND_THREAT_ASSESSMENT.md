@@ -29,6 +29,23 @@ For this assessment, “authorized use” means at least:
 > unverified; C6 Wi-Fi/BLE end-to-end behavior is also unverified. Therefore,
 > “present” below means in code/design scope, not “working.”
 
+## Six attention-worthy dual-use features
+
+These are the six features most likely to make the device interesting to
+makers, home-automation users, and authorized security testers. The last
+column records the **unauthorized-use risk**, not a capability to promote or
+implement. Hardware presence means “in the documented design”; it is not an
+on-device success claim.
+
+| Highlight | Legitimate, compelling use | Hardware/software basis | Unauthorized-use risk | Safe product framing |
+|---|---|---|---|---|
+| 1. Universal remote backup | Learn and replay an owner's compatible NEC TV, air-conditioner, or media remote from one handheld library | IR receiver, IR LED/transistor, NEC decoder/encoder, NVS library | Controlling compatible appliances without the owner's permission | “Your remotes only”; explicit send confirmation and visible transmit indicator. |
+| 2. Test-card cloning lab | Demonstrate why weak MIFARE Classic default keys are unsafe, and back up owned training/test cards | RC522 reader/writer and constrained MIFARE Classic clone flow | Reusing an access credential to attempt unauthorized physical entry | Test cards and written authorization only; no persistent card dumps by default. |
+| 3. Pocket wireless site survey | See nearby authorized Wi-Fi APs and BLE advertisers, with signal and channel information | ESP32-C6 Wi-Fi/BLE radios, passive monitor/scan UI | Collecting or profiling nearby networks/devices where there is no authority | Receive-only, short-lived display, no raw identifier saving by default. |
+| 4. Offline field diagnostics | Carry errors and module status on-device, then export an authorized diagnostic record to a local support PC | P4 diagnostics, C6 link, optional LAN log transfer | Exposing sensitive operational context through an unsecured log endpoint | Authenticated/encrypted export for production; keep the existing plain HTTP mode development-only. |
+| 5. No-phone Wi-Fi onboarding | Set up an owned device through a temporary setup network or joystick keyboard, without a built-in keyboard | C6 SoftAP/STA flow, P4 display, joystick text entry | Mishandling or exposing credentials in an insecure/unauthorized setup environment | Per-session setup password, visible setup state, and protected transport. |
+| 6. Extensible offline assistant platform | Add owner-approved OCR or push-to-talk Turkish commands for accessibility and hands-free use | Planned camera/microphone, TinyML runtime, ESP32-P4 | Covert image/audio collection if hostile firmware removes consent/indicators | Hardware-tied camera/mic indicators, physical mute, no background capture, signed firmware. |
+
 ## Logical capabilities of the current device
 
 | Area | Authorized and legitimate use in the code/design scope | Inappropriate or potentially unlawful-use risk | Built-in limit / status |
@@ -184,6 +201,54 @@ frequency plan, or access-bypass guide.
 | Remotely controlled surveillance device | LTE/LoRa/internet client + backend | Remote device control, telemetry collection, or covert data exfiltration | No; the current C6 is designed for local functions | Internet egress off by default, end-to-end authentication, and explicit visible user pairing. |
 | Peripheral-attack device | USB host/gadget, additional adapters, and new firmware | Unauthorized interaction with connected computers/devices or data collection | No; the repository has no such user feature | Restrict USB to signed updates and approved data transfer. |
 | Persistent malicious-firmware platform | Debug access, reflashing, or supply-chain tampering | Hiding the above behaviors behind apparently benign features | A design risk; secure boot/flash encryption are not documented safeguards yet | Secure boot, flash encryption, signed/visible-version firmware, and manufacturing key procedures. |
+
+## Component-by-component capability and misuse suitability register
+
+The entries in this section answer a narrower question: **what could a person
+do if they kept the listed hardware but replaced or extended the software?**
+“Software extension” below means a new firmware/application behavior, not an
+implementation recipe. A suitable component makes an effect technically more
+plausible; it does not make it lawful, reliable, or possible against every
+target. Physical testing, protocol support, range, credentials, and law remain
+material constraints.
+
+### Installed or documented current components
+
+| Component | Legitimate uses with the current design | What hostile custom software could make it relevant to | Key technical limits | Required safety boundary |
+|---|---|---|---|---|
+| ESP32-P4 main MCU | Runs the local UI, input, IR, RFID/NFC, diagnostics, and P4-side C6 control | Combining sensor results, retaining them, changing UX safeguards, or coordinating attached peripherals into a covert data-collection/control device | It has no built-in Wi-Fi/BLE use in this design; it needs attached hardware for RF, audio, camera, positioning, or external communication | Secure boot, flash encryption, signed firmware, user lock, and a visible firmware version. |
+| ESP32-C6 companion MCU | Performs Wi-Fi setup/scan/monitor and BLE scanning after P4 commands | Extending nearby-radio observation, collecting metadata, or sending collected data over an authorized/unauthorized network context | C6 is limited to Wi-Fi and BLE; current repository logic is receive-only for monitor/BT scan and does not provide active attack behavior | Keep radios receive-only by policy, authenticate exports, show an active-radio indicator, and restrict signed firmware. |
+| RC522 13.56 MHz reader/writer | Reads supported card UIDs and supports constrained MIFARE Classic test-card clone flow | Reading/storing accessible tag data or attempting unauthorized reuse of compatible access credentials | Supports a limited card family/flow; 7/10-byte UID support is incomplete; it is not payment-card copying or universal NFC emulation | Test-card-only product positioning, no persistent dump default, explicit authorization confirmation, encrypted storage. |
+| RDM6300 125 kHz reader | Reads EM4100-family tag IDs for authorized inventory or test use | Non-consensual collection and retention of nearby compatible tag identifiers | Read-only; short range; no tag writing/emulation in this hardware path | Do not persist identifiers by default; encrypt any retained inventory and apply retention limits. |
+| IR receiver (VS1838B class) | Learns compatible NEC remote codes from an owned remote | Collecting compatible IR commands in an unauthorized environment | Requires compatible protocol and optical reception; it is not a general RF receiver | Require clear capture indication and consent; avoid automatic persistent saving. |
+| IR LED transmitter + transistor | Replays approved NEC codes to an owned appliance | Unauthorized control or nuisance operation of compatible line-of-sight appliances | Requires line of sight, a compatible code, and limited physical range; no universal control guarantee | Physical transmit indicator, deliberate confirmation, device lock, and no unattended schedule/remote trigger. |
+| Four-receiver IR direction board concept | Coarse coverage/direction testing for an owned IR source | Roughly observing remote-use direction in an unauthorized space | Disabled in the current build; conflicts with pin/RMT resources; not precise tracking | Keep disabled until a legitimate tested use case and visible-use control exist. |
+| C6 Wi-Fi radio | Authorized AP scan, setup, and receive-only monitor of management traffic | Network-environment reconnaissance and metadata collection in places where the user has no authority | Current code excludes injection/deauth/password attacks; radio range and channel/firmware constraints apply | Default to short-lived data, BSSID masking, site-authorization mode, and no active attack features. |
+| C6 BLE radio | Passive discovery of owned BLE advertisers | Collecting device names/addresses/RSSI to profile nearby devices or movement | Current code is passive; no classic Bluetooth, connection, pairing, or GATT access | Do not retain raw addresses by default; provide a visible scan state and export approval. |
+| P4↔C6 UART link | Controlled command/result channel between the two boards | A modified P4/C6 firmware pair could pass collected information between processors or alter safety state | It is a short wired link, not an independent long-range channel; current protocol has known robustness gaps | Use authenticated/versioned messages, integrity checks, and fail-closed command handling. |
+| NVS persistent storage | Stores permitted IR/RFID library entries and device settings | Retaining identifiers or remote codes for later misuse; exposing them after device loss or compromise | Capacity is limited; it does not itself transmit data | Encrypt at rest, require user unlock, provide secure erase, and make data retention opt-in. |
+| ST7789 display | Presents menus, warnings, results, and user status | Concealing sensitive collection if hostile firmware removes indicators; social engineering through deceptive UI | Display is output-only and does not add sensing/transmission | Hardware-tied privacy/radio LEDs for sensitive functions; show signed firmware identity at boot. |
+| Joystick and BACK button | Local, deliberate device navigation | Custom firmware could use innocuous-looking UI actions to trigger hidden behaviors | No independent communication or sensing capability | Use clear action labels, confirmation for sensitive operations, and a lockout/PIN flow. |
+| Vibration motor | Feedback after allowed scans/actions | Covert haptic signaling to an operator | It cannot collect, transmit, or control a target by itself | Keep haptics paired with visible UI state and avoid silent background actions. |
+| Setup SoftAP + HTTP form | Lets the owner provide Wi-Fi credentials without a keyboard | Credential exposure if an attacker operates/observes an insecure setup environment; hostile firmware could misuse submitted data | Current setup has a per-session WPA2 password but uses plain HTTP; this is not a general credential-capture feature | Replace with authenticated encrypted transport or limit to controlled setup; disclose credential handling. |
+| PC-side debug log collector | Retains an owner's diagnostic record | Exfiltrating or exposing sensitive usage context if logs are sent to an attacker-controlled or unsecured host | It is optional, local-network-oriented, and outside the handheld hardware | Mutual authentication, TLS, least-data export, local-only default, and audit trail. |
+| Power/battery and enclosure | Portable operation of the owner's device | Makes any added sensing/control function portable and therefore easier to conceal | The power system does not add sensing, RF, or target-access capability by itself | Add physical kill switches for radios/camera/microphone and tamper-evident enclosure choices. |
+
+### Components not present: additions that materially change the threat surface
+
+| Added component | Legitimate product use | New unlawful-use class it could enable or intensify with hostile software | What it still would not prove or guarantee | Minimum product restriction |
+|---|---|---|---|---|
+| Camera module | Offline OCR, accessibility, owner-approved document/label capture | Covert visual surveillance and collection of sensitive visual information | It does not inherently identify people or bypass locked devices | Hardware-wired recording LED, shutter/cover, no background capture, no default upload. |
+| Microphone | Push-to-talk command control and accessibility | Covert audio recording or ambient-speech collection | It does not automatically provide reliable speech recognition or lawful consent | Hardware mute, push-to-talk, visible recording state, no raw-audio retention. |
+| GNSS receiver | Owner-authorized asset/campaign location tagging | Location tracking and movement profiling | It cannot track indoors/reliably in all environments and needs a way to retain/export position | Default-off, clear location indicator, no history without explicit consent. |
+| Cellular modem or long-range data radio | Owner alerts and recovery communications | Remote surveillance, telemetry exfiltration, or remote command channel | It requires carrier/service credentials and does not grant access to targets by itself | Explicit pairing, strong authentication, no hidden background transport, emergency disconnect. |
+| Sub-GHz transceiver | Authorized lab interoperability with owned sensors/remotes | Expanded unauthorized remote replay or unlawful RF transmission | It does not make every remote protocol usable and remains subject to spectrum law | Exclude jamming/active interference; regulatory band/power limits and deliberate transmit confirmation. |
+| High-gain/directional antenna | Controlled RF measurement | Longer-range collection or transmission outside authorized space | It does not overcome protocol security or legal restrictions | Keep out of the portable consumer configuration; controlled-lab use only. |
+| General NFC emulator / more capable NFC front end | Authorized test-card and protocol compatibility testing | Credential imitation against access/identity systems | It would not make secure payment or modern cryptographic cards clonable | Test-card-only firmware profile, secure boot, audit records, and exclusion of production credentials. |
+| USB host/gadget capability | Signed updates and approved data movement | Unauthorized interaction with attached computing devices or data exfiltration | It does not itself defeat host security | Restrict roles, require on-device approval, and disallow automatic input/network modes. |
+| External flash/microSD | Larger offline user archive | Larger-scale retention of identifiers, scans, recordings, or card data | Storage alone does not collect/transmit data | Encrypt, set retention expiry, require explicit export/save approval. |
+| Secure element | Device-bound keys and firmware/log protection | No new unlawful action; weak implementation could instead lock out the legitimate owner | It cannot compensate for hostile signed firmware if keys are compromised | Protected manufacturing keys, recovery policy, and verified boot chain. |
+| Ethernet/USB network adapter | Controlled local management or diagnostics | Additional data-exfiltration path from a physically connected device | Requires an attached network and custom firmware | Default disabled, authenticated management, egress allowlist. |
 
 ### C. Impact chains
 

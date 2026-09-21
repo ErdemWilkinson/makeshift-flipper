@@ -108,7 +108,12 @@ static void build_networks_html(void)
     if (records == NULL) {
         return;
     }
-    esp_wifi_scan_get_ap_records(&count, records);
+    err = esp_wifi_scan_get_ap_records(&count, records);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "scan_get_ap_records failed: %s", esp_err_to_name(err));
+        free(records);
+        return;
+    }
 
     size_t pos = 0;
     char escaped[6 * sizeof(records[0].ssid)]; // worst case: every char becomes &quot; (6 bytes)
@@ -294,6 +299,10 @@ bool wifi_setup_ap_run(const char *pin, int timeout_ms)
     }
 
     s_setup_event_group = xEventGroupCreate();
+    if (s_setup_event_group == NULL) {
+        ESP_LOGE(TAG, "setup event group allocation failed");
+        return false;
+    }
     s_setup_succeeded = false;
 
     if (s_ap_netif == NULL) {
