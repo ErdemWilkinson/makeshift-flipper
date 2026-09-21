@@ -400,8 +400,24 @@ static void monitor_rx_task(void *arg)
     }
 
     send_line("MONITORSTOP");
+    // The C6's uart_tx_task keeps independently draining its own PKT: queue
+    // until wifi_monitor_stop() actually disables the promiscuous callback
+    // (c6-firmware/main/wifi_monitor.c), which only happens once the C6's
+    // dispatch loop gets around to processing this MONITORSTOP command --
+    // so a PKT: line already in flight (or queued ahead of the eventual
+    // OK/FAIL reply) can arrive here first. Reading exactly one line and
+    // trusting it to be the stop reply (the previous "best-effort" version
+    // of this) could consume that stray PKT: line instead, leaving the real
+    // OK/FAIL sitting in the UART for the *next* command to misread as its
+    // own reply. Skip PKT: lines and keep reading until the actual
+    // OK/FAIL turns up or the deadline runs out -- see KNOWN_ISSUES.md's
+    // Round 19 entry ("async-session UART desynchronization").
     int deadline = RESPONSE_TIMEOUT_MS;
-    read_line(&deadline); // best-effort -- nothing to do differently either way
+    while (read_line(&deadline)) {
+        if (strncmp(s_line_buf, "PKT:", 4) != 0) {
+            break; // OK, FAIL, or anything else -- stop here either way
+        }
+    }
 
     xSemaphoreGive(s_link_mutex);
     s_monitor_rx_task_handle = NULL;
@@ -420,8 +436,25 @@ bool c6_link_monitor_start(void)
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool ok = send_line("MONITOR");
     if (ok) {
+        // wifi_monitor_start() on the C6 enables the promiscuous callback
+        // (which queues packets for its own independent uart_tx_task)
+        // before the C6's dispatch loop gets to write this command's "OK"
+        // reply -- those are two different FreeRTOS tasks with no ordering
+        // guarantee between them, so a PKT: line can legitimately arrive
+        // here ahead of the OK it's actually a reply to. Treating the
+        // first PKT: as "not OK" (the previous version of this) would
+        // report a successful start as a failure. Skip PKT: lines and keep
+        // reading until the real OK/FAIL/timeout. See KNOWN_ISSUES.md's
+        // Round 19 entry ("startup reply/data race").
         int deadline = RESPONSE_TIMEOUT_MS;
-        ok = read_line(&deadline) && strcmp(s_line_buf, "OK") == 0;
+        ok = false;
+        while (read_line(&deadline)) {
+            if (strncmp(s_line_buf, "PKT:", 4) == 0) {
+                continue;
+            }
+            ok = strcmp(s_line_buf, "OK") == 0;
+            break;
+        }
     }
     xSemaphoreGive(s_link_mutex);
 
@@ -567,8 +600,16 @@ static void bt_scan_rx_task(void *arg)
     }
 
     send_line("BTSCANSTOP");
+    // Same race as monitor_rx_task's stop path above (see its comment) --
+    // the C6's own BTDEV: TX task can still have queued lines in flight
+    // when this reply arrives, so skip those instead of risking consuming
+    // one in place of the real OK/FAIL.
     int deadline = RESPONSE_TIMEOUT_MS;
-    read_line(&deadline); // best-effort
+    while (read_line(&deadline)) {
+        if (strncmp(s_line_buf, "BTDEV:", 6) != 0) {
+            break;
+        }
+    }
 
     xSemaphoreGive(s_link_mutex);
     s_bt_scan_rx_task_handle = NULL;
@@ -584,8 +625,20 @@ bool c6_link_bt_scan_start(void)
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool ok = send_line("BTSCAN");
     if (ok) {
+        // Same start-up reply/data race as c6_link_monitor_start() above
+        // (see its comment) -- bt_scan_start()'s BLE discovery callback and
+        // the C6's dispatch loop's "OK" write are two independent tasks
+        // with no ordering guarantee, so skip any BTDEV: line that beats
+        // the real reply here.
         int deadline = RESPONSE_TIMEOUT_MS;
-        ok = read_line(&deadline) && strcmp(s_line_buf, "OK") == 0;
+        ok = false;
+        while (read_line(&deadline)) {
+            if (strncmp(s_line_buf, "BTDEV:", 6) == 0) {
+                continue;
+            }
+            ok = strcmp(s_line_buf, "OK") == 0;
+            break;
+        }
     }
     xSemaphoreGive(s_link_mutex);
 

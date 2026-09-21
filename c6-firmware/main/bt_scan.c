@@ -30,6 +30,7 @@ typedef struct {
 } dev_entry_t;
 
 static QueueHandle_t s_dev_queue;
+static TaskHandle_t s_tx_task_handle;
 static volatile bool s_running = false;
 static bool s_host_synced = false;
 
@@ -112,7 +113,8 @@ void bt_scan_init(void)
     // scan results into a queue nothing ever drains. Not worth aborting boot
     // over (xTaskCreate failing here means the system is already critically
     // low on memory), but worth a loud log instead of silence.
-    if (xTaskCreate(uart_tx_task, "bt_scan_tx", 3072, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+    if (xTaskCreate(uart_tx_task, "bt_scan_tx", 3072, NULL, tskIDLE_PRIORITY + 1,
+                     &s_tx_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate(bt_scan_tx) failed -- BT scan results won't reach the P4");
     }
 
@@ -132,6 +134,14 @@ bool bt_scan_start(void)
 {
     if (s_running) {
         return true;
+    }
+    // Same reasoning as wifi_monitor_start()'s equivalent check -- without
+    // uart_tx_task running, every BTDEV: entry found just sits in
+    // s_dev_queue forever and the P4 screen waits for data that can never
+    // arrive. See KNOWN_ISSUES.md's Round 19 entry.
+    if (s_tx_task_handle == NULL) {
+        ESP_LOGE(TAG, "cannot start: uart_tx_task never started (see boot log)");
+        return false;
     }
     s_running = true;
     if (s_host_synced) {
