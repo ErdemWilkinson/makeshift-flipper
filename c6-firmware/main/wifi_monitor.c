@@ -208,7 +208,13 @@ static void hop_timer_cb(TimerHandle_t timer)
 void wifi_monitor_init(void)
 {
     s_pkt_queue = xQueueCreate(PKT_QUEUE_DEPTH, sizeof(pkt_entry_t));
-    xTaskCreate(uart_tx_task, "wifi_mon_tx", 3072, NULL, tskIDLE_PRIORITY + 1, &s_tx_task_handle);
+    // Same boot-time, one-shot, no-retry-path situation as bt_scan_init()'s
+    // uart_tx_task -- log loudly on failure instead of leaving a device that
+    // silently never reports any AP it sees.
+    if (xTaskCreate(uart_tx_task, "wifi_mon_tx", 3072, NULL, tskIDLE_PRIORITY + 1,
+                     &s_tx_task_handle) != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate(wifi_mon_tx) failed -- WiFi Monitor results won't reach the P4");
+    }
     s_hop_timer = xTimerCreate("wifi_mon_hop", pdMS_TO_TICKS(CHANNEL_HOP_MS),
                                 pdTRUE, NULL, hop_timer_cb);
 }

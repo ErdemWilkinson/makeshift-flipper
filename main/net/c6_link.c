@@ -434,8 +434,24 @@ bool c6_link_monitor_start(void)
     }
     s_monitor_ap_count = 0;
     s_monitor_running = true;
-    xTaskCreate(monitor_rx_task, "c6_monitor_rx", 4096, NULL,
-                tskIDLE_PRIORITY + 1, &s_monitor_rx_task_handle);
+    BaseType_t created = xTaskCreate(monitor_rx_task, "c6_monitor_rx", 4096, NULL,
+                                      tskIDLE_PRIORITY + 1, &s_monitor_rx_task_handle);
+    if (created != pdPASS) {
+        // monitor_rx_task is the only thing that takes s_link_mutex for this
+        // session and sends MONITORSTOP -- if it never started, nothing owns
+        // the mutex and the C6 is never told to stop, so undo both by hand
+        // rather than leaving c6_link_monitor_poll() waiting on data that
+        // will never arrive.
+        ESP_LOGE(TAG, "xTaskCreate(c6_monitor_rx) failed -- out of memory?");
+        s_monitor_running = false;
+        s_monitor_rx_task_handle = NULL;
+        xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+        send_line("MONITORSTOP");
+        int deadline = RESPONSE_TIMEOUT_MS;
+        read_line(&deadline); // best-effort, same as monitor_rx_task's own stop path
+        xSemaphoreGive(s_link_mutex);
+        return false;
+    }
     return true;
 }
 
@@ -582,8 +598,21 @@ bool c6_link_bt_scan_start(void)
     }
     s_bt_device_count = 0;
     s_bt_scan_running = true;
-    xTaskCreate(bt_scan_rx_task, "c6_bt_scan_rx", 4096, NULL,
-                tskIDLE_PRIORITY + 1, &s_bt_scan_rx_task_handle);
+    BaseType_t created = xTaskCreate(bt_scan_rx_task, "c6_bt_scan_rx", 4096, NULL,
+                                      tskIDLE_PRIORITY + 1, &s_bt_scan_rx_task_handle);
+    if (created != pdPASS) {
+        // Same failure mode/fix as c6_link_monitor_start() above -- see its
+        // comment.
+        ESP_LOGE(TAG, "xTaskCreate(c6_bt_scan_rx) failed -- out of memory?");
+        s_bt_scan_running = false;
+        s_bt_scan_rx_task_handle = NULL;
+        xSemaphoreTake(s_link_mutex, portMAX_DELAY);
+        send_line("BTSCANSTOP");
+        int deadline = RESPONSE_TIMEOUT_MS;
+        read_line(&deadline);
+        xSemaphoreGive(s_link_mutex);
+        return false;
+    }
     return true;
 }
 

@@ -38,6 +38,15 @@ static const char *TAG = "wifi_setup_ap";
 static EventGroupHandle_t s_setup_event_group;
 static volatile bool s_setup_succeeded;
 
+// esp_netif_create_default_wifi_ap() is one-time setup for the default AP
+// network interface, not something meant to be called again per session --
+// wifi_setup_ap_run() can run more than once per boot (WiFi Setup is an
+// ordinary menu item the P4 can invoke repeatedly, including after a
+// cancelled/timed-out/failed previous attempt), so the netif is created
+// once, lazily, on the first call and kept for the process lifetime rather
+// than recreated (and leaked, or double-created) on every SETUP: command.
+static esp_netif_t *s_ap_netif;
+
 // Minimal, dependency-free HTML: a network dropdown populated from a scan
 // taken right before the AP starts, plus a password field. No JS framework,
 // no external assets -- has to work on a phone browser with no internet.
@@ -209,12 +218,24 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
-    int received = httpd_req_recv(req, body, len);
-    if (received <= 0) {
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
+    // httpd_req_recv() is allowed to return fewer bytes than requested (a
+    // partial TCP segment, a slow phone, ...); one call isn't guaranteed to
+    // get the whole body. Loop until every byte of content_len has arrived
+    // rather than silently parsing a truncated SSID/password -- a chopped
+    // password would otherwise fail to connect with no indication why.
+    int total_received = 0;
+    while (total_received < len) {
+        int received = httpd_req_recv(req, body + total_received, len - total_received);
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue; // retry, same as the pattern httpd examples use
+            }
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        total_received += received;
     }
-    body[received] = '\0';
+    body[total_received] = '\0';
 
     char ssid[64] = {0};
     char password[64] = {0};
@@ -275,7 +296,14 @@ bool wifi_setup_ap_run(const char *pin, int timeout_ms)
     s_setup_event_group = xEventGroupCreate();
     s_setup_succeeded = false;
 
-    esp_netif_create_default_wifi_ap();
+    if (s_ap_netif == NULL) {
+        s_ap_netif = esp_netif_create_default_wifi_ap();
+        if (s_ap_netif == NULL) {
+            ESP_LOGE(TAG, "esp_netif_create_default_wifi_ap failed");
+            vEventGroupDelete(s_setup_event_group);
+            return false;
+        }
+    }
 
     wifi_config_t ap_cfg = {
         .ap = {
