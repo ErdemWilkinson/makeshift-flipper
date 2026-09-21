@@ -12,6 +12,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "text_sanitize.h"
@@ -31,8 +32,10 @@ typedef struct {
 
 static QueueHandle_t s_dev_queue;
 static TaskHandle_t s_tx_task_handle;
+static SemaphoreHandle_t s_tx_mutex;
 static volatile bool s_running = false;
 static bool s_host_synced = false;
+static bool s_nimble_ready = false;
 
 static void uart_tx_task(void *arg)
 {
@@ -42,12 +45,16 @@ static void uart_tx_task(void *arg)
         if (xQueueReceive(s_dev_queue, &entry, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        char line[96];
-        snprintf(line, sizeof(line), "BTDEV:%02X%02X%02X%02X%02X%02X,%s,%d",
-                 entry.addr[0], entry.addr[1], entry.addr[2],
-                 entry.addr[3], entry.addr[4], entry.addr[5],
-                 entry.name, entry.rssi);
-        uart_link_write_line(line);
+        xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+        if (s_running) {
+            char line[96];
+            snprintf(line, sizeof(line), "BTDEV:%02X%02X%02X%02X%02X%02X,%s,%d",
+                     entry.addr[0], entry.addr[1], entry.addr[2],
+                     entry.addr[3], entry.addr[4], entry.addr[5],
+                     entry.name, entry.rssi);
+            uart_link_write_line(line);
+        }
+        xSemaphoreGive(s_tx_mutex);
     }
 }
 
@@ -68,7 +75,9 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     extract_ble_name(disc->data, disc->length_data, entry.name, sizeof(entry.name));
     sanitize_wire_text(entry.name);
 
-    xQueueSend(s_dev_queue, &entry, 0);
+    if (s_running && s_dev_queue != NULL) {
+        xQueueSend(s_dev_queue, &entry, 0);
+    }
     return 0;
 }
 
@@ -108,6 +117,11 @@ static void nimble_host_task(void *param)
 void bt_scan_init(void)
 {
     s_dev_queue = xQueueCreate(DEV_QUEUE_DEPTH, sizeof(dev_entry_t));
+    s_tx_mutex = xSemaphoreCreateMutex();
+    if (s_dev_queue == NULL || s_tx_mutex == NULL) {
+        ESP_LOGE(TAG, "BLE scan resources unavailable; feature disabled");
+        return;
+    }
     // Boot-time, one-shot (unlike the P4 side's per-session monitor/BT-scan
     // tasks) -- if this fails there's no retry path, just a device that logs
     // scan results into a queue nothing ever drains. Not worth aborting boot
@@ -126,6 +140,7 @@ void bt_scan_init(void)
 
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(nimble_host_task);
+    s_nimble_ready = true;
 
     ESP_LOGI(TAG, "BLE scan stack initialized");
 }
@@ -139,8 +154,8 @@ bool bt_scan_start(void)
     // uart_tx_task running, every BTDEV: entry found just sits in
     // s_dev_queue forever and the P4 screen waits for data that can never
     // arrive. See KNOWN_ISSUES.md's Round 19 entry.
-    if (s_tx_task_handle == NULL) {
-        ESP_LOGE(TAG, "cannot start: uart_tx_task never started (see boot log)");
+    if (s_tx_task_handle == NULL || s_dev_queue == NULL || s_tx_mutex == NULL || !s_nimble_ready) {
+        ESP_LOGE(TAG, "cannot start: BLE initialization was incomplete");
         return false;
     }
     s_running = true;
@@ -161,5 +176,8 @@ bool bt_scan_stop(void)
     }
     s_running = false;
     ble_gap_disc_cancel();
+    xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+    xQueueReset(s_dev_queue);
+    xSemaphoreGive(s_tx_mutex);
     return true;
 }

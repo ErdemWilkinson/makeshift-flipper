@@ -44,6 +44,10 @@ void uart_link_init(void)
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
     s_write_mutex = xSemaphoreCreateMutex();
+    if (s_write_mutex == NULL) {
+        ESP_LOGE(TAG, "UART write mutex allocation failed; outbound C6 messages disabled");
+        return;
+    }
 
     ESP_LOGI(TAG, "UART link to P4 initialized (TX=GPIO%d, RX=GPIO%d)", UART_TX_GPIO, UART_RX_GPIO);
 }
@@ -69,6 +73,10 @@ void uart_link_read_line(char *out_line)
 
 void uart_link_write_line(const char *line)
 {
+    if (s_write_mutex == NULL) {
+        ESP_LOGE(TAG, "cannot write UART line: link mutex unavailable");
+        return;
+    }
     xSemaphoreTake(s_write_mutex, portMAX_DELAY);
     uart_write_bytes(UART_PORT, line, strlen(line));
     uart_write_bytes(UART_PORT, "\n", 1);

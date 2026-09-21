@@ -1009,34 +1009,35 @@ progress on disk:
   aren't comparable across different architectures/data splits with
   certainty, but it's at least consistent with this attempt being on a
   reasonable track before it was interrupted, not a dead end.
-- 🔴 **CONFIRMED BUG:** `voice/scripts/evaluate_asr.py` (added this round
-  by another session) calls
+- ✅ **FIXED:** `voice/scripts/evaluate_asr.py` called
   `tf.keras.models.load_model(args.model, compile=False)` with no
-  `custom_objects` argument. Any `.keras` file saved as a *training*
-  model (i.e. anything wrapped in `train_asr_common_voice.py`'s
-  `CtcLoss(tf.keras.layers.Layer)`, like `best_training.keras` above)
-  fails to load with `TypeError: Cannot deserialize object of type
-  'CtcLoss'` — confirmed by attempting exactly that load. The training
-  script itself already knows how to load these correctly
-  (`train_asr_common_voice.py`'s own `--warm-start` path passes
-  `custom_objects={"CtcLoss": CtcLoss}`), so the fix is mechanical: import
-  `CtcLoss` from `train_asr_common_voice` (or duplicate the tiny class)
-  and pass the same `custom_objects` dict in `evaluate_asr.py`. This
-  doesn't affect `stage0-2`'s already-reported CER/WER numbers, which
-  were measured against properly-saved `inference.keras` files with a
-  different, working evaluation path — it only blocks evaluating a
-  training-format checkpoint like `full_v3`'s, which is exactly the case
-  that would have surfaced it.
+  `custom_objects` argument, so any `.keras` file saved as a *training*
+  model (wrapped in `train_asr_common_voice.py`'s
+  `CtcLoss(tf.keras.layers.Layer)`, like `full_v3`'s `best_training.keras`
+  above) failed to load with `TypeError: Cannot deserialize object of
+  type 'CtcLoss'`. Fixed the same way the training script's own
+  `--warm-start` path already did: `evaluate_asr.py` now imports
+  `CtcLoss` from `train_asr_common_voice` and passes
+  `custom_objects={"CtcLoss": CtcLoss}` into `load_model()`. This didn't
+  affect `stage0-2`'s already-reported CER/WER numbers (measured against
+  properly-saved `inference.keras` files via a different, unaffected
+  path) — it only blocked evaluating a training-format checkpoint like
+  `full_v3`'s, which is exactly the case that surfaced it. Note:
+  `full_v3` itself is still not evaluable regardless of this fix — see
+  the item above, it never produced an `inference.keras` at all, only a
+  mid-training checkpoint this fix now lets `evaluate_asr.py` at least
+  *load* successfully.
 
 ## Round 19 (2026-09-21): pessimistic C6 setup/liveness pass
 
 These were source-level findings from this pass, not exercised on real
 ESP32-C6 hardware (this workstation has no Bash/ESP-IDF toolchain to build
 and flash with) -- their runtime frequency was unverified, only the faulty
-paths' presence in source. All nine items below have since been fixed in
-source (not hardware-verified, same caveat as everything else in this file
-until `HARDWARE_TEST_MATRIX.md` is worked through); kept for the record of
-what was found and how it was addressed.
+paths' presence in source. Eight items below were fixed in source (not
+hardware-verified, same caveat as everything else in this file until
+`HARDWARE_TEST_MATRIX.md` is worked through). The stop-path item is only
+partially mitigated; its residual post-ACK queue race is reopened in Round
+23. This history is kept to distinguish what was addressed from what remains.
 
 - ✅ **FIXED:** `wifi_setup_ap_run()` called `esp_netif_create_default_wifi_ap()`
   every time it received `SETUP:<pin>` (`c6-firmware/main/wifi_setup_ap.c`)
@@ -1105,16 +1106,17 @@ what was found and how it was addressed.
   of returning the promised `FAIL` response. Fixed: added the missing
   `NULL` check (frees `req_body`/`response_buf`, emits `FAIL`).
 
-- ✅ **FIXED:** on stopping Monitor or BT Scan, the P4 receiver task sent
+- 🟡 **PARTIALLY MITIGATED:** on stopping Monitor or BT Scan, the P4 receiver task sent
   `MONITORSTOP`/`BTSCANSTOP` and trusted exactly one subsequent line to be
   the reply, while the C6's `PKT:`/`BTDEV:` producer task keeps
   independently draining its own queue until `wifi_monitor_stop()`/
   `bt_scan_stop()` actually runs on the C6's dispatch loop -- a queued data
   line could legitimately arrive first, get consumed in place of the real
   `OK`/`FAIL`, and leave that reply sitting in the UART for the *next*
-  command to misread as its own. Fixed: both stop paths (`c6_link.c`'s
+  command to misread as its own. The first half was fixed: both stop paths (`c6_link.c`'s
   `monitor_rx_task()`/`bt_scan_rx_task()`) now skip `PKT:`/`BTDEV:` lines
-  and keep reading until the real reply or a timeout.
+  and keep reading until the real reply or a timeout. They do not drain
+  packets that C6's producer task writes after that reply; see Round 23.
 
 - ✅ **FIXED:** the same problem in reverse at startup --
   `c6_link_monitor_start()`/`c6_link_bt_scan_start()` treated the first
@@ -1124,6 +1126,122 @@ what was found and how it was addressed.
   runs -- two unordered FreeRTOS tasks, so a data line arriving first could
   make a *successful* start look like a failure. Fixed: both start paths
   now skip `PKT:`/`BTDEV:` lines the same way before checking for `OK`.
+
+## Round 20 (2026-09-21): OCR and voice-pipeline audit
+
+The following are ML-pipeline issues, not evidence that either model is
+deployable. No retraining was started; each is directly traceable to the
+current scripts.
+
+- ✅ **FIXED (2026-09-21):** `ocr/scripts/train.py` now shuffles `rows`
+  with the exact same permutation as `images`/`labels`/`lengths`/`groups`
+  (`shuffle_idx = rng.permutation(len(rows))` applied to all of them,
+  including `rows = [rows[i] for i in shuffle_idx]`, before `train_idx`/
+  `validation_idx` are computed) — the representative-image selection for
+  full-int8 quantization calibration now indexes `rows` consistently with
+  every other shuffled array, closing the validation-data leak into
+  calibration this item originally described.
+
+- ✅ **FIXED (2026-09-21):** `ocr/scripts/evaluate_tflite.py` no longer
+  reads the first 40 rows of `data/real_labels.csv` directly. It now
+  loads the group-disjoint `"validation"` split persisted in
+  `artifacts/split_manifest.json` by `train.py` (exiting with an error if
+  that manifest is missing), iterates every row in that split, and
+  reports edit-distance-based CER alongside exact-match — the same
+  held-out split `evaluate.py`/`train.py` use, not a smoke-test sample.
+
+- ✅ **FIXED (2026-09-21):** `voice/scripts/train.py`'s `report_metrics()`
+  now computes per-style accuracy (normal/quiet/whisper individually),
+  per-label recall, and the negative-class (unknown/silence) false-accept
+  rate, in addition to overall accuracy — matching the release gates
+  `voice/README.md` already documented. `main()` also now enforces those
+  gates explicitly (`WHISPER_GATE`/`NORMAL_GATE`/
+  `NEGATIVE_FALSE_ACCEPT_GATE`) rather than only reporting one aggregate
+  number.
+
+- ✅ **FIXED (2026-09-21):** `voice/scripts/train.py` now requires at
+  least 3 speakers and builds a genuine 3-way speaker-disjoint split (two
+  `GroupShuffleSplit` passes: train+dev vs. held-out test, then train vs.
+  dev), tuning only on dev and reporting the final normal/quiet/whisper
+  and false-accept numbers separately against the held-out test speakers
+  — closing the "model selection and reported score share the same
+  validation voices" gap this item described. No trained artifact exists
+  yet either way (unchanged — see Round 17/18's still-open "no recorded
+  dataset" note); this only fixes the training script's own methodology
+  for whenever a real dataset is recorded.
+
+## Round 21 (2026-09-21): allocation and radio-failure audit
+
+- ✅ **FIXED (2026-09-21):** the NULL-handle paths this item originally
+  described are now guarded. `c6_link_init()`'s `xSemaphoreCreateMutex()`
+  result is NULL-checked (`main/net/c6_link.c`, right after creation,
+  logs and aborts init on failure); every later `c6_link_*` call goes
+  through a `link_ready()` gate that requires `s_link_mutex != NULL`.
+  `s_monitor_data_mutex`/`s_bt_scan_data_mutex` are lazily created with
+  their own NULL checks before first use, and both
+  `c6_link_monitor_poll()`/`c6_link_bt_scan_poll()` bail out early if the
+  mutex is still NULL. On the C6 side, `wifi_monitor_init()` NULL-checks
+  its queue/mutex/timer together (logs and disables the feature if any
+  failed) and `wifi_monitor_start()` re-checks all of them plus the TX
+  task handle before allowing a start; `bt_scan_init()`/`bt_scan_start()`
+  follow the same pattern for its queue/mutex. Every one of these paths
+  now fails safe (returns `false`/logs, never dereferences a NULL
+  handle) instead of assuming allocation succeeded.
+
+- ✅ **FIXED (2026-09-21):** `bt_scan.c` now tracks a
+  `static bool s_nimble_ready` flag, set `true` only after
+  `nimble_port_init()` succeeds and the host task is launched; if
+  `nimble_port_init()` fails, `bt_scan_init()` returns early leaving it
+  `false`. `bt_scan_start()` checks `s_nimble_ready` (alongside the TX
+  task/queue/mutex) and returns `false` if the BLE stack never finished
+  initializing, instead of unconditionally reporting `OK` while no host
+  can ever call `on_sync()`.
+
+- ✅ **FIXED (2026-09-21):** both C6 scan consumers now check
+  `esp_wifi_scan_get_ap_records()`'s return value.
+  `wifi_commands.c`'s scan handler frees its record buffer and replies
+  `SCANDONE` (with no `NET:` lines) on failure instead of formatting
+  uninitialized records; `wifi_setup_ap.c`'s setup-page scan does the
+  same, leaving the rendered network list empty rather than showing
+  garbage entries.
+
+## Round 22 (2026-09-21): training and recording-tool reliability
+
+- ✅ **FIXED (2026-09-21):** `voice/scripts/train_asr_common_voice.py`'s
+  `BatchSequence.__len__()` now uses ceil division
+  (`int(np.ceil(len(self.rows) / self.batch_size))`, with a comment
+  noting the old floor-division bug it replaces); `__getitem__()`'s slice
+  indexing naturally yields the shorter final batch under normal Python
+  slice semantics, so no recording is silently dropped and the reported
+  batch/sample counts now match what's actually delivered to Keras.
+
+- ✅ **FIXED (2026-09-21):** `voice/scripts/record_commands.py` no longer
+  silently overwrites existing takes on a fresh run — if take files
+  already exist for a (speaker, style, label) and neither `--resume` nor
+  a new explicit `--replace` flag was passed, it now exits with an error
+  instead of overwriting. `--replace` deletes existing files first when
+  that's actually intended. `next_take_index()` now scans existing
+  filenames and returns the next free numeric index
+  (`max(existing) + 1`) rather than a plain file count, so gaps left by
+  an interrupted session are no longer overwritten under `--resume`
+  either.
+
+## Round 23 (2026-09-21): self-audit correction -- residual C6 UART bleed
+
+- ✅ **FIXED (2026-09-21):** the gap this round originally reported --
+  neither `wifi_monitor_stop()` nor `bt_scan_stop()` clearing its producer
+  queue before the dispatch loop's stop ACK was written, letting a stale
+  `PKT:`/`BTDEV:` line get consumed by the next ordinary command as its
+  reply -- is closed. `wifi_monitor_stop()` (`c6-firmware/main/wifi_monitor.c`)
+  and `bt_scan_stop()` (`c6-firmware/main/bt_scan.c`) both now take their TX
+  task's mutex, `xQueueReset()` the producer queue, and only then release
+  the mutex and return; `main.c`'s dispatch loop (`MONITORSTOP`/
+  `BTSCANSTOP` handlers) calls these synchronously and writes `"OK"`/
+  `"FAIL"` only after they return -- so the queue is already empty and the
+  TX task already excluded (via the same mutex) before any ACK reaches the
+  P4. No stale data line can follow the ACK. (Originally reported this
+  round as an open gap in the Round 19 fix; verified fixed in the current
+  source, not just re-asserted -- see the file/function names above.)
 
 ## General
 

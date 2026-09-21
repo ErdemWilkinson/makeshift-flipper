@@ -48,7 +48,7 @@ local, consent-based use:
 - Camera/OCR, microphone, GPS, Sub-GHz, remote control, and cellular features
   are **not** part of the current firmware.
 
-See the [capability and use-boundary assessment](YETENEK_VE_UYUM_DEGERLENDIRMESI.md)
+See the [capability and use-boundary assessment](CAPABILITY_AND_THREAT_ASSESSMENT.md)
 for the detailed feature, privacy, safety, and added-component evaluation.
 
 ## What this hardware can do — legitimate use vs. what it can be misused for
@@ -57,7 +57,7 @@ The right-hand column is not a feature list or how-to; it exists so you
 know what to explicitly avoid. Doing any of it without owning the target
 or holding the owner's explicit, recorded authorization is on you — see
 the disclaimer above and the
-[full assessment](YETENEK_VE_UYUM_DEGERLENDIRMESI.md) for details and
+[full assessment](CAPABILITY_AND_THREAT_ASSESSMENT.md) for details and
 built-in limits.
 
 | Capability | Legitimate, authorized use | Possible with this hardware, but unauthorized/unlawful — do not do this |
@@ -153,7 +153,7 @@ hardware test matrix.
 | `tests/` | Hardware-independent host tests for parsers, storage libraries, UI entry, and diagnostics |
 | `.github/workflows/build.yml` | CI for both ESP-IDF targets and the host tests |
 | `HARDWARE_TEST_MATRIX.md` | Hardware acceptance checklist |
-| `YETENEK_VE_UYUM_DEGERLENDIRMESI.md` | Capability, use-boundary, privacy, and added-component assessment |
+| `CAPABILITY_AND_THREAT_ASSESSMENT.md` | Capability, use-boundary, privacy, and added-component assessment |
 | `SHARING.md` | Accurate, safe project-sharing checklist and post drafts |
 
 ## Project hygiene

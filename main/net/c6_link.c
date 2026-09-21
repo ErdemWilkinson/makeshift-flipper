@@ -53,8 +53,21 @@ void c6_link_init(void)
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
     s_link_mutex = xSemaphoreCreateMutex();
+    if (s_link_mutex == NULL) {
+        ESP_LOGE(TAG, "C6 link mutex allocation failed; C6 features disabled");
+        return;
+    }
 
     ESP_LOGI(TAG, "C6 link UART initialized (TX=GPIO%d, RX=GPIO%d)", UART_TX_GPIO, UART_RX_GPIO);
+}
+
+static bool link_ready(void)
+{
+    if (s_link_mutex != NULL) {
+        return true;
+    }
+    ESP_LOGE(TAG, "C6 link unavailable: initialization did not complete");
+    return false;
 }
 
 static bool send_line(const char *line)
@@ -259,6 +272,9 @@ static bool c6_link_send_error_log_impl(const diag_entry_t *entries, int count)
 
 int c6_link_scan(c6_network_t *out_networks, int max_networks)
 {
+    if (!link_ready()) {
+        return -1;
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     int result = c6_link_scan_impl(out_networks, max_networks);
     xSemaphoreGive(s_link_mutex);
@@ -267,6 +283,9 @@ int c6_link_scan(c6_network_t *out_networks, int max_networks)
 
 bool c6_link_connect(const char *ssid, const char *password)
 {
+    if (!link_ready()) {
+        return false;
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool result = c6_link_connect_impl(ssid, password);
     xSemaphoreGive(s_link_mutex);
@@ -275,6 +294,9 @@ bool c6_link_connect(const char *ssid, const char *password)
 
 bool c6_link_send(const char *ip, uint16_t port, const char *data)
 {
+    if (!link_ready()) {
+        return false;
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool result = c6_link_send_impl(ip, port, data);
     xSemaphoreGive(s_link_mutex);
@@ -283,6 +305,9 @@ bool c6_link_send(const char *ip, uint16_t port, const char *data)
 
 bool c6_link_setup(const char *pin)
 {
+    if (!link_ready()) {
+        return false;
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool result = c6_link_setup_impl(pin);
     xSemaphoreGive(s_link_mutex);
@@ -291,6 +316,9 @@ bool c6_link_setup(const char *pin)
 
 bool c6_link_send_error_log(const diag_entry_t *entries, int count)
 {
+    if (!link_ready()) {
+        return false;
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool result = c6_link_send_error_log_impl(entries, count);
     xSemaphoreGive(s_link_mutex);
@@ -426,13 +454,20 @@ static void monitor_rx_task(void *arg)
 
 bool c6_link_monitor_start(void)
 {
-    if (s_monitor_running || s_bt_scan_running) {
+    if (!link_ready() || s_monitor_running || s_bt_scan_running) {
         // s_link_mutex is held for the whole session by whichever of
         // monitor_rx_task/bt_scan_rx_task is already running -- starting
         // the other here would just deadlock waiting for it.
         return false;
     }
 
+    if (s_monitor_data_mutex == NULL) {
+        s_monitor_data_mutex = xSemaphoreCreateMutex();
+        if (s_monitor_data_mutex == NULL) {
+            ESP_LOGE(TAG, "Wi-Fi Monitor data mutex allocation failed");
+            return false;
+        }
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool ok = send_line("MONITOR");
     if (ok) {
@@ -462,9 +497,6 @@ bool c6_link_monitor_start(void)
         return false;
     }
 
-    if (s_monitor_data_mutex == NULL) {
-        s_monitor_data_mutex = xSemaphoreCreateMutex();
-    }
     s_monitor_ap_count = 0;
     s_monitor_running = true;
     BaseType_t created = xTaskCreate(monitor_rx_task, "c6_monitor_rx", 4096, NULL,
@@ -618,10 +650,17 @@ static void bt_scan_rx_task(void *arg)
 
 bool c6_link_bt_scan_start(void)
 {
-    if (s_bt_scan_running || s_monitor_running) {
+    if (!link_ready() || s_bt_scan_running || s_monitor_running) {
         return false;
     }
 
+    if (s_bt_scan_data_mutex == NULL) {
+        s_bt_scan_data_mutex = xSemaphoreCreateMutex();
+        if (s_bt_scan_data_mutex == NULL) {
+            ESP_LOGE(TAG, "BT Scan data mutex allocation failed");
+            return false;
+        }
+    }
     xSemaphoreTake(s_link_mutex, portMAX_DELAY);
     bool ok = send_line("BTSCAN");
     if (ok) {
@@ -646,9 +685,6 @@ bool c6_link_bt_scan_start(void)
         return false;
     }
 
-    if (s_bt_scan_data_mutex == NULL) {
-        s_bt_scan_data_mutex = xSemaphoreCreateMutex();
-    }
     s_bt_device_count = 0;
     s_bt_scan_running = true;
     BaseType_t created = xTaskCreate(bt_scan_rx_task, "c6_bt_scan_rx", 4096, NULL,

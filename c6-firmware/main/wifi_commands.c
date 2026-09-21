@@ -42,6 +42,7 @@ static const char *TAG = "wifi_commands";
 
 static EventGroupHandle_t s_wifi_event_group;
 static esp_netif_t *s_netif;
+static bool s_wifi_ready;
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                            int32_t event_id, void *event_data)
@@ -63,17 +64,27 @@ void wifi_commands_init(void)
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
 
     s_wifi_event_group = xEventGroupCreate();
+    if (s_wifi_event_group == NULL) {
+        ESP_LOGE(TAG, "Wi-Fi event group allocation failed; Wi-Fi commands disabled");
+        return;
+    }
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+    s_wifi_ready = true;
 
     ESP_LOGI(TAG, "Wi-Fi STA mode ready");
 }
 
 void wifi_commands_scan(void)
 {
+    if (!s_wifi_ready) {
+        ESP_LOGE(TAG, "scan requested before Wi-Fi initialization completed");
+        uart_link_write_line("SCANDONE");
+        return;
+    }
     wifi_scan_config_t scan_cfg = {0};
     esp_err_t err = esp_wifi_scan_start(&scan_cfg, true /* block until done */);
     if (err != ESP_OK) {
@@ -95,7 +106,13 @@ void wifi_commands_scan(void)
         return;
     }
 
-    esp_wifi_scan_get_ap_records(&count, records);
+    err = esp_wifi_scan_get_ap_records(&count, records);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "scan_get_ap_records failed: %s", esp_err_to_name(err));
+        free(records);
+        uart_link_write_line("SCANDONE");
+        return;
+    }
 
     char line[128];
     for (int i = 0; i < count; i++) {
@@ -127,6 +144,10 @@ void wifi_commands_scan(void)
 
 bool wifi_commands_connect_sta(const char *ssid, const char *password)
 {
+    if (!s_wifi_ready) {
+        ESP_LOGE(TAG, "connect requested before Wi-Fi initialization completed");
+        return false;
+    }
     wifi_config_t wifi_cfg = {0};
     size_t ssid_len = strlen(ssid);
     if (ssid_len >= sizeof(wifi_cfg.sta.ssid)) {

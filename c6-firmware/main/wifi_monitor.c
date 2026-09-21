@@ -8,6 +8,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
@@ -31,6 +32,7 @@ typedef struct {
 static QueueHandle_t s_pkt_queue;
 static TaskHandle_t s_tx_task_handle;
 static TimerHandle_t s_hop_timer;
+static SemaphoreHandle_t s_tx_mutex;
 static volatile bool s_running = false;
 static int s_current_channel = 1;
 
@@ -178,7 +180,9 @@ static void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     strncpy(entry.sec, sec, sizeof(entry.sec) - 1);
     entry.sec[sizeof(entry.sec) - 1] = '\0';
 
-    xQueueSend(s_pkt_queue, &entry, 0);
+    if (s_running && s_pkt_queue != NULL) {
+        xQueueSend(s_pkt_queue, &entry, 0);
+    }
 }
 
 static void uart_tx_task(void *arg)
@@ -189,12 +193,16 @@ static void uart_tx_task(void *arg)
         if (xQueueReceive(s_pkt_queue, &entry, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        char line[96];
-        snprintf(line, sizeof(line), "PKT:%02X%02X%02X%02X%02X%02X,%s,%d,%d,%s",
-                 entry.bssid[0], entry.bssid[1], entry.bssid[2],
-                 entry.bssid[3], entry.bssid[4], entry.bssid[5],
-                 entry.ssid, entry.rssi, entry.channel, entry.sec);
-        uart_link_write_line(line);
+        xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+        if (s_running) {
+            char line[96];
+            snprintf(line, sizeof(line), "PKT:%02X%02X%02X%02X%02X%02X,%s,%d,%d,%s",
+                     entry.bssid[0], entry.bssid[1], entry.bssid[2],
+                     entry.bssid[3], entry.bssid[4], entry.bssid[5],
+                     entry.ssid, entry.rssi, entry.channel, entry.sec);
+            uart_link_write_line(line);
+        }
+        xSemaphoreGive(s_tx_mutex);
     }
 }
 
@@ -208,6 +216,13 @@ static void hop_timer_cb(TimerHandle_t timer)
 void wifi_monitor_init(void)
 {
     s_pkt_queue = xQueueCreate(PKT_QUEUE_DEPTH, sizeof(pkt_entry_t));
+    s_tx_mutex = xSemaphoreCreateMutex();
+    s_hop_timer = xTimerCreate("wifi_mon_hop", pdMS_TO_TICKS(CHANNEL_HOP_MS),
+                                pdTRUE, NULL, hop_timer_cb);
+    if (s_pkt_queue == NULL || s_tx_mutex == NULL || s_hop_timer == NULL) {
+        ESP_LOGE(TAG, "Wi-Fi Monitor resources unavailable; feature disabled");
+        return;
+    }
     // Same boot-time, one-shot, no-retry-path situation as bt_scan_init()'s
     // uart_tx_task -- log loudly on failure instead of leaving a device that
     // silently never reports any AP it sees.
@@ -215,8 +230,6 @@ void wifi_monitor_init(void)
                      &s_tx_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate(wifi_mon_tx) failed -- WiFi Monitor results won't reach the P4");
     }
-    s_hop_timer = xTimerCreate("wifi_mon_hop", pdMS_TO_TICKS(CHANNEL_HOP_MS),
-                                pdTRUE, NULL, hop_timer_cb);
 }
 
 bool wifi_monitor_start(void)
@@ -231,8 +244,8 @@ bool wifi_monitor_start(void)
     // just sits in s_pkt_queue forever, and the P4 screen waits for data
     // that can never arrive. Fail loudly here instead. See
     // KNOWN_ISSUES.md's Round 19 entry (residual liveness risk).
-    if (s_tx_task_handle == NULL) {
-        ESP_LOGE(TAG, "cannot start: uart_tx_task never started (see boot log)");
+    if (s_tx_task_handle == NULL || s_pkt_queue == NULL || s_tx_mutex == NULL || s_hop_timer == NULL) {
+        ESP_LOGE(TAG, "cannot start: Wi-Fi Monitor initialization was incomplete");
         return false;
     }
 
@@ -264,10 +277,16 @@ bool wifi_monitor_stop(void)
         return true;
     }
 
+    s_running = false;
     xTimerStop(s_hop_timer, portMAX_DELAY);
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(NULL);
-    s_running = false;
+    // Serialize with the TX task before resetting its queue. Therefore once
+    // this returns, the command dispatcher may safely send its stop ACK: no
+    // old PKT line can be emitted after it.
+    xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+    xQueueReset(s_pkt_queue);
+    xSemaphoreGive(s_tx_mutex);
 
     ESP_LOGI(TAG, "Wi-Fi monitor stopped");
     return true;
