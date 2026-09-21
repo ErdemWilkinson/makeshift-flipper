@@ -154,7 +154,6 @@ hardware test matrix.
 | `.github/workflows/build.yml` | CI for both ESP-IDF targets and the host tests |
 | `HARDWARE_TEST_MATRIX.md` | Hardware acceptance checklist |
 | `CAPABILITY_AND_THREAT_ASSESSMENT.md` | Capability, use-boundary, privacy, and added-component assessment |
-| `SHARING.md` | Accurate, safe project-sharing checklist and post drafts |
 
 ## Project hygiene
 
@@ -162,9 +161,3 @@ OCR and ASR data, models, training reports, and virtual environments belong to
 their dedicated research repositories, not to this firmware repository. The
 root `.gitignore` excludes those local experiment directories so firmware
 history and GitHub releases stay small, reproducible, and reviewable.
-
-## Sharing the project
-
-Use [SHARING.md](SHARING.md) after a real-device demonstration is available.
-Until then, keep the prototype-status notice above and do not represent the
-technical overview image as a hardware demo.
