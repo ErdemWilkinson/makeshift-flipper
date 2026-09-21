@@ -158,7 +158,7 @@ static bool wait_for_card(const char *title, const char *prompt_line, rc522_uid_
                 display_clear();
                 display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
                 display_draw_text_color(2, 0, "7/10-byte UID", DISPLAY_COLOR_ERROR);
-                display_draw_text(3, 0, "not supported", DISPLAY_COLOR_ERROR);
+                display_draw_text_color(3, 0, "not supported", DISPLAY_COLOR_ERROR);
                 display_draw_text(6, 0, "Press any key");
                 display_flush();
                 diag_record_error("RFID Clone", "RC522_SCAN_UNSUPPORTED_UID");
