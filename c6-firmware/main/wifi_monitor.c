@@ -225,6 +225,17 @@ bool wifi_monitor_start(void)
         return true;
     }
 
+    // wifi_monitor_init()'s uart_tx_task is what actually gets a scan
+    // result to the P4 -- if it failed to start (already logged there),
+    // starting the scan anyway would report OK while every packet found
+    // just sits in s_pkt_queue forever, and the P4 screen waits for data
+    // that can never arrive. Fail loudly here instead. See
+    // KNOWN_ISSUES.md's Round 19 entry (residual liveness risk).
+    if (s_tx_task_handle == NULL) {
+        ESP_LOGE(TAG, "cannot start: uart_tx_task never started (see boot log)");
+        return false;
+    }
+
     // Promiscuous mode and an actively-connected STA fight over the radio's
     // channel (STA needs to stay on its AP's channel; hopping breaks that),
     // so disconnect first. Deliberately no reconnect attempt afterward --
