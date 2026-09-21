@@ -1,11 +1,22 @@
-# Makeshift Flipper — firmware skeleton
+# Makeshift Flipper
 
-A DIY Flipper Zero-style multi-tool built on an ESP32-P4-Pico, running
-ESP-IDF (not Arduino). A 240x240 color SPI LCD, RFID/NFC, IR transceiver,
-and a companion ESP32-C6 for Wi-Fi, all driven by a 2-axis analog
-joystick plus a separate BACK button.
+Makeshift Flipper is an open DIY handheld for safely exploring the everyday radios and tags around your own devices: read RFID/NFC tags, learn and replay your own IR remotes, inspect nearby Wi-Fi access points and Bluetooth advertisements, and configure Wi-Fi without a keyboard. It is for makers who want a transparent, ESP32-based alternative they can understand, modify, and test on hardware they own.
 
-![System architecture](makeshift_flipper_system_architecture_en_white.png)
+> **Prototype status:** both ESP-IDF projects compile, but this firmware has not yet been flashed to or validated on the target hardware. The visual below is a system overview, not a hardware demo; a real device GIF/video will be added after the first on-device test.
+
+![Conceptual system overview](docs/makeshift-flipper-system-overview.png)
+
+## Run it
+
+With ESP-IDF v5.3+ installed and exported, build and flash the P4 firmware:
+
+```sh
+idf.py set-target esp32p4
+idf.py build
+idf.py -p COMx flash monitor
+```
+
+The ESP32-C6 is a separate firmware project; build/flash it from `c6-firmware/` following its README before trying Wi-Fi or Bluetooth functions.
 
 ## What this can do
 
@@ -190,16 +201,10 @@ is needed (unlike the SSD1306, which briefly needed one).
 - Start in `main/ui/menu.c`'s `menu_render()` if you want to add more
   animations or restyle the selection highlight
 
-## Building (ESP-IDF isn't installed on this machine — run this in your
-own environment)
+## Build notes
 
-```
-# Requires ESP-IDF v5.3+ installed and exported (idf.py on PATH)
-idf.py set-target esp32p4
-idf.py reconfigure
-idf.py build
-idf.py -p COMx flash monitor
-```
+The quick-start commands above are the full P4 build/flash path. `idf.py
+reconfigure` is only needed when you change project configuration.
 
 ## IR module (NEC protocol)
 
