@@ -1028,6 +1028,103 @@ progress on disk:
   training-format checkpoint like `full_v3`'s, which is exactly the case
   that would have surfaced it.
 
+## Round 19 (2026-09-21): pessimistic C6 setup/liveness pass
+
+These were source-level findings from this pass, not exercised on real
+ESP32-C6 hardware (this workstation has no Bash/ESP-IDF toolchain to build
+and flash with) -- their runtime frequency was unverified, only the faulty
+paths' presence in source. All nine items below have since been fixed in
+source (not hardware-verified, same caveat as everything else in this file
+until `HARDWARE_TEST_MATRIX.md` is worked through); kept for the record of
+what was found and how it was addressed.
+
+- ✅ **FIXED:** `wifi_setup_ap_run()` called `esp_netif_create_default_wifi_ap()`
+  every time it received `SETUP:<pin>` (`c6-firmware/main/wifi_setup_ap.c`)
+  without saving or destroying the returned default AP netif -- since WiFi
+  Setup is an ordinary, repeatable P4 menu action, a second attempt after a
+  cancelled/timed-out/failed first one could try to create the same default
+  AP netif twice. Fixed: the netif is now created once, lazily, into a
+  static `s_ap_netif` and reused on every later call; a creation failure is
+  also now handled (logged, setup aborted) instead of discarding the return
+  value.
+
+- ✅ **FIXED:** `connect_post_handler()` made exactly one
+  `httpd_req_recv(req, body, len)` call and parsed whatever byte count came
+  back. `httpd_req_recv()` is allowed to return a partial read (slow phone,
+  fragmented TCP), which would have silently truncated the SSID/password
+  before parsing. Fixed: now loops (retrying on `HTTPD_SOCK_ERR_TIMEOUT`,
+  the standard `esp_http_server` pattern) until the full `content_len` has
+  arrived.
+
+- ✅ **FIXED:** the P4 monitor/BT collector task-creation checks
+  (`main/net/c6_link.c`'s `c6_link_monitor_start()`/`c6_link_bt_scan_start()`)
+  now correctly roll the session back on `xTaskCreate()` returning `pdFAIL`.
+  The C6 boot-time Wi-Fi/BLE UART TX tasks (`wifi_monitor_init()`/
+  `bt_scan_init()`) retain their task handle and `wifi_monitor_start()`/
+  `bt_scan_start()` now refuse to start (return `false`) if that handle is
+  `NULL`, instead of reporting `OK` while no task exists to ever forward a
+  result to the P4.
+
+- ✅ **FIXED:** `action_rfid_save_1356mhz()` (via the shared
+  `wait_for_card()` helper in `main/main.c`) previously only ever returned
+  true for `RC522_SCAN_OK`, so a 7/10-byte-UID card
+  (`RC522_SCAN_UNSUPPORTED_UID` -- `rc522.c` only implements cascade level
+  1) made "Present tag now" hang forever with no way out but BACK, despite
+  the screen's own header comment claiming 7/10-byte support (the comment
+  was corrected too -- it was aspirational, not backed by
+  `rc522_read_uid()`). The same latent hang existed in RFID Clone's two
+  `wait_for_card()` calls. Fixed: `wait_for_card()` now reports the
+  unsupported case explicitly (a result screen + `diag_record_error()`,
+  matching every other failure path in the file) and returns false like a
+  cancel, instead of polling forever.
+
+- ✅ **FIXED:** the 125kHz/13.56MHz scan screens treated every ~10ms poll
+  that saw a tag as a fresh discovery -- `vibration_pulse(80)` (a blocking
+  80ms delay) and, for an unsupported UID, `diag_record_error()` fired on
+  every single poll for as long as the tag stayed in the field. Fixed:
+  added a present/not-present edge tracker per scan screen (RC522 has a
+  real `RC522_SCAN_NO_CARD` signal to reset on; RDM6300 has no such signal,
+  so absence is inferred after a run of consecutive silent polls), so
+  vibration/diag now fire once per presentation instead of once per poll.
+
+- ✅ **FIXED:** `wifi_commands_scan()` emitted `NET:<raw ssid>,<rssi>`
+  straight from beacon bytes with no sanitization, while Wi-Fi
+  Monitor/BLE scan already ran untrusted SSID/name text through the
+  existing `sanitize_wire_text()` before putting it on the same
+  comma/newline-delimited UART line -- an SSID containing a comma or CR/LF
+  byte could otherwise have split/corrupted the `SCAN` response and, on
+  selection, the `CONNECT:<ssid>,<password>` line sent back for it. Fixed:
+  applied the same `sanitize_wire_text()` call to the `SCAN` path. (Lossy,
+  same as it already was for Monitor/BLE -- a network whose real SSID needs
+  a comma/CR/LF still can't be connected to by name through this protocol,
+  but it can no longer corrupt the wire format.)
+
+- ✅ **FIXED:** `wifi_commands_log_flush()` checked its two explicit
+  `malloc`s but dereferenced `esp_http_client_init()`'s result
+  unconditionally -- under memory pressure this could crash the C6 instead
+  of returning the promised `FAIL` response. Fixed: added the missing
+  `NULL` check (frees `req_body`/`response_buf`, emits `FAIL`).
+
+- ✅ **FIXED:** on stopping Monitor or BT Scan, the P4 receiver task sent
+  `MONITORSTOP`/`BTSCANSTOP` and trusted exactly one subsequent line to be
+  the reply, while the C6's `PKT:`/`BTDEV:` producer task keeps
+  independently draining its own queue until `wifi_monitor_stop()`/
+  `bt_scan_stop()` actually runs on the C6's dispatch loop -- a queued data
+  line could legitimately arrive first, get consumed in place of the real
+  `OK`/`FAIL`, and leave that reply sitting in the UART for the *next*
+  command to misread as its own. Fixed: both stop paths (`c6_link.c`'s
+  `monitor_rx_task()`/`bt_scan_rx_task()`) now skip `PKT:`/`BTDEV:` lines
+  and keep reading until the real reply or a timeout.
+
+- ✅ **FIXED:** the same problem in reverse at startup --
+  `c6_link_monitor_start()`/`c6_link_bt_scan_start()` treated the first
+  incoming line as the C6's `OK`/`FAIL` reply, but the C6 enables its
+  promiscuous/BLE callback (which can start queuing `PKT:`/`BTDEV:` lines
+  for its independent TX task) before its dispatch loop's own `"OK"` write
+  runs -- two unordered FreeRTOS tasks, so a data line arriving first could
+  make a *successful* start look like a failure. Fixed: both start paths
+  now skip `PKT:`/`BTDEV:` lines the same way before checking for `OK`.
+
 ## General
 
 - Both firmwares build clean (see Round 12). The **P4 main firmware** has
