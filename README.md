@@ -37,6 +37,25 @@ local, consent-based use:
 See the [capability and use-boundary assessment](YETENEK_VE_UYUM_DEGERLENDIRMESI.md)
 for the detailed feature, privacy, safety, and added-component evaluation.
 
+## Built to stay on the right side of the line
+
+Every capability below was a deliberate design choice, not a missing
+feature — each row is something the firmware could technically do more of,
+and doesn't:
+
+| Capability | What it does | What it deliberately doesn't do |
+| --- | --- | --- |
+| Wi-Fi monitor | Passively logs nearby beacon/probe SSID, BSSID, RSSI, channel | No deauthentication, no management-frame injection, no password capture or cracking |
+| Bluetooth scan | Passively discovers nearby BLE advertisements (address, name, RSSI) | No pairing, no connecting, no GATT read/write, no classic Bluetooth |
+| RFID/NFC | Reads EM4100 (125 kHz) and MIFARE Classic UIDs; limited clone flow for owned test cards | No general-purpose card emulation, no writing 125 kHz tags, no writing target trailer blocks |
+| Infrared | Learns and replays NEC remote codes, up to 16 saved entries | No arbitrary protocol brute-forcing, no unbounded code library |
+| Diagnostics export | Optional local-LAN upload of the on-device error history | No cloud upload, no telemetry phone-home, off by default |
+| Data retention | IR/RFID libraries and error history stay on-device in flash | No default persistent storage of Wi-Fi/BLE scan results; cleared at session end unless explicitly saved |
+
+Camera/OCR, microphone, GPS, Sub-GHz, remote control, and cellular radios
+are not present in the firmware at all — see the assessment linked above
+for what would be required to add any of them responsibly.
+
 ## Current firmware scope
 
 | Area | Implemented scope | Validation status |
