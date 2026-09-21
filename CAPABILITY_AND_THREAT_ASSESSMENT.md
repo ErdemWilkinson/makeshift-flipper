@@ -1,4 +1,4 @@
-# Makeshift Flipper: Capability, Use-Boundary, and Added-Component Impact Assessment
+# Makeshifter-Emag: Capability, Use-Boundary, and Added-Component Impact Assessment
 
 **Date:** 2026-09-21  
 **Scope:** This document is a design and compliance assessment based on the P4
@@ -204,51 +204,346 @@ frequency plan, or access-bypass guide.
 
 ## Component-by-component capability and misuse suitability register
 
-The entries in this section answer a narrower question: **what could a person
-do if they kept the listed hardware but replaced or extended the software?**
-“Software extension” below means a new firmware/application behavior, not an
-implementation recipe. A suitable component makes an effect technically more
-plausible; it does not make it lawful, reliable, or possible against every
-target. Physical testing, protocol support, range, credentials, and law remain
-material constraints.
+This section exists to state one thing plainly, component by component: the
+hardware already in this design is generically capable radio/IR/RFID
+hardware, and the *only* thing standing between it and a higher-risk
+capability is which firmware runs on it. That is true of nearly all embedded
+radio/sensor hardware, not a defect specific to this project, but it is
+stated explicitly here rather than left implicit. Two patterns repeat below:
+
+- **"This part is already in the design. Replacing the firmware that drives
+  it could enable: ..."** — for hardware already installed/documented in
+  this repository.
+- **"Adding this part would newly enable: ..."** — for hardware not present
+  today, where adding it is what changes the threat surface, not firmware
+  alone.
+
+None of this is an implementation guide, and a listed illegal use is never
+something this project's own firmware does — see the "does not do" and
+"claims not supported" sections above for what the actual shipped code
+implements. A capability being technically plausible with different firmware
+does not make it lawful, reliable, or possible against every target:
+physical testing, protocol support, range, credentials, and law remain real
+constraints on top of everything below.
 
 ### Installed or documented current components
 
-| Component | Legitimate uses with the current design | What hostile custom software could make it relevant to | Key technical limits | Required safety boundary |
-|---|---|---|---|---|
-| ESP32-P4 main MCU | Runs the local UI, input, IR, RFID/NFC, diagnostics, and P4-side C6 control | Combining sensor results, retaining them, changing UX safeguards, or coordinating attached peripherals into a covert data-collection/control device | It has no built-in Wi-Fi/BLE use in this design; it needs attached hardware for RF, audio, camera, positioning, or external communication | Secure boot, flash encryption, signed firmware, user lock, and a visible firmware version. |
-| ESP32-C6 companion MCU | Performs Wi-Fi setup/scan/monitor and BLE scanning after P4 commands | Extending nearby-radio observation, collecting metadata, or sending collected data over an authorized/unauthorized network context | C6 is limited to Wi-Fi and BLE; current repository logic is receive-only for monitor/BT scan and does not provide active attack behavior | Keep radios receive-only by policy, authenticate exports, show an active-radio indicator, and restrict signed firmware. |
-| RC522 13.56 MHz reader/writer | Reads supported card UIDs and supports constrained MIFARE Classic test-card clone flow | Reading/storing accessible tag data or attempting unauthorized reuse of compatible access credentials | Supports a limited card family/flow; 7/10-byte UID support is incomplete; it is not payment-card copying or universal NFC emulation | Test-card-only product positioning, no persistent dump default, explicit authorization confirmation, encrypted storage. |
-| RDM6300 125 kHz reader | Reads EM4100-family tag IDs for authorized inventory or test use | Non-consensual collection and retention of nearby compatible tag identifiers | Read-only; short range; no tag writing/emulation in this hardware path | Do not persist identifiers by default; encrypt any retained inventory and apply retention limits. |
-| IR receiver (VS1838B class) | Learns compatible NEC remote codes from an owned remote | Collecting compatible IR commands in an unauthorized environment | Requires compatible protocol and optical reception; it is not a general RF receiver | Require clear capture indication and consent; avoid automatic persistent saving. |
-| IR LED transmitter + transistor | Replays approved NEC codes to an owned appliance | Unauthorized control or nuisance operation of compatible line-of-sight appliances | Requires line of sight, a compatible code, and limited physical range; no universal control guarantee | Physical transmit indicator, deliberate confirmation, device lock, and no unattended schedule/remote trigger. |
-| Four-receiver IR direction board concept | Coarse coverage/direction testing for an owned IR source | Roughly observing remote-use direction in an unauthorized space | Disabled in the current build; conflicts with pin/RMT resources; not precise tracking | Keep disabled until a legitimate tested use case and visible-use control exist. |
-| C6 Wi-Fi radio | Authorized AP scan, setup, and receive-only monitor of management traffic | Network-environment reconnaissance and metadata collection in places where the user has no authority | Current code excludes injection/deauth/password attacks; radio range and channel/firmware constraints apply | Default to short-lived data, BSSID masking, site-authorization mode, and no active attack features. |
-| C6 BLE radio | Passive discovery of owned BLE advertisers | Collecting device names/addresses/RSSI to profile nearby devices or movement | Current code is passive; no classic Bluetooth, connection, pairing, or GATT access | Do not retain raw addresses by default; provide a visible scan state and export approval. |
-| P4↔C6 UART link | Controlled command/result channel between the two boards | A modified P4/C6 firmware pair could pass collected information between processors or alter safety state | It is a short wired link, not an independent long-range channel; current protocol has known robustness gaps | Use authenticated/versioned messages, integrity checks, and fail-closed command handling. |
-| NVS persistent storage | Stores permitted IR/RFID library entries and device settings | Retaining identifiers or remote codes for later misuse; exposing them after device loss or compromise | Capacity is limited; it does not itself transmit data | Encrypt at rest, require user unlock, provide secure erase, and make data retention opt-in. |
-| ST7789 display | Presents menus, warnings, results, and user status | Concealing sensitive collection if hostile firmware removes indicators; social engineering through deceptive UI | Display is output-only and does not add sensing/transmission | Hardware-tied privacy/radio LEDs for sensitive functions; show signed firmware identity at boot. |
-| Joystick and BACK button | Local, deliberate device navigation | Custom firmware could use innocuous-looking UI actions to trigger hidden behaviors | No independent communication or sensing capability | Use clear action labels, confirmation for sensitive operations, and a lockout/PIN flow. |
-| Vibration motor | Feedback after allowed scans/actions | Covert haptic signaling to an operator | It cannot collect, transmit, or control a target by itself | Keep haptics paired with visible UI state and avoid silent background actions. |
-| Setup SoftAP + HTTP form | Lets the owner provide Wi-Fi credentials without a keyboard | Credential exposure if an attacker operates/observes an insecure setup environment; hostile firmware could misuse submitted data | Current setup has a per-session WPA2 password but uses plain HTTP; this is not a general credential-capture feature | Replace with authenticated encrypted transport or limit to controlled setup; disclose credential handling. |
-| PC-side debug log collector | Retains an owner's diagnostic record | Exfiltrating or exposing sensitive usage context if logs are sent to an attacker-controlled or unsecured host | It is optional, local-network-oriented, and outside the handheld hardware | Mutual authentication, TLS, least-data export, local-only default, and audit trail. |
-| Power/battery and enclosure | Portable operation of the owner's device | Makes any added sensing/control function portable and therefore easier to conceal | The power system does not add sensing, RF, or target-access capability by itself | Add physical kill switches for radios/camera/microphone and tamper-evident enclosure choices. |
+**ESP32-P4 main MCU** — runs the local UI, input, IR, RFID/NFC,
+diagnostics, and P4-side C6 control today.
+*Already in the design; different firmware on it could enable:* combining
+multiple sensors' results, retaining them against the owner's intent, or
+silently disabling the confirmation/authorization screens this project's own
+firmware shows before a clone/transmit/scan action — turning an
+authorized-use tool into a covert collection/control device coordinating
+whatever else is attached.
+*Limit:* no built-in Wi-Fi/BLE on its own; it needs attached hardware (the
+C6, or something new) for any RF, audio, camera, or positioning capability.
+*Required boundary:* secure boot, flash encryption, signed firmware, a user
+lock, and a visible firmware version so a swapped image isn't invisible.
 
-### Components not present: additions that materially change the threat surface
+**ESP32-C6 companion MCU** — performs Wi-Fi setup/scan/monitor and BLE
+scanning today, receive-only by design.
+*Already in the design; different firmware on it could enable:* active
+Wi-Fi deauthentication/injection, credential capture, BLE pairing/GATT
+access, or classic Bluetooth scanning — none of which the current C6
+firmware implements, but the chip itself supports all of them at the
+silicon level; only this repository's firmware choices keep it
+receive-only.
+*Limit:* C6 is Wi-Fi + BLE only, no cellular/Sub-GHz; range and
+channel/firmware constraints still apply.
+*Required boundary:* keep radios receive-only by policy (not just by
+omission), authenticate any export, show an active-radio indicator, and
+restrict to signed firmware.
 
-| Added component | Legitimate product use | New unlawful-use class it could enable or intensify with hostile software | What it still would not prove or guarantee | Minimum product restriction |
-|---|---|---|---|---|
-| Camera module | Offline OCR, accessibility, owner-approved document/label capture | Covert visual surveillance and collection of sensitive visual information | It does not inherently identify people or bypass locked devices | Hardware-wired recording LED, shutter/cover, no background capture, no default upload. |
-| Microphone | Push-to-talk command control and accessibility | Covert audio recording or ambient-speech collection | It does not automatically provide reliable speech recognition or lawful consent | Hardware mute, push-to-talk, visible recording state, no raw-audio retention. |
-| GNSS receiver | Owner-authorized asset/campaign location tagging | Location tracking and movement profiling | It cannot track indoors/reliably in all environments and needs a way to retain/export position | Default-off, clear location indicator, no history without explicit consent. |
-| Cellular modem or long-range data radio | Owner alerts and recovery communications | Remote surveillance, telemetry exfiltration, or remote command channel | It requires carrier/service credentials and does not grant access to targets by itself | Explicit pairing, strong authentication, no hidden background transport, emergency disconnect. |
-| Sub-GHz transceiver | Authorized lab interoperability with owned sensors/remotes | Expanded unauthorized remote replay or unlawful RF transmission | It does not make every remote protocol usable and remains subject to spectrum law | Exclude jamming/active interference; regulatory band/power limits and deliberate transmit confirmation. |
-| High-gain/directional antenna | Controlled RF measurement | Longer-range collection or transmission outside authorized space | It does not overcome protocol security or legal restrictions | Keep out of the portable consumer configuration; controlled-lab use only. |
-| General NFC emulator / more capable NFC front end | Authorized test-card and protocol compatibility testing | Credential imitation against access/identity systems | It would not make secure payment or modern cryptographic cards clonable | Test-card-only firmware profile, secure boot, audit records, and exclusion of production credentials. |
-| USB host/gadget capability | Signed updates and approved data movement | Unauthorized interaction with attached computing devices or data exfiltration | It does not itself defeat host security | Restrict roles, require on-device approval, and disallow automatic input/network modes. |
-| External flash/microSD | Larger offline user archive | Larger-scale retention of identifiers, scans, recordings, or card data | Storage alone does not collect/transmit data | Encrypt, set retention expiry, require explicit export/save approval. |
-| Secure element | Device-bound keys and firmware/log protection | No new unlawful action; weak implementation could instead lock out the legitimate owner | It cannot compensate for hostile signed firmware if keys are compromised | Protected manufacturing keys, recovery policy, and verified boot chain. |
-| Ethernet/USB network adapter | Controlled local management or diagnostics | Additional data-exfiltration path from a physically connected device | Requires an attached network and custom firmware | Default disabled, authenticated management, egress allowlist. |
+**RC522 13.56 MHz reader/writer** — reads supported card UIDs and supports
+a constrained MIFARE Classic test-card clone flow today (no trailer-block
+writes, default-key dictionary only).
+*Already in the design; different firmware on it could enable:* writing
+trailer/access-control blocks (this project's firmware deliberately never
+does), full-sector cloning against any card whose keys are known/weak, or
+building a persistent library of scanned card data without the owner's
+knowledge — turning "read my own test card" into "harvest and reuse access
+credentials belonging to others."
+*Limit:* limited card family/flow; 7/10-byte UID support is incomplete;
+this is not payment-card copying or universal NFC emulation, regardless of
+firmware.
+*Required boundary:* test-card-only product positioning, no persistent dump
+by default, explicit authorization confirmation, encrypted storage.
+
+**RDM6300 125 kHz reader** — reads EM4100-family tag IDs, read-only
+hardware.
+*Already in the design; different firmware on it could enable:*
+non-consensual collection and silent retention of nearby compatible tag
+identifiers (e.g. logging every badge that passes near the device instead
+of only the one the user intentionally scans).
+*Limit:* read-only at the hardware level; short range; no tag
+writing/emulation is possible on this chip regardless of firmware.
+*Required boundary:* do not persist identifiers by default; encrypt any
+retained inventory; apply retention limits.
+
+**IR receiver (VS1838B class)** — learns compatible NEC remote codes from
+an owned remote today, only on explicit user action.
+*Already in the design; different firmware on it could enable:*
+continuous/background capture of every IR command in range instead of only
+a deliberately learned one — e.g. silently logging a household's remote
+usage.
+*Limit:* requires a compatible protocol and optical line-of-sight
+reception; it is not a general RF receiver.
+*Required boundary:* require clear capture indication and consent; avoid
+automatic persistent saving.
+
+**IR LED transmitter + transistor** — replays approved NEC codes to an
+owned appliance today, only on explicit confirmation.
+*Already in the design; different firmware on it could enable:*
+unattended/scheduled/remote-triggered transmission of learned codes at
+another person's device — e.g. repeatedly toggling an appliance in a space
+the user doesn't control, or nuisance operation of a compatible
+line-of-sight device.
+*Limit:* requires line of sight, a compatible code, and limited physical
+range; no universal-remote guarantee regardless of firmware.
+*Required boundary:* physical transmit indicator, deliberate confirmation
+per action, device lock, no unattended schedule/remote trigger.
+
+**Four-receiver IR direction board concept** — present in source
+(`ir_direction.c`) but disabled in the shipped build (RMT/GPIO resource
+conflict, not a policy choice alone).
+*Already in the design (dormant); enabling + different firmware could
+enable:* roughly tracking which direction a remote is being operated from
+inside a space the user doesn't control — a coarse but real
+physical-surveillance use, not just IR replay.
+*Limit:* disabled today; even enabled, this is coarse direction-finding,
+not precise location tracking.
+*Required boundary:* keep disabled until there's a legitimate tested use
+case and a visible-use control; re-enabling it is itself a decision that
+needs this document revisited.
+
+**C6 Wi-Fi radio** — authorized AP scan, owner-managed setup, and
+receive-only channel-hopping monitor today.
+*Already in the design; different firmware on it could enable:*
+deauthentication/disassociation attacks, active packet injection, WPA
+handshake capture for offline password cracking, or rogue-AP/captive-portal
+impersonation to harvest credentials — none implemented today, all
+technically reachable by firmware alone on this radio.
+*Limit:* current code excludes all of the above; radio range and
+channel/firmware constraints still apply regardless.
+*Required boundary:* keep receive-only by policy, not just by omission;
+default to short-lived data; BSSID masking; site-authorization mode; no
+active-attack code path ever merged.
+
+**C6 BLE radio** — passive advertisement discovery of nearby BLE devices
+today, never connects.
+*Already in the design; different firmware on it could enable:* active
+connection, pairing/bonding attacks, GATT read/write against a target
+device, or classic-profile impersonation — this chip's BLE stack supports
+connecting; only this repository's firmware choice keeps it advertisement-
+only.
+*Limit:* passive-only code today; no classic Bluetooth (chip limitation,
+firmware-independent).
+*Required boundary:* do not retain raw addresses by default; visible scan
+state; export approval required.
+
+**P4↔C6 UART link** — the wired command/result channel between the two
+boards.
+*Already in the design; a modified P4+C6 firmware pair together could
+enable:* passing collected surveillance data between the two processors
+invisibly, or disabling the safety/confirmation state one side normally
+enforces on the other (e.g. C6 silently running Monitor while P4's UI shows
+something else).
+*Limit:* short wired link, not an independent long-range channel; can't by
+itself reach anything beyond the two boards.
+*Required boundary:* authenticated/versioned messages, integrity checks,
+fail-closed command handling.
+
+**NVS persistent storage** — stores permitted IR/RFID library entries and
+device settings today, bounded (16-entry libraries, 24-entry error ring).
+*Already in the design; different firmware on it could enable:*
+unbounded, silent retention of every scanned identifier or learned code
+instead of only what the user explicitly saved — turning a bounded local
+library into an unlimited surveillance log that survives reboots.
+*Limit:* flash capacity is limited; storage itself does not transmit data
+off-device.
+*Required boundary:* encrypt at rest, require user unlock, provide secure
+erase, make retention opt-in.
+
+**ST7789 display** — presents menus, warnings, confirmation screens, and
+results today.
+*Already in the design; different firmware on it could enable:* removing
+or faking the authorization-confirmation screens this project's own
+firmware shows before sensitive actions, or showing a deceptive/blank
+screen while a hidden action runs in the background — social engineering
+through a UI the user trusts.
+*Limit:* output-only; the display itself adds no sensing or transmission
+capability.
+*Required boundary:* hardware-tied privacy/radio LEDs for sensitive
+functions (not just an on-screen icon a hostile firmware could omit); show
+signed firmware identity at boot.
+
+**Joystick and BACK button** — local, deliberate device navigation.
+*Already in the design; different firmware on it could enable:* mapping an
+innocuous-looking button combination to a hidden, undisclosed action (e.g.
+a "secret" long-press that starts a background scan/transmit with no UI
+indication).
+*Limit:* no independent communication or sensing capability of its own.
+*Required boundary:* clear action labels, confirmation for sensitive
+operations, a lockout/PIN flow for anything irreversible.
+
+**Vibration motor** — feedback after allowed scans/actions today.
+*Already in the design; different firmware on it could enable:* covert
+haptic signaling to an operator holding the device out of sight (e.g. a
+distinct buzz pattern meaning "found a compatible card") — a real if
+low-severity covert-channel use.
+*Limit:* cannot itself collect, transmit, or control a target.
+*Required boundary:* keep haptics paired with visible UI state; avoid
+silent background actions that also buzz.
+
+**Setup SoftAP + HTTP form** — lets the owner provide Wi-Fi credentials
+without a keyboard today, plaintext HTTP with a per-session WPA2 password.
+*Already in the design; different firmware on it could enable:* a
+credential-harvesting captive portal presented as if it were the legitimate
+setup flow, since the current transport already lacks TLS — a modest
+firmware change turns an onboarding convenience into a phishing surface on
+the local network.
+*Limit:* requires the attacker to be on/observing the setup network at the
+right moment; not a remote attack.
+*Required boundary:* replace with authenticated encrypted transport, or
+limit to a controlled setup environment; disclose credential handling
+plainly to the user.
+
+**PC-side debug log collector** — an optional, local-network diagnostic
+upload tool.
+*Already in the design; different firmware/server config could enable:*
+exfiltrating a device's full usage history (which cards were scanned, which
+networks/BLE devices were seen) to an attacker-controlled or unsecured
+host, since the existing transport is already unauthenticated plain HTTP.
+*Limit:* optional, local-network-oriented, outside the handheld hardware
+itself; requires the log server to be reachable.
+*Required boundary:* mutual authentication, TLS, least-data export,
+local-only default, audit trail.
+
+**Power/battery and enclosure** — portable operation of the owner's
+device.
+*Already in the design; relevant to misuse only indirectly:* portability
+itself is what makes any of the above easier to conceal or operate
+unnoticed in a space the user doesn't control — it doesn't add a
+capability, it makes existing ones more deployable covertly.
+*Limit:* the power system adds no sensing, RF, or target-access capability
+by itself.
+*Required boundary:* physical kill switches for radios/camera/microphone;
+tamper-evident enclosure choices.
+
+### Components not present: additions that would newly enable an illegal capability
+
+Every row below is hardware **not in this design today**. Adding it is what
+changes the threat surface — in each case, the addition plus custom firmware
+is what would newly make the listed illegal use technically plausible; the
+device cannot do any of these today without the added part.
+
+**Add a camera module (e.g. OV2640)** → newly enables: covert visual
+surveillance — recording people, documents, screens, or license plates
+without consent, especially easy to conceal in something already shaped
+like an innocuous handheld.
+*Legitimate reason to add it anyway:* offline OCR, accessibility,
+owner-approved document/label capture (see `HARDWARE_INTEGRATION_PLAN.md`).
+*Minimum restriction if added:* hardware-wired recording LED, physical
+shutter/cover, no background capture, no default upload, storage disabled
+by default.
+
+**Add a microphone (e.g. I2S)** → newly enables: covert audio
+recording — capturing ambient conversations or building a voice profile of
+someone who never agreed to it.
+*Legitimate reason to add it anyway:* push-to-talk command control and
+accessibility for the owner.
+*Minimum restriction if added:* hardware mute switch, push-to-talk only
+(no always-listening mode), visible recording-state LED, no raw-audio
+retention, constrained command vocabulary only.
+
+**Add a GNSS/GPS receiver** → newly enables: location tracking and
+movement profiling of a person or vehicle without their knowledge.
+*Legitimate reason to add it anyway:* owner-authorized asset/field-work
+location tagging.
+*Minimum restriction if added:* default-off, continuous on-screen location
+indicator whenever active, no history retained without explicit consent
+each time.
+
+**Add a cellular modem or other long-range data radio (LTE/LoRa)** →
+newly enables: remote surveillance, telemetry exfiltration to a third
+party, or a remote command-and-control channel operating outside the
+owner's physical presence.
+*Legitimate reason to add it anyway:* owner status alerts, recovering a
+lost device.
+*Minimum restriction if added:* disabled by default, end-to-end
+authentication, visible pairing, no hidden background transport, an
+emergency disconnect.
+
+**Add a Sub-GHz transceiver** → newly enables: unauthorized replay of
+garage-door/gate/car-fob and similar remotes, or transmission outside a
+licensed/permitted band — a direct physical-security bypass class this
+device cannot reach today (its only transmitter is a line-of-sight IR LED).
+*Legitimate reason to add it anyway:* lab protocol-compatibility analysis
+with the owner's own remotes/sensors.
+*Minimum restriction if added:* receiver-first design, regulatory
+band/power limits enforced in firmware, deliberate transmit confirmation
+per action, jamming/active interference permanently excluded.
+
+**Add a high-gain/directional antenna** → newly enables: collection or
+transmission (Wi-Fi/BLE/Sub-GHz, whichever radio it's paired with) from
+well outside the range any of this device's current radios reach —
+turning a room-scale receive-only tool into a longer-range one, which
+changes what "nearby-network discovery" or "IR/Sub-GHz replay" can reach
+without the owner's knowledge.
+*Legitimate reason to add it anyway:* controlled RF measurement in a lab.
+*Minimum restriction if added:* keep out of the portable/consumer
+configuration entirely; controlled-lab use only, never in a handheld form
+factor.
+
+**Add a more capable/general NFC front end or emulator** → newly enables:
+imitating an access-control or identity credential well beyond RC522's
+current MIFARE-Classic-with-known-keys limitation — a materially stronger
+credential-forgery capability than anything present today.
+*Legitimate reason to add it anyway:* authorized test-card and protocol
+compatibility testing.
+*Minimum restriction if added:* test-card-only firmware profile, secure
+boot, on-device audit records, explicit exclusion of production/payment
+credentials from the supported set.
+
+**Add USB host/gadget capability** → newly enables: acting as a malicious
+USB peripheral against a connected computer (keystroke injection, disguised
+storage/network device) or pulling data off a host — an attack surface this
+device has no path to today with no USB data role implemented.
+*Legitimate reason to add it anyway:* signed firmware updates, approved
+data export.
+*Minimum restriction if added:* restrict to explicit signed-update and
+approved-export roles only; disallow automatic HID/keyboard or
+network-device modes entirely.
+
+**Add external flash/microSD storage** → newly enables: bulk, large-scale
+retention of scanned identifiers, card dumps, radio scans, or (if a
+microphone/camera were also added) recordings — turning what's currently a
+small, bounded on-device log (16-entry libraries) into an effectively
+unbounded collection archive.
+*Legitimate reason to add it anyway:* a larger offline archive for the
+owner's own authorized test evidence.
+*Minimum restriction if added:* encryption at rest, automatic retention
+expiry, explicit export/save confirmation, no default retention of
+sensitive dumps.
+
+**Add a secure element** → does not by itself enable a new illegal
+capability — included here because it's a common "security" addition that
+gets asked about. A weak *implementation* of it could instead lock out the
+legitimate owner (a different failure mode than misuse).
+*Legitimate reason to add it anyway:* device identity, encrypted
+settings/logs, signed-update verification.
+*Minimum restriction if added:* protected manufacturing keys, a recovery
+policy, a verified boot chain.
+
+**Add an Ethernet/USB network adapter** → newly enables: an additional
+data-exfiltration path from a physically connected device, beyond the C6's
+existing Wi-Fi path — relevant mainly as a second, easy-to-overlook network
+egress point once someone has physical access to the device.
+*Legitimate reason to add it anyway:* controlled local management or
+diagnostics.
+*Minimum restriction if added:* disabled by default, authenticated
+management only, an explicit network egress allowlist.
 
 ### C. Impact chains
 
