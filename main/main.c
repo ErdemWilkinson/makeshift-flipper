@@ -47,10 +47,33 @@ static menu_t *s_active_menu;
 // the result instead of "scanning...". Cleared when BACK returns to the menu.
 static char s_last_scan_line[DISPLAY_COLS + 1];
 
+// Tracks whether a tag is believed to still be sitting in the reader's
+// field, so the scan screen's main-loop block (below) can fire
+// vibration_pulse()/diag_record_error() once per presentation instead of
+// once per ~10ms poll for as long as the tag stays there -- see
+// KNOWN_ISSUES.md's Round 19 entry ("held-card vibration/diagnostic
+// flood"). Reset (along with s_last_scan_line) whenever a scan screen is
+// (re-)entered.
+static bool s_scan_card_present;
+
+// RC522 reports a real RC522_SCAN_NO_CARD result the moment a 13.56MHz tag
+// leaves the field, so that's used directly there. The RDM6300 (125kHz) has
+// no such signal -- it's a read-only module that just streams a frame
+// periodically for as long as a tag is present, with nothing to say
+// "gone" -- so absence there is inferred from a run of consecutive silent
+// polls instead. At the ~10ms poll cadence this loop runs at, 15 misses is
+// ~150ms of the tag not being re-read, comfortably longer than one
+// RDM6300 resend interval but still short enough that pulling the tag away
+// re-arms detection almost immediately.
+#define RDM6300_ABSENCE_POLLS 15
+static int s_rdm6300_miss_streak;
+
 static void action_rfid_125khz(void)
 {
     s_screen = APP_SCREEN_SCAN_125KHZ;
     s_last_scan_line[0] = '\0';
+    s_scan_card_present = false;
+    s_rdm6300_miss_streak = 0;
     s_screen_dirty = true;
 }
 
@@ -58,6 +81,7 @@ static void action_nfc_1356mhz(void)
 {
     s_screen = APP_SCREEN_SCAN_1356MHZ;
     s_last_scan_line[0] = '\0';
+    s_scan_card_present = false;
     s_screen_dirty = true;
     rc522_antenna_on(); // draws continuous power; only while this screen is active
 }
@@ -82,15 +106,41 @@ typedef struct {
     int sectors_read;
 } rc522_card_dump_t;
 
+// Blocks until any button is pressed. Used after a result screen (success/
+// error message, sector dump, scan results, ... already drawn and flushed
+// by the caller) so the user has time to read it before the screen
+// changes. Shared by most of the "show a result, then wait" action
+// functions below -- see individual callers for what precedes it.
+static void wait_for_any_key(void)
+{
+    button_id_t any;
+    do {
+        any = buttons_poll();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (any == BUTTON_COUNT);
+}
+
 // Waits (blocking, antenna must already be on) for any card and returns its
-// UID. Used by both the "scan source" and "place target card" steps of
-// dump/clone -- polls at the same ~10ms cadence as the main loop's own scan
-// screen. BACK cancels and returns false.
-static bool wait_for_card(const char *prompt_line, rc522_uid_t *out_uid)
+// UID. Used by both the "scan source"/"place target card" steps of
+// dump/clone and by action_rfid_save_1356mhz() -- polls at the same ~10ms
+// cadence as the main loop's own scan screen. BACK cancels and returns
+// false.
+//
+// A 7/10-byte UID (RC522_SCAN_UNSUPPORTED_UID -- rc522.c only implements
+// cascade level 1) used to fall through the `result == RC522_SCAN_OK` check
+// silently and keep polling forever: every caller here needs a 4-byte UID
+// (clone/dump only handles those; Save 13.56MHz's header comment claiming
+// 7/10-byte support was aspirational, not backed by rc522_read_uid()), so
+// there was no way to make progress with such a card in range other than
+// BACK -- no error, no explanation, just an unresponsive-looking "Present
+// tag now" screen. Now reports it explicitly and returns false like a
+// cancel, so callers show a real result instead of a silent hang. See
+// KNOWN_ISSUES.md's Round 19 entry.
+static bool wait_for_card(const char *title, const char *prompt_line, rc522_uid_t *out_uid)
 {
     for (;;) {
         display_clear();
-        display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
         display_draw_text(2, 0, prompt_line);
         display_draw_text(6, 0, "BACK: cancel");
         display_flush();
@@ -104,23 +154,20 @@ static bool wait_for_card(const char *prompt_line, rc522_uid_t *out_uid)
             if (result == RC522_SCAN_OK) {
                 return true;
             }
+            if (result == RC522_SCAN_UNSUPPORTED_UID) {
+                display_clear();
+                display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
+                display_draw_text_color(2, 0, "7/10-byte UID", DISPLAY_COLOR_ERROR);
+                display_draw_text(3, 0, "not supported", DISPLAY_COLOR_ERROR);
+                display_draw_text(6, 0, "Press any key");
+                display_flush();
+                diag_record_error("RFID Clone", "RC522_SCAN_UNSUPPORTED_UID");
+                wait_for_any_key();
+                return false;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
-}
-
-// Blocks until any button is pressed. Used after a result screen (success/
-// error message, sector dump, scan results, ... already drawn and flushed
-// by the caller) so the user has time to read it before the screen
-// changes. Shared by most of the "show a result, then wait" action
-// functions below -- see individual callers for what precedes it.
-static void wait_for_any_key(void)
-{
-    button_id_t any;
-    do {
-        any = buttons_poll();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    } while (any == BUTTON_COUNT);
 }
 
 // Boot splash: DEVICE_NAME on an accent-filled bar, held for a couple
@@ -342,7 +389,7 @@ static void action_rfid_clone(void)
         return;
     }
 
-    if (!wait_for_card("Place source card", &dump->uid)) {
+    if (!wait_for_card("RFID Clone", "Place source card", &dump->uid)) {
         free(dump);
         rc522_antenna_off();
         menu_render(s_active_menu);
@@ -367,7 +414,7 @@ static void action_rfid_clone(void)
     }
 
     rc522_uid_t target_uid;
-    if (!wait_for_card("Place TARGET card", &target_uid)) {
+    if (!wait_for_card("RFID Clone", "Place TARGET card", &target_uid)) {
         free(dump);
         rc522_antenna_off();
         menu_render(s_active_menu);
@@ -495,15 +542,19 @@ static void action_rfid_save_125khz(void)
 
 // Same shape as action_rfid_save_125khz(), but for a 13.56MHz UID via
 // wait_for_card() (the same helper RFID Clone uses to wait for a card).
-// A 7/10-byte UID is stored as-is -- rfid_library_entry_t's rc522_uid_t
-// already carries .length for those, unlike the clone/dump path which
-// only supports 4-byte UIDs.
+// Despite rfid_library_entry_t's rc522_uid_t carrying a .length field wide
+// enough for a 7/10-byte UID, rc522_read_uid() only ever produces a 4-byte
+// one (cascade level 1 only -- see rc522.c) and reports anything longer as
+// RC522_SCAN_UNSUPPORTED_UID, which wait_for_card() now surfaces as an
+// explicit "not supported" result instead of hanging -- see its comment and
+// KNOWN_ISSUES.md's Round 19 entry. So in practice only 4-byte UIDs ever
+// reach here, the same as the clone/dump path.
 static void action_rfid_save_1356mhz(void)
 {
     rc522_antenna_on();
 
     rc522_uid_t uid;
-    if (!wait_for_card("Present tag now", &uid)) {
+    if (!wait_for_card("Save 13.56MHz Tag", "Present tag now", &uid)) {
         rc522_antenna_off();
         menu_render(s_active_menu);
         return;
@@ -1403,37 +1454,58 @@ void app_main(void)
             }
         } else {
             const char *title = (s_screen == APP_SCREEN_SCAN_125KHZ) ? "125kHz RFID" : "13.56MHz NFC";
-            bool found = false;
+            // True only on the poll that transitions "nothing in the field"
+            // -> "tag present" -- vibration/diag firing is gated on this,
+            // not on merely reading a tag again this tick (see
+            // s_scan_card_present's comment above).
+            bool new_presentation = false;
 
             if (s_screen == APP_SCREEN_SCAN_125KHZ) {
                 rdm6300_id_t id;
                 if (rdm6300_poll(&id)) {
+                    s_rdm6300_miss_streak = 0;
+                    if (!s_scan_card_present) {
+                        s_scan_card_present = true;
+                        new_presentation = true;
+                    }
                     snprintf(s_last_scan_line, sizeof(s_last_scan_line),
                              "%02X%02X%02X%02X%02X",
                              id.bytes[0], id.bytes[1], id.bytes[2], id.bytes[3], id.bytes[4]);
-                    found = true;
+                } else if (s_scan_card_present) {
+                    if (++s_rdm6300_miss_streak >= RDM6300_ABSENCE_POLLS) {
+                        s_scan_card_present = false;
+                        s_rdm6300_miss_streak = 0;
+                    }
                 }
             } else {
                 rc522_uid_t uid;
                 rc522_scan_result_t result = rc522_read_uid(&uid);
-                if (result == RC522_SCAN_OK) {
+                if (result == RC522_SCAN_NO_CARD) {
+                    s_scan_card_present = false;
+                } else if (result == RC522_SCAN_OK) {
+                    if (!s_scan_card_present) {
+                        s_scan_card_present = true;
+                        new_presentation = true;
+                    }
                     int n = 0;
                     for (int i = 0; i < uid.length && n < DISPLAY_COLS - 3; i++) {
                         n += snprintf(&s_last_scan_line[n], sizeof(s_last_scan_line) - n,
                                       "%02X ", uid.bytes[i]);
                     }
-                    found = true;
                 } else if (result == RC522_SCAN_UNSUPPORTED_UID) {
+                    if (!s_scan_card_present) {
+                        s_scan_card_present = true;
+                        new_presentation = true;
+                        diag_record_error("13.56MHz NFC", "RC522_SCAN_UNSUPPORTED_UID");
+                    }
                     snprintf(s_last_scan_line, sizeof(s_last_scan_line),
                              "7/10-byte UID: N/A");
-                    found = true;
-                    diag_record_error("13.56MHz NFC", "RC522_SCAN_UNSUPPORTED_UID");
                 } else if (result == RC522_SCAN_ERROR) {
                     diag_record_error("13.56MHz NFC", "RC522_SCAN_ERROR");
                 }
             }
 
-            if (found) {
+            if (new_presentation) {
                 vibration_pulse(80);
                 s_screen_dirty = true;
             }
