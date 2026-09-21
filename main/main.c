@@ -673,11 +673,26 @@ static void action_rfid_library(void)
 
 // Sends a fixed test frame -- a quick sanity check that the IR LED/RMT TX
 // path works at all, independent of the library below.
+// Sends a fixed test NEC frame and shows a brief confirmation before
+// returning to the menu -- previously only logged via ESP_LOGI and
+// returned immediately, giving a device-only user (no serial connection)
+// no indication the button press was registered or that transmission was
+// attempted. ir_driver_send() is void (no error return), so this can only
+// confirm the request was made, not that the IR LED actually emitted --
+// see KNOWN_ISSUES.md Round 25.
 static void action_ir_send_test(void)
 {
     ir_nec_frame_t frame = { .address = 0x00, .command = 0x45 };
     ESP_LOGI(TAG, "IR TX test frame: addr=0x%02X cmd=0x%02X", frame.address, frame.command);
     ir_driver_send(&frame);
+
+    display_clear();
+    display_draw_text_color(0, 0, "IR Send Test", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(2, 0, "Test frame sent", DISPLAY_COLOR_OK);
+    display_draw_text(3, 0, "addr=0x00 cmd=0x45");
+    display_draw_text(6, 0, "Press any key");
+    display_flush();
+    wait_for_any_key();
 }
 
 // Blocks (BACK cancels) waiting for one NEC frame via ir_driver_poll_rx(),
@@ -810,21 +825,63 @@ static void action_ir_direction_find(void)
     s_screen_dirty = true;
 }
 
-// Blocks for a few seconds while the C6 scans. Replace with a real
-// "browse networks" screen once there's a UI for picking one to connect to.
+// Blocks for a few seconds while the C6 scans, then shows the result on
+// screen -- previously only logged via ESP_LOGI/ESP_LOGW and returned
+// immediately with no on-device indication a scan happened, how many APs
+// were found, or why it failed (a device-only user with no serial
+// connection saw nothing at all; see KNOWN_ISSUES.md Round 25 and
+// HARDWARE_TEST_MATRIX.md's "Wi-Fi Scan Test" row, which expects a real
+// AP list to be visible). Replace with a real "browse networks" screen
+// (like action_wifi_setup_manual()'s picker) once there's a UI for
+// picking one to connect to -- this is still just a result display, no
+// selection.
 static void action_wifi_scan_test(void)
 {
+    display_clear();
+    display_draw_text_color(0, 0, "WiFi Scan Test", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Scanning...");
+    display_flush();
+
     c6_network_t networks[C6_MAX_NETWORKS];
     int count = c6_link_scan(networks, C6_MAX_NETWORKS);
+
+    display_clear();
+    display_draw_text_color(0, 0, "WiFi Scan Test", DISPLAY_COLOR_ACCENT);
     if (count < 0) {
         ESP_LOGW(TAG, "Wi-Fi scan failed (C6 not responding?)");
         diag_record_error("WiFi Scan Test", "C6_LINK_SCAN_FAILED");
-        return;
+        display_draw_text_color(2, 0, "Scan failed", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "C6 not responding?");
+    } else if (count == 0) {
+        display_draw_text_color(2, 0, "No networks found", DISPLAY_COLOR_DIM);
+    } else {
+        ESP_LOGI(TAG, "Wi-Fi scan found %d network(s):", count);
+        char summary[DISPLAY_COLS + 1];
+        snprintf(summary, sizeof(summary), "%d network(s) found:", count);
+        display_draw_text(1, 0, summary);
+        // LIST_VISIBLE_ROWS rows available below the header+summary lines;
+        // this is a one-shot result display (not a scrollable picker like
+        // action_wifi_setup_manual()'s), so anything past that is just
+        // noted rather than scrolled to.
+        int shown = count < LIST_VISIBLE_ROWS - 1 ? count : LIST_VISIBLE_ROWS - 1;
+        for (int i = 0; i < shown; i++) {
+            char line[DISPLAY_COLS + 1];
+            snprintf(line, sizeof(line), "%.20s (%d dBm)", networks[i].ssid, networks[i].rssi);
+            ESP_LOGI(TAG, "  %s (%d dBm)", networks[i].ssid, networks[i].rssi);
+            display_draw_text(2 + i, 0, line);
+        }
+        for (int i = shown; i < count; i++) {
+            ESP_LOGI(TAG, "  %s (%d dBm)", networks[i].ssid, networks[i].rssi);
+        }
+        if (count > shown) {
+            char more[DISPLAY_COLS + 1];
+            snprintf(more, sizeof(more), "(+%d more, see logs)", count - shown);
+            display_draw_text_color(2 + shown, 0, more, DISPLAY_COLOR_DIM);
+        }
     }
-    ESP_LOGI(TAG, "Wi-Fi scan found %d network(s):", count);
-    for (int i = 0; i < count; i++) {
-        ESP_LOGI(TAG, "  %s (%d dBm)", networks[i].ssid, networks[i].rssi);
-    }
+    display_draw_text(DISPLAY_ROWS - 1, 0, "Press any key");
+    display_flush();
+    wait_for_any_key();
 }
 
 // Blocks (up to several minutes) while the C6 runs its web setup AP.

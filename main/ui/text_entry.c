@@ -7,20 +7,34 @@
 // Row layout chosen to fit comfortably at 8px/char on the 240px-wide panel
 // (up to 24 columns fit with no crowding; we use 10, leaving each cell a
 // generous CELL_W_PX so the touch-free joystick cursor is never fiddly to
-// land on the right key).
+// land on the right key). GRID_ROWS is 10 (not 6) specifically so this
+// covers the full printable-ASCII range WPA/WPA2 passphrases may legally
+// use -- see KNOWN_ISSUES.md Round 25: a shorter grid missing uppercase
+// K-Z, space, or punctuation like `! # $ % & ' ( ) + , / : ; = > ? [ ] { }
+// ~` could make a user's real password impossible to type here, reporting
+// a connection failure that isn't actually a wrong password.
 #define GRID_COLS 10
-#define GRID_ROWS 6
+#define GRID_ROWS 10
 
-// "^" = OK (submit), "<" = DEL (backspace), "*" = CLR (clear all). Kept to
-// one character each so every cell is exactly CELL_W_PX wide with nothing
-// overflowing into its neighbor.
+// "^" = OK (submit), "<" = DEL (backspace), "*" = CLR (clear all), "SP" =
+// space (the only 2-char label -- space itself renders as nothing on a
+// cell, so it needs a visible placeholder; text_entry_handle_button()
+// special-cases this exact 2-char string to append ' ' rather than the
+// label text). Every other label is exactly one printable character wide.
+// CELL_W_PX (24px) fits 3 characters at the font's 8px/char, so "SP" fits
+// with room to spare -- unlike a longer placeholder, which would overflow
+// into the next cell.
 static const char *const s_grid[GRID_ROWS][GRID_COLS] = {
     {"1","2","3","4","5","6","7","8","9","0"},
     {"q","w","e","r","t","y","u","i","o","p"},
     {"a","s","d","f","g","h","j","k","l","-"},
     {"z","x","c","v","b","n","m","_",".","@"},
     {"Q","W","E","R","T","Y","U","I","O","P"},
-    {"^","<","*","A","S","D","F","G","H","J"},
+    {"A","S","D","F","G","H","J","K","L","Z"},
+    {"X","C","V","B","N","M","!","#","$","%"},
+    {"&","'","(",")","+",",","/",":",";","="},
+    {">","?","[","]","{","}","~","\"","\\","`"},
+    {"^","<","*","SP","|","","","","",""},
 };
 
 #define CELL_W_PX 24
@@ -80,8 +94,13 @@ bool text_entry_handle_button(text_entry_t *entry, button_id_t button)
             }
             return false;
         case BUTTON_PRESS: {
-            char c = s_grid[entry->cursor_row][entry->cursor_col][0];
-            if (c == '^') {
+            const char *label = s_grid[entry->cursor_row][entry->cursor_col];
+            char c = label[0];
+            if (c == '\0') {
+                // Unused trailing cell on the control row -- no-op.
+            } else if (label[0] == 'S' && label[1] == 'P' && label[2] == '\0') {
+                append_char(entry, ' ');
+            } else if (c == '^') {
                 return true;
             } else if (c == '<') {
                 backspace(entry);

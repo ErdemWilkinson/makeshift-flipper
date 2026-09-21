@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 
 #include "json_escape.h"
+#include "pkt_line_parse.h"
 
 // Matches the wiring report: P4 GPIO18(TX)->C6 RX, P4 GPIO19(RX)->C6 TX.
 #define UART_PORT UART_NUM_2
@@ -346,48 +347,23 @@ static int s_monitor_ap_count;
 // and can't run at the same time, see both start functions.
 static volatile bool s_bt_scan_running = false;
 
-// Format: "PKT:<bssid_hex12>,<ssid>,<rssi>,<channel>". Malformed lines are
-// dropped silently -- a stray non-PKT line (there shouldn't be one, since
-// nothing else talks to the C6 while this task owns s_link_mutex) is
-// likewise just ignored rather than treated as fatal.
+// Format: "PKT:<bssid_hex12>,<ssid>,<rssi>,<channel>[,<sec>]". Malformed
+// lines are dropped silently -- a stray non-PKT line (there shouldn't be
+// one, since nothing else talks to the C6 while this task owns
+// s_link_mutex) is likewise just ignored rather than treated as fatal.
+// Parsing itself lives in pkt_line_parse.c (pure, no FreeRTOS dependency)
+// so the host test suite (tests/test_wifi_pkt_parse.c) exercises the
+// exact same code this runs -- see that module's doc comment.
 static void handle_pkt_line(const char *line)
 {
-    const char *body = line + 4; // skip "PKT:"
-
-    if (strlen(body) < 12 || body[12] != ',') {
-        return;
-    }
     uint8_t bssid[6];
-    for (int i = 0; i < 6; i++) {
-        unsigned int byte;
-        if (sscanf(body + i * 2, "%2x", &byte) != 1) {
-            return;
-        }
-        bssid[i] = (uint8_t)byte;
-    }
-
-    const char *ssid_start = body + 13;
-    const char *comma1 = strchr(ssid_start, ',');
-    if (comma1 == NULL) {
-        return;
-    }
-    const char *comma2 = strchr(comma1 + 1, ',');
-    if (comma2 == NULL) {
-        return;
-    }
-
     char ssid[C6_MONITOR_SSID_MAX_LEN + 1];
-    size_t ssid_len = comma1 - ssid_start;
-    if (ssid_len > C6_MONITOR_SSID_MAX_LEN) {
-        ssid_len = C6_MONITOR_SSID_MAX_LEN;
+    int rssi, channel;
+    char sec[8];
+    if (!pkt_line_parse(line, bssid, ssid, sizeof(ssid), &rssi, &channel,
+                         sec, sizeof(sec))) {
+        return;
     }
-    memcpy(ssid, ssid_start, ssid_len);
-    ssid[ssid_len] = '\0';
-
-    int rssi = atoi(comma1 + 1);
-    int channel = atoi(comma2 + 1);
-    const char *comma3 = strchr(comma2 + 1, ',');
-    const char *sec = comma3 ? (comma3 + 1) : "?";
 
     xSemaphoreTake(s_monitor_data_mutex, portMAX_DELAY);
     int slot = -1;
