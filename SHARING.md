@@ -1,4 +1,4 @@
-# Makeshifter-Emag launch kit
+# Makeshift Flipper launch kit
 
 Use this only after publishing the repository and replacing the conceptual
 cover image with a short, unedited recording of the real device. Keep the
@@ -22,7 +22,7 @@ actions on devices you do not own or have permission to test.
 
 **Body:**
 
-I am building Makeshifter-Emag, an open ESP32-P4 + ESP32-C6 handheld that
+I am building Makeshift Flipper, an open ESP32-P4 + ESP32-C6 handheld that
 keeps common maker experiments in one joystick-driven interface: RFID/NFC UID
 reading, IR learning/transmit, passive Wi-Fi AP monitoring, passive BLE
 advertisement scanning, and phone-based Wi-Fi setup.
@@ -43,7 +43,7 @@ artifact and evaluation results are ready.
 
 ## Show HN
 
-**Title:** Show HN: Makeshifter-Emag – an open ESP32-P4 handheld for your own RFID, IR and radio experiments
+**Title:** Show HN: Makeshift Flipper – an open ESP32-P4 handheld for your own RFID, IR and radio experiments
 
 **Text:**
 
@@ -59,14 +59,14 @@ claiming a finished product. Demo: [attach GIF/video]. Repo: [GitHub URL].
 
 ## X / Twitter thread
 
-1. I am building **Makeshifter-Emag**: an open ESP32-P4 handheld for exploring my own RFID/NFC tags, IR remotes, Wi-Fi APs and BLE devices. [demo GIF/video]
+1. I am building **Makeshift Flipper**: an open ESP32-P4 handheld for exploring my own RFID/NFC tags, IR remotes, Wi-Fi APs and BLE devices. [demo GIF/video]
 2. The goal is a modifiable, offline-first maker tool: P4 for the UI and peripherals, C6 for Wi-Fi/Bluetooth, connected over a tiny UART protocol.
 3. The repo includes the pin plan, firmware, known issues, and a hardware test matrix. It compiles, but I am keeping the prototype label until real-device tests are complete.
 4. Source: [GitHub URL] #ESP32 #EmbeddedSystems #TinyML
 
 ## LinkedIn
 
-I am documenting a hands-on embedded systems project: Makeshifter-Emag, an
+I am documenting a hands-on embedded systems project: Makeshift Flipper, an
 open ESP32-P4 handheld that brings together authorized tag reading, IR remote
 learning, passive Wi-Fi/Bluetooth observation, and a joystick-driven UI.
 
