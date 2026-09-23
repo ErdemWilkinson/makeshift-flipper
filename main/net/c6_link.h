@@ -5,9 +5,10 @@
 
 #include "diag/diag.h"
 
-// Compatibility API retained from the former P4-to-C6 UART architecture.
-// In the standalone build these functions operate the ESP32-C6's on-chip
-// Wi-Fi/BLE radios directly; there is no wire protocol or companion MCU.
+// Compatibility API retained from the former two-chip, UART-linked
+// architecture. In the standalone build these functions operate the
+// ESP32-C6's on-chip Wi-Fi/BLE radios directly; there is no wire protocol
+// or companion MCU.
 
 #define C6_MAX_NETWORKS 16
 #define C6_SSID_MAX_LEN 32
