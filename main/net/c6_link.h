@@ -46,12 +46,20 @@ bool c6_link_send_error_log(const diag_entry_t *entries, int count);
 #define C6_MONITOR_MAX_APS 32
 #define C6_MONITOR_SSID_MAX_LEN 32
 
+// Short manufacturer label derived from the BSSID's OUI (first 3 bytes),
+// looked up in a small built-in table -- see c6_link.c's oui_vendor_lookup().
+// Purely a local, static lookup against publicly-registered IEEE OUI
+// prefixes; it identifies hardware, not a person, and nothing is sent
+// anywhere. "?" when the OUI isn't in the table.
+#define C6_VENDOR_MAX_LEN 8
+
 typedef struct {
     uint8_t bssid[6];
     char ssid[C6_MONITOR_SSID_MAX_LEN + 1];
     int8_t rssi;
     uint8_t channel;
     char sec[8];
+    char vendor[C6_VENDOR_MAX_LEN + 1];
 } c6_monitor_ap_t;
 
 // Passive beacon/probe-response monitor. It disconnects STA, channel-hops
