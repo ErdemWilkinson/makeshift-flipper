@@ -6,34 +6,22 @@ on:
   pull_request:
 
 jobs:
-  build-p4:
-    name: Build P4 firmware (main/)
+  build-flipper:
+    name: Build firmware (flipper/, esp32c6)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build main firmware for esp32p4
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.3.1
-          target: esp32p4
-          path: '.'
-
-  build-c6:
-    name: Build C6 companion firmware (c6-firmware/)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build c6-firmware for esp32c6
+      - name: Build firmware for esp32c6
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.3.1
           target: esp32c6
-          path: 'c6-firmware'
+          path: 'MakeshiftFlipper'
 
   host-tests:
-    name: Host logic tests (tests/)
+    name: Host logic tests (MakeshiftFlipper/tests/)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run host tests
-        run: bash tests/run_tests.sh
+        run: bash MakeshiftFlipper/tests/run_tests.sh

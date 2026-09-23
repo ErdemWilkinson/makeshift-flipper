@@ -1,0 +1,18 @@
+# C6-standalone build target. The field unit has one ESP32-C6-Pico and no
+# companion MCU. Pinning the target keeps a fresh build reproducible.
+CONFIG_IDF_TARGET="esp32c6"
+
+# The purchased Waveshare ESP32-C6-Pico contains 4MB flash. Use one large
+# factory application slot for the conversion build; an OTA layout is only
+# safe after the final merged image size has been measured.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# BLE scan uses the lightweight NimBLE stack. Same three
+# switches c6-firmware used. The C6 is BLE-only (no classic BR/EDR).
+# Enabling this pulls the ~1MB+ radio stacks into the image; the 3MB
+# factory partition above has room for that plus the UI/RFID/IR code.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_CONTROLLER_ENABLED=y
