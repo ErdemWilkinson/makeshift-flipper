@@ -892,8 +892,13 @@ static void action_ir_direction_find(void)
 // selection.
 static void action_wifi_scan_test(void)
 {
+    // "[STA]" marks this as a station-mode scan (normal client behavior,
+    // same as a phone listing nearby Wi-Fi) so it's visually distinct from
+    // "[MON]" (promiscuous Wi-Fi Monitor, below) -- the two use different
+    // radio modes and the difference matters (Monitor drops any STA
+    // connection; a station scan doesn't).
     display_clear();
-    display_draw_text_color(0, 0, "WiFi Scan Test", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(0, 0, "WiFi Scan Test [STA]", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Scanning...");
     display_flush();
 
@@ -901,7 +906,7 @@ static void action_wifi_scan_test(void)
     int count = c6_link_scan(networks, C6_MAX_NETWORKS);
 
     display_clear();
-    display_draw_text_color(0, 0, "WiFi Scan Test", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(0, 0, "WiFi Scan Test [STA]", DISPLAY_COLOR_ACCENT);
     if (count < 0) {
         ESP_LOGW(TAG, "Wi-Fi scan failed (C6 not responding?)");
         diag_record_error("WiFi Scan Test", "C6_LINK_SCAN_FAILED");
@@ -966,8 +971,11 @@ static void action_wifi_setup(void)
 // this with anyway.
 static void action_wifi_setup_manual(void)
 {
+    // "[STA]" for the same reason as action_wifi_scan_test() above -- this
+    // whole flow (scan, pick, connect) is station mode end to end.
     display_clear();
-    display_draw_text_color(0, 0, "Scanning...", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(0, 0, "WiFi Setup [STA]", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Scanning...");
     display_flush();
 
     c6_network_t networks[C6_MAX_NETWORKS];
@@ -1106,15 +1114,22 @@ static void action_wifi_setup_manual(void)
 // monitor mode after the user backs out.
 static void action_wifi_monitor(void)
 {
+    // "[MON]" marks this as promiscuous Wi-Fi Monitor mode, the C6's radio
+    // in receive-everything mode rather than station mode -- distinct
+    // enough (drops the STA connection, can't scan/connect while running)
+    // that the screen should say so at a glance, not just via the menu
+    // label. See action_wifi_scan_test()'s "[STA]" comment for the
+    // matching station-mode marker.
     display_clear();
-    display_draw_text_color(0, 0, "WiFi Monitor", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(0, 0, "WiFi Monitor [MON]", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Starting...");
+    display_draw_text_color(4, 0, "Drops STA connection", DISPLAY_COLOR_DIM);
     display_flush();
 
     if (!c6_link_monitor_start()) {
         diag_record_error("WiFi Monitor", "C6_LINK_MONITOR_START_FAILED");
         display_clear();
-        display_draw_text_color(0, 0, "WiFi Monitor", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(0, 0, "WiFi Monitor [MON]", DISPLAY_COLOR_ACCENT);
         display_draw_text_color(2, 0, "Failed to start", DISPLAY_COLOR_ERROR);
         display_draw_text(6, 0, "Press any key");
         display_flush();
@@ -1129,7 +1144,7 @@ static void action_wifi_monitor(void)
 
         display_clear();
         char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "WiFi Monitor (%d)", count);
+        snprintf(header, sizeof(header), "WiFi Mon [MON] (%d)", count);
         display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
         // count can be up to C6_MONITOR_MAX_APS (32); only the first
         // LIST_VISIBLE_ROWS fit without drawing over the footer below (this
@@ -1342,12 +1357,19 @@ static menu_item_t s_ir_menu_items[] = {
     {"IR Send Test",     action_ir_send_test,      NULL},
     {"IR Learn",          action_ir_learn,          NULL},
     {"IR Library",        action_ir_library,        NULL},
-    {"IR Direction Find", action_ir_direction_find, NULL},
+    // (N/A): unavailable on this hardware profile, not a bug -- see the
+    // action's own comment and KNOWN_ISSUES.md's Round 27. Marked in the
+    // label itself so the menu doesn't present a dead control as a normal
+    // one; selecting it still shows the full explanation on-screen.
+    {"IR Direction Find (N/A)", action_ir_direction_find, NULL},
 };
 
 static menu_item_t s_wifi_menu_items[] = {
     {"WiFi Scan Test",     action_wifi_scan_test,   NULL},
-    {"WiFi Setup",          action_wifi_setup,       NULL},
+    // (N/A): c6_link_setup() is a stub on this build (see its comment) --
+    // Wi-Fi Setup Manual below is the working join path. Marked in the
+    // label for the same reason as "IR Direction Find (N/A)" above.
+    {"WiFi Setup (N/A)",    action_wifi_setup,       NULL},
     {"WiFi Setup Manual",   action_wifi_setup_manual, NULL},
     {"WiFi Monitor",        action_wifi_monitor,     NULL},
 };
