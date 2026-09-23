@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-flipper:
-    name: Build firmware (flipper/, esp32c6)
+    name: Build firmware (esp32c6)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,12 +16,12 @@ jobs:
         with:
           esp_idf_version: v5.3.1
           target: esp32c6
-          path: 'MakeshiftFlipper'
+          path: '.'
 
   host-tests:
-    name: Host logic tests (MakeshiftFlipper/tests/)
+    name: Host logic tests (tests/)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run host tests
-        run: bash MakeshiftFlipper/tests/run_tests.sh
+        run: bash tests/run_tests.sh
