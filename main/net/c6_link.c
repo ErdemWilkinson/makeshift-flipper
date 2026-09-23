@@ -290,6 +290,78 @@ bool c6_link_send_error_log(const diag_entry_t *entries, int count)
 #define FRAME_SUBTYPE_PROBE_RESPONSE 0x50
 #define FRAME_SUBTYPE_MASK           0xF0
 
+// Small built-in table of IEEE-registered OUI prefixes (first 3 BSSID
+// bytes) for well-known Wi-Fi chipset/AP vendors, used only to label the
+// live scan list ("Live TUI Scan" vendor column, per the feature request
+// this was added for). Not exhaustive -- a handful of common router/AP
+// vendors, not a full IEEE OUI database (that's tens of thousands of
+// entries and would not fit in flash usefully for this screen). Falls
+// back to "?" for anything not listed; this is a cosmetic label, not a
+// device fingerprinting feature, and identifies hardware manufacturer
+// only, never a person.
+typedef struct {
+    uint8_t oui[3];
+    const char *name;
+} oui_entry_t;
+
+static const oui_entry_t s_oui_table[] = {
+    {{0xB8, 0x27, 0xEB}, "RPi"},      // Raspberry Pi Foundation
+    {{0xDC, 0xA6, 0x32}, "RPi"},
+    {{0x00, 0x1A, 0x11}, "Google"},
+    {{0xF4, 0xF5, 0xD8}, "Google"},
+    {{0x00, 0x1B, 0x63}, "Apple"},
+    {{0x3C, 0x15, 0xC2}, "Apple"},
+    {{0xAC, 0xDE, 0x48}, "Apple"},
+    {{0x00, 0x17, 0x88}, "Philips"},
+    {{0x00, 0x14, 0xBF}, "Cisco"},
+    {{0x00, 0x1D, 0x7E}, "Cisco"},
+    {{0x00, 0x0F, 0x66}, "Cisco"},
+    {{0x00, 0x1F, 0x3B}, "TP-Link"},
+    {{0x14, 0xCC, 0x20}, "TP-Link"},
+    {{0x50, 0xC7, 0xBF}, "TP-Link"},
+    {{0xC4, 0x6E, 0x1F}, "TP-Link"},
+    {{0x00, 0x1E, 0x2A}, "Netgear"},
+    {{0x20, 0x4E, 0x7F}, "Netgear"},
+    {{0xA0, 0x40, 0xA0}, "Netgear"},
+    {{0x00, 0x24, 0x01}, "ASUS"},
+    {{0x1C, 0x87, 0x2C}, "ASUS"},
+    {{0x2C, 0x56, 0xDC}, "ASUS"},
+    {{0x00, 0x1F, 0x33}, "Huawei"},
+    {{0x00, 0x25, 0x9E}, "Huawei"},
+    {{0x38, 0xF7, 0x3D}, "Xiaomi"},
+    {{0x64, 0xB4, 0x73}, "Xiaomi"},
+    {{0x00, 0x0C, 0x29}, "VMware"},
+    {{0x00, 0x50, 0x56}, "VMware"},
+    {{0x08, 0x00, 0x27}, "VBox"},
+};
+#define OUI_TABLE_COUNT (sizeof(s_oui_table) / sizeof(s_oui_table[0]))
+
+static void oui_vendor_lookup(const uint8_t bssid[6], char *out, size_t out_cap)
+{
+    for (size_t i = 0; i < OUI_TABLE_COUNT; i++) {
+        if (memcmp(bssid, s_oui_table[i].oui, 3) == 0) {
+            strncpy(out, s_oui_table[i].name, out_cap - 1);
+            out[out_cap - 1] = '\0';
+            return;
+        }
+    }
+    strncpy(out, "?", out_cap - 1);
+    out[out_cap - 1] = '\0';
+}
+
+// Quarantines a channel the radio has repeatedly refused to hop to (e.g.
+// disallowed by the current regulatory/default configuration -- see
+// hop_timer_cb()'s existing warning log for a single failure). After
+// QUARANTINE_FAIL_THRESHOLD consecutive rejections that channel is skipped
+// for the rest of this monitor session, so the hop timer stops wasting
+// cycles retrying a channel the radio will never actually reach, and spends
+// more time on channels that do work. Cleared at the start of every new
+// c6_link_monitor_start() session (a different session might succeed on a
+// previously-quarantined channel, e.g. after a country/regdomain change).
+#define QUARANTINE_FAIL_THRESHOLD 3
+static uint8_t s_channel_fail_streak[MONITOR_CHANNEL_COUNT + 1]; // index by channel number, [0] unused
+static bool s_channel_quarantined[MONITOR_CHANNEL_COUNT + 1];
+
 static int s_monitor_channel = 1;
 static TimerHandle_t s_hop_timer;
 static SemaphoreHandle_t s_monitor_lock; // guards the AP list below
@@ -403,6 +475,7 @@ static void monitor_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     memcpy(ap.bssid, &payload[10], 6); // addr2 (BSSID)
     ap.rssi = pkt->rx_ctrl.rssi;
     ap.channel = pkt->rx_ctrl.channel;
+    oui_vendor_lookup(ap.bssid, ap.vendor, sizeof(ap.vendor));
 
     for (int ie = 36; ie + 2 <= len;) {
         uint8_t id = payload[ie];
@@ -433,7 +506,21 @@ static void monitor_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 static void hop_timer_cb(TimerHandle_t t)
 {
     (void)t;
-    int next_channel = (s_monitor_channel % MONITOR_CHANNEL_COUNT) + 1;
+    // Walk forward from the current channel to the next one that isn't
+    // quarantined. Bounded by MONITOR_CHANNEL_COUNT so this can't spin
+    // forever even if every channel ends up quarantined (falls through to
+    // whatever candidate the loop lands on last -- see below).
+    int candidate = s_monitor_channel;
+    int next_channel = candidate;
+    for (int tries = 0; tries < MONITOR_CHANNEL_COUNT; tries++) {
+        candidate = (candidate % MONITOR_CHANNEL_COUNT) + 1;
+        if (!s_channel_quarantined[candidate]) {
+            next_channel = candidate;
+            break;
+        }
+        next_channel = candidate; // last candidate wins if all are quarantined
+    }
+
     // No Wi-Fi country is configured on this build, so the regulatory
     // channel set esp_wifi actually allows is whatever ESP-IDF's default
     // is -- not necessarily all of 1-13 (KNOWN_ISSUES.md Round 27). A
@@ -446,9 +533,23 @@ static void hop_timer_cb(TimerHandle_t t)
     esp_err_t err = esp_wifi_set_channel(next_channel, WIFI_SECOND_CHAN_NONE);
     if (err == ESP_OK) {
         s_monitor_channel = next_channel;
+        s_channel_fail_streak[next_channel] = 0;
     } else {
         ESP_LOGW(TAG, "channel hop to %d rejected: %s", next_channel,
                  esp_err_to_name(err));
+        // Quarantine a channel that's failed QUARANTINE_FAIL_THRESHOLD times
+        // in a row -- see s_channel_quarantined's comment. Uses saturating
+        // increment so this can't wrap a uint8_t back to 0 if a channel
+        // somehow gets hit far more than the threshold before being skipped.
+        if (s_channel_fail_streak[next_channel] < 0xFF) {
+            s_channel_fail_streak[next_channel]++;
+        }
+        if (s_channel_fail_streak[next_channel] >= QUARANTINE_FAIL_THRESHOLD &&
+            !s_channel_quarantined[next_channel]) {
+            s_channel_quarantined[next_channel] = true;
+            ESP_LOGW(TAG, "channel %d quarantined after %d consecutive failures",
+                     next_channel, QUARANTINE_FAIL_THRESHOLD);
+        }
     }
 }
 
@@ -477,6 +578,12 @@ bool c6_link_monitor_start(void)
         s_monitor_ap_count = 0;
         xSemaphoreGive(s_monitor_lock);
     }
+
+    // Clear last session's channel quarantine state -- a fresh session
+    // might succeed on a channel the previous one gave up on (e.g. after a
+    // country/regdomain change), so don't carry the penalty forward.
+    memset(s_channel_fail_streak, 0, sizeof(s_channel_fail_streak));
+    memset(s_channel_quarantined, 0, sizeof(s_channel_quarantined));
 
     // Promiscuous mode and a connected STA fight over the channel; drop any
     // active connection first (no auto-reconnect, same as the old design).

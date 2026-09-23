@@ -1152,12 +1152,15 @@ static void action_wifi_monitor(void)
         // something to page through with a cursor).
         for (int i = 0; i < count && i < LIST_VISIBLE_ROWS; i++) {
             char line[DISPLAY_COLS + 1];
-            // Clamp both text fields so the largest channel/RSSI values
-            // plus the terminator always fit within DISPLAY_COLS.
-            snprintf(line, sizeof(line), "%.6s %.4s c%u %d",
+            // Clamp every text field so the largest channel/RSSI values
+            // plus the terminator always fit within DISPLAY_COLS. Vendor
+            // is a short manufacturer label derived from the BSSID's OUI
+            // (see oui_vendor_lookup() in c6_link.c), "?" if unrecognized.
+            snprintf(line, sizeof(line), "%.6s %.4s c%u %d %.6s",
                      aps[i].ssid[0] ? aps[i].ssid : "(hid)",
                      aps[i].sec[0] ? aps[i].sec : "?",
-                     aps[i].channel, aps[i].rssi);
+                     aps[i].channel, aps[i].rssi,
+                     aps[i].vendor[0] ? aps[i].vendor : "?");
             display_draw_text(LIST_HEADER_ROWS + i, 0, line);
         }
         display_draw_text(DISPLAY_ROWS - 1, 0, "BACK: stop+exit");
