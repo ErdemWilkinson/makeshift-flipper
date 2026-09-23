@@ -1,7 +1,10 @@
-// Host test for Wi-Fi monitor PKT line parsing & security classification.
-// Includes the real production source (main/net/pkt_line_parse.c) directly,
-// same pattern as every other test in this suite -- this is not a copy of
-// the parser, it's the exact function c6_link.c's handle_pkt_line() calls.
+// Host test for the retired two-chip design's PKT line parsing & security
+// classification. Not exercised by any production code path on the current
+// C6-standalone build -- see main/net/pkt_line_parse.h's comment and
+// KNOWN_ISSUES.md's Round 27. Kept as a host test for this small, still-
+// correct parser in case the wire format is ever reintroduced; includes
+// the real source (main/net/pkt_line_parse.c) directly, same pattern as
+// every other test in this suite, so it's not a copy of the parser.
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>

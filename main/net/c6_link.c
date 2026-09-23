@@ -56,6 +56,18 @@ static EventGroupHandle_t s_wifi_event_group;
 static bool s_wifi_ready;
 static volatile bool s_monitor_running;
 
+// Guards against a stale STA-disconnect event clobbering a connect
+// attempt's result (KNOWN_ISSUES.md Round 27). c6_link_monitor_start() calls
+// the asynchronous esp_wifi_disconnect(); its WIFI_EVENT_STA_DISCONNECTED
+// can arrive after a following c6_link_connect() has already cleared the
+// bits, which would otherwise set WIFI_FAIL_BIT for a connection attempt
+// that has nothing to do with the monitor session. c6_link_connect() sets
+// this while (and only while) it has a connect genuinely in flight; the
+// event handler only lets a disconnect set WIFI_FAIL_BIT during that
+// window, so a disconnect left over from monitor teardown is ignored
+// instead of poisoning the next attempt's result.
+static volatile bool s_connect_pending;
+
 // Replace control bytes that would corrupt on-screen rendering. Commas no
 // longer need escaping because the standalone build has no UART protocol.
 static void sanitize_ssid(char *s)
@@ -74,7 +86,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     (void)arg;
     (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        // Only a disconnect belonging to an in-flight c6_link_connect() call
+        // should be able to fail it -- see s_connect_generation's comment.
+        // A disconnect from monitor teardown, or from a connect attempt that
+        // has already timed out/returned, is silently dropped here instead.
+        if (s_connect_pending) {
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
@@ -208,16 +226,27 @@ bool c6_link_connect(const char *ssid, const char *password)
     strncpy((char *)cfg.sta.password, password, sizeof(cfg.sta.password) - 1);
 
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+    // Arm s_connect_pending *before* issuing the connect, so
+    // wifi_event_handler() only starts honoring WIFI_EVENT_STA_DISCONNECTED
+    // once this attempt is genuinely in flight (see its comment above).
+    s_connect_pending = true;
     if (esp_wifi_set_config(WIFI_IF_STA, &cfg) != ESP_OK) {
+        s_connect_pending = false;
         return false;
     }
     if (esp_wifi_connect() != ESP_OK) {
+        s_connect_pending = false;
         return false;
     }
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdFALSE, pdFALSE,
                                            pdMS_TO_TICKS(CONNECT_TIMEOUT_MS));
+    // Stop honoring disconnect events for this attempt once we've returned
+    // an answer for it -- any later disconnect belongs to whatever the
+    // caller does next (another connect, or a monitor session), not to this
+    // finished attempt.
+    s_connect_pending = false;
     return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
@@ -404,8 +433,23 @@ static void monitor_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 static void hop_timer_cb(TimerHandle_t t)
 {
     (void)t;
-    s_monitor_channel = (s_monitor_channel % MONITOR_CHANNEL_COUNT) + 1;
-    esp_wifi_set_channel(s_monitor_channel, WIFI_SECOND_CHAN_NONE);
+    int next_channel = (s_monitor_channel % MONITOR_CHANNEL_COUNT) + 1;
+    // No Wi-Fi country is configured on this build, so the regulatory
+    // channel set esp_wifi actually allows is whatever ESP-IDF's default
+    // is -- not necessarily all of 1-13 (KNOWN_ISSUES.md Round 27). A
+    // rejected hop used to be silently discarded: s_monitor_channel would
+    // still advance, so the UI could show a channel the radio never
+    // actually switched to, while the monitor quietly stopped seeing
+    // anything on it. Only advance the tracked channel -- and log -- when
+    // the hop actually succeeds, so a persistently-refused channel is at
+    // least visible in the log instead of invisible in the UI.
+    esp_err_t err = esp_wifi_set_channel(next_channel, WIFI_SECOND_CHAN_NONE);
+    if (err == ESP_OK) {
+        s_monitor_channel = next_channel;
+    } else {
+        ESP_LOGW(TAG, "channel hop to %d rejected: %s", next_channel,
+                 esp_err_to_name(err));
+    }
 }
 
 bool c6_link_monitor_start(void)

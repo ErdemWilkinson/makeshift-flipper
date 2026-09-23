@@ -13,13 +13,16 @@
 // missing the "PKT:" prefix, a non-hex BSSID, or fewer than 4 comma-
 // separated fields.
 //
-// Pulled out of c6_link.c as its own module (same pattern as
-// json_escape.c) so it can be host-tested without the UART/FreeRTOS
-// plumbing the rest of c6_link.c depends on -- c6_link.c's
-// handle_pkt_line() (production, feeds the live monitor AP table) and
-// tests/test_wifi_pkt_parse.c (host test) both call this exact function.
-// There is no separate copy of this parsing logic anywhere else, so a
-// test pass here is a real guarantee about the production wire format.
+// Not used by any current production caller. This parsed the old two-chip
+// design's UART wire format; the standalone build's Wi-Fi Monitor gets AP
+// data straight from the promiscuous-mode callback instead
+// (c6_link.c's monitor_rx_cb() parses 802.11 beacon/probe-response frames
+// directly -- no wire protocol, no "PKT:" lines) -- see KNOWN_ISSUES.md
+// Round 27. Kept only because tests/test_wifi_pkt_parse.c host-tests it
+// directly (#include "../main/net/pkt_line_parse.c") and it's a small,
+// harmless, still-correct parser -- not built into the firmware image
+// (main/CMakeLists.txt's SRCS list omits this .c file). Safe to delete
+// along with its test if this wire format is never reintroduced.
 bool pkt_line_parse(const char *line, uint8_t out_bssid[6],
                      char *out_ssid, size_t ssid_cap,
                      int *out_rssi, int *out_channel,
