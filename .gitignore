@@ -1,17 +1,17 @@
-# ESP-IDF build artifacts (firmware lives in MakeshiftFlipper/)
-MakeshiftFlipper/build/
-MakeshiftFlipper/managed_components/
-MakeshiftFlipper/dependencies.lock
-MakeshiftFlipper/sdkconfig
-MakeshiftFlipper/sdkconfig.old
+# ESP-IDF build artifacts
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
 
 # Editor/OS cruft
 .vscode/
 .DS_Store
 Thumbs.db
 
-# Host test build output (MakeshiftFlipper/tests/run_tests.sh)
-MakeshiftFlipper/tests/.build/
+# Host test build output (tests/run_tests.sh)
+tests/.build/
 
 # Generated Python files and local installation logs
 __pycache__/
