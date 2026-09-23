@@ -3,13 +3,13 @@
 // ---------------------------------------------------------------------------
 // STAGE 2 -- direct on-chip radio (C6-standalone).
 //
-// In the original two-chip design this file was the P4-side client that
+// In the original two-chip design this file was the UI-side client that
 // talked to a separate ESP32-C6 over UART, and every call sent a command
 // line and parsed reply lines. There is no second chip here: the ESP32-C6
 // runs the UI AND the radio, so this file now calls esp_wifi_* directly and
 // fills the SAME c6_link_* API the UI already uses. main.c is unchanged.
 //
-// What maps to what, vs. the old c6-firmware/ UART handlers:
+// What maps to what, vs. the old radio-side UART handlers:
 //   c6_link_init      <- wifi_commands_init      (netif + esp_wifi STA up)
 //   c6_link_scan      <- wifi_commands_scan       (blocking scan, returns list)
 //   c6_link_connect   <- wifi_commands_connect_sta(blocking join)
