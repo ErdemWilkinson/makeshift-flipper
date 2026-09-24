@@ -90,19 +90,18 @@ GPIO22/GPIO23.
 
 ## 6. RFID: RDM6300 (125kHz)
 
-> ⚠️ **Do not test this section yet.** `rdm6300_init()` is currently
-> commented out in `main/main.c`'s `app_main()` -- real-hardware bring-up
-> (KNOWN_ISSUES.md Round 28) found that configuring GPIO16 as a UART pin
-> hangs and trips the watchdog on this board's ESP32-C6-MINI-1 module,
-> even with nothing wired to it. RDM6300 needs to move to a different,
-> confirmed-free GPIO before this section is testable again -- see Round
-> 28's second finding for the exact fix needed.
+> ℹ️ **UART1 function-clock hang fixed (KNOWN_ISSUES.md Round 28).**
+> `rdm6300_init()` no longer hangs the watchdog -- the cause was UART1's
+> function clock being left gated by ESP-IDF, not a GPIO conflict, and
+> `rdm6300_init()` now enables it before `uart_driver_install()`. RX has
+> moved to **GPIO1 (Pico GP28)**. Wire the RDM6300 TX line (through the
+> level shifter) to GP28 before testing this section.
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| "Read 125kHz" detects a 125kHz EM4100-family tag in range | Tag ID displayed | RX=GPIO16 (UART1, receive-only module; RDM6300 is 5V, needs a level shifter down to 3.3V) — **see the warning above, this pin currently hangs the device** |
-| Read is reliable across multiple tag presentations, not just the first one after boot | Repeated reads work without a reboot | GPIO16 |
-| "Save 125kHz" saves a scanned tag ID under a chosen name | Entry appears in "RFID Library" marked 'L' (low frequency), survives a reboot | GPIO16 |
+| "Read 125kHz" detects a 125kHz EM4100-family tag in range | Tag ID displayed | RX=GPIO1 (UART1, receive-only module; RDM6300 is 5V, needs a level shifter down to 3.3V) |
+| Read is reliable across multiple tag presentations, not just the first one after boot | Repeated reads work without a reboot | GPIO1 |
+| "Save 125kHz" saves a scanned tag ID under a chosen name | Entry appears in "RFID Library" marked 'L' (low frequency), survives a reboot | GPIO1 |
 | "RFID Library" delete (LEFT) removes an entry (either kind) and persists the change | Entry gone from the list after a reboot | — |
 | "Save 125kHz"/"Save 13.56MHz" behave correctly at capacity (16 entries total) | "Library full" shown, existing entries untouched, no crash | — |
 
