@@ -1465,7 +1465,18 @@ void app_main(void)
     // The four-receiver direction finder is retained for a future hardware
     // profile but is not initialized on this fixed C6-Pico pin map.
     rc522_init();
-    rdm6300_init();
+    // TEMPORARILY DISABLED: first real-hardware bring-up found that
+    // uart_set_pin(..., UART_RX_GPIO=16, ...) inside rdm6300_init() hangs
+    // and trips the interrupt watchdog (Guru Meditation, "Interrupt wdt
+    // timeout on CPU0") on this ESP32-C6-MINI-1 board -- confirmed by a
+    // diagnostic ESP_LOGI() right before/after the call: the "before" line
+    // printed, the "after" line never did. GPIO16 likely collides with the
+    // MINI-1 module's internal flash/PSRAM QSPI pins on this specific
+    // board revision -- see KNOWN_ISSUES.md's real-hardware bring-up entry.
+    // Re-enable once RDM6300 RX is rewired to a confirmed-free GPIO (the
+    // hardware plan's spare pins, e.g. GP7/GP28) and UART_RX_GPIO in
+    // rdm6300.c is updated to match; do NOT just uncomment this on GPIO16.
+    // rdm6300_init();
     vibration_init();
     c6_link_init();
 

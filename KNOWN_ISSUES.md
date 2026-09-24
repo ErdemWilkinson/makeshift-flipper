@@ -1386,6 +1386,25 @@ full host test suite (all 7 suites, 0 failed).**
 
 - :yellow_circle: ✅ **FIXED — LEGACY P4/UART SKELETON HEADERS REMAINED IN THE ACTIVE TREE AND MISLED FUTURE WORK:** `main/net/c6_transport.{c,h}`, `wifi_scan_client.{c,h}`, and `wifi_tools.{c,h}` described a future P4-side UART transport and `c6-firmware/` radio code that no longer exists and were never built (`main/CMakeLists.txt` never listed their `.c` files) — moved to `archive/retired-p4-net-skeletons/` since nothing in `main/` or `tests/` referenced them. `json_escape.{c,h}` and `pkt_line_parse.{c,h}` are different: `tests/test_json_escape.c` and `tests/test_wifi_pkt_parse.c` `#include` their `.c` files directly, so deleting them would break real host tests. Kept them in place instead and rewrote both headers' comments (and `test_wifi_pkt_parse.c`'s) to stop claiming a production caller that doesn't exist — `pkt_line_parse.h` previously claimed `c6_link.c`'s `handle_pkt_line()` calls it in production, but that function doesn't exist in the standalone build; the monitor now parses 802.11 frames directly in `monitor_rx_cb()`. Both headers now say explicitly: no production caller, kept only for their host tests, safe to delete if the old wire format is never reintroduced. Evidence: `archive/retired-p4-net-skeletons/`, `main/net/json_escape.h`, `main/net/pkt_line_parse.h`, `tests/test_wifi_pkt_parse.c`.
 
+## Round 28 (2026-09-24): first real ESP32-C6 hardware bring-up
+
+First time the standalone C6 firmware was actually flashed to a real
+ESP32-C6-MINI-1 board (Waveshare ESP32-C6-Pico) and observed over serial,
+rather than only compiled. **Scope of this test: the bare C6 module only**
+-- no LCD, no RC522, no RDM6300, no TCA9554 button expander, no IR
+receiver/emitter were physically wired up. This confirms the firmware's
+own init-order robustness and the on-chip Wi-Fi/BLE bring-up; it does
+NOT confirm any external peripheral actually works -- that still needs
+the full hardware assembly per `C6_STANDALONE_HARDWARE_PLAN.md`.
+
+- :red_circle: ✅ **FIXED — WRONG RMT `mem_block_symbols` MADE `ir_driver_init()` ABORT BOOT UNCONDITIONALLY:** The very first flash aborted immediately: `rmt_new_rx_channel()` failed with `ESP_ERR_NOT_FOUND` ("no free rx channels"), wrapped in `ESP_ERROR_CHECK()`, so the device called `abort()` before the display or menu ever came up -- 100% reproducible, not a fluke (confirmed across two separate flashes). Root cause found by reading ESP-IDF's `rmt_rx_register_to_group()` (`esp_driver_rmt/src/rmt_rx.c`): it rounds `mem_block_symbols` up to whole memory blocks (`SOC_RMT_MEM_WORDS_PER_CHANNEL` = 48 on this chip) and only scans `SOC_RMT_RX_CANDIDATES_PER_GROUP` (= 2) candidate slots for a channel that wide. `ir_driver_init()` requested `mem_block_symbols = 128`, which rounds up to 3 blocks -- wider than the 2 available candidate slots could *ever* satisfy, regardless of what else is or isn't using RMT. Fixed by lowering both the RX and TX channel configs to `mem_block_symbols = 48` (exactly one block; still comfortably covers a 33-symbol NEC frame). Evidence: `main/ir/ir_driver.c` (`ir_driver_init`), confirmed by re-flashing and observing `"IR driver initialized (RX=GPIO14, TX=GPIO17)"` afterward with no abort.
+
+- :red_circle: **CONFIRMED, NOT YET FIXED — GPIO16 (RDM6300 RX) HANGS AND TRIPS THE WATCHDOG ON THIS BOARD, EVEN WITH NOTHING WIRED TO IT:** After the RMT fix above, boot progressed further but panicked with `Interrupt wdt timeout on CPU0` right after `rc522_init()`. Bisected with temporary `ESP_LOGI()` markers before/after each `main.c` init call: `"DIAG: before rdm6300_init"` printed, `"DIAG: after rdm6300_init"` never did -- the hang is inside `rdm6300_init()` itself (`uart_driver_install`/`uart_param_config`/`uart_set_pin`, in that order), reproduced on two separate flashes, with no RDM6300 module or any wire physically connected to GPIO16. Likely cause: this board uses the **ESP32-C6-MINI-1** module (see `C6_STANDALONE_HARDWARE_PLAN.md`), whose internal flash/PSRAM is wired through the module's own SPI pins -- GPIO16 (assigned to RDM6300 RX in the current pin plan) may collide with one of those internally-reserved pins on this specific module/revision, which would explain a hang purely from configuring the pin as a UART GPIO, independent of anything external being attached. **Not fixed yet -- workaround applied instead:** `rdm6300_init()`'s call site in `main/main.c`'s `app_main()` is commented out (with a comment explaining why and what's needed to re-enable it) so the rest of the device can boot and be tested. **Action needed before RDM6300/125kHz support can return:** confirm which GPIOs are actually free on the ESP32-C6-MINI-1 (Espressif's module datasheet, not just the generic C6 chip pinout), move `UART_RX_GPIO` in `main/rfid/rdm6300.c` off GPIO16 to a confirmed-free pin (the hardware plan lists GP7/GP28 as spares), rewire the physical RDM6300 module to match, then re-enable the `rdm6300_init()` call. Evidence: `main/main.c` (commented-out `rdm6300_init()` call and its comment), `main/rfid/rdm6300.c` (`UART_RX_GPIO`).
+
+- ✅ **CONFIRMED WORKING on bare hardware (no external peripherals attached):** with both issues above addressed/worked around, the device now boots to completion without crashing or reset-looping: NVS init, display init (`"ST7789 LCD initialized"` -- SPI transaction succeeded even with no LCD attached, i.e. no bus fault), IR driver init, RC522 init (SPI transaction succeeded with no RC522 attached), Wi-Fi STA bring-up (`"Wi-Fi STA ready (on-chip radio)"`), and BLE stack bring-up (`"BLE scan stack initialized"`) all completed and the main loop was reached and stayed stable for the observed duration. This is the first real evidence the on-chip Wi-Fi/BLE stack actually initializes on real ESP32-C6 silicon, not just in the build. It does **not** confirm Wi-Fi scan/connect/monitor or BLE scan actually see real traffic (no antenna environment test performed here) or that any SPI/I2C/UART peripheral's protocol-level behavior is correct (no real device was on the other end to respond).
+
+- 🟡 **CONFIRMED — TCA9554 (BUTTON EXPANDER) I2C TRANSACTIONS FAIL AS EXPECTED WHEN NOT PHYSICALLY PRESENT:** With no TCA9554/Pico-LCD-1.3 attached, `buttons_init()`'s I2C transaction fails with "unexpected nack detected" / `ESP_ERR_INVALID_STATE`, logged once at boot and then retried roughly once per second from `buttons_poll()`'s recovery path (see `buttons.c`'s `EXPANDER_RETRY_US`) -- exactly the designed graceful-degradation behavior (UP/PRESS/RIGHT still available), not a new bug. Included here only as confirmation that the existing error-handling code path was actually exercised on real hardware and behaved as designed, continuously retrying without crashing or flooding logs uncontrollably.
+
 ## General
 
 - Both firmwares build clean (see Round 12). The **P4 main firmware** has
@@ -1393,10 +1412,14 @@ full host test suite (all 7 suites, 0 failed).**
   RDM6300 UART init, and P4-to-C6 UART initialization all observed) --
   but that was against the old SSD1306 OLED, before the Round 15 ST7789
   LCD swap, so the new display code itself is still unverified on
-  physical hardware (see Round 15's hardware-test caveats). The **C6
-  companion firmware**'s end-to-end Wi-Fi/BT behavior remains entirely
-  unverified on real hardware. See `HARDWARE_TEST_MATRIX.md` for the
-  checklist to work through as each piece gets tested.
+  physical hardware (see Round 15's hardware-test caveats). The
+  **standalone C6 firmware** has now been flashed and booted on real
+  ESP32-C6 hardware (Round 28) with no external peripherals attached --
+  boot completes cleanly, Wi-Fi/BLE bring-up succeeds -- but every
+  external peripheral (LCD, RC522, RDM6300, button expander, IR) still
+  needs its own real-hardware test per `HARDWARE_TEST_MATRIX.md` once
+  physically wired up, and RDM6300 specifically needs its GPIO16
+  assignment fixed first (see Round 28's second finding).
 - Error reporting mostly goes through `ESP_LOGW`/`ESP_LOGE` only — with
   the device's own display as the primary output, a user who isn't on a
   serial connection won't see these errors at all.
