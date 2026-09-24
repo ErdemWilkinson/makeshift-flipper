@@ -51,10 +51,23 @@ static void start_next_rx(void)
 
 void ir_driver_init(void)
 {
+    // mem_block_symbols must fit in ONE RMT memory block on this chip.
+    // ESP-IDF's rmt_rx_register_to_group() rounds this up to
+    // ceil(mem_block_symbols / SOC_RMT_MEM_WORDS_PER_CHANNEL) *contiguous*
+    // blocks, then only scans SOC_RMT_RX_CANDIDATES_PER_GROUP candidate
+    // slots for a channel that wide. On the ESP32-C6 (real-hardware bring-
+    // up, see KNOWN_ISSUES.md), SOC_RMT_MEM_WORDS_PER_CHANNEL=48 and
+    // SOC_RMT_RX_CANDIDATES_PER_GROUP=2, so the previous value of 128 here
+    // rounded up to 3 blocks -- wider than the 2 candidate slots could ever
+    // satisfy, making rmt_new_rx_channel() fail with ESP_ERR_NOT_FOUND
+    // ("no free rx channels") unconditionally, not because anything else
+    // was using RMT. 48 fits in exactly one block/channel and comfortably
+    // covers a 33-symbol NEC frame (MAX_RAW_SYMBOLS below is the real
+    // capture-buffer size this only needs to be >= for one ping-pong half).
     rmt_rx_channel_config_t rx_chan_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = RMT_RESOLUTION_HZ,
-        .mem_block_symbols = 128,
+        .mem_block_symbols = 48,
         .gpio_num = IR_RX_GPIO,
     };
     ESP_ERROR_CHECK(rmt_new_rx_channel(&rx_chan_cfg, &s_rx_channel));
@@ -72,10 +85,16 @@ void ir_driver_init(void)
     ESP_ERROR_CHECK(rmt_enable(s_rx_channel));
     start_next_rx();
 
+    // Same one-block reasoning as the RX channel above: 48 is exactly one
+    // RMT memory block on this chip (SOC_RMT_MEM_WORDS_PER_CHANNEL=48) and
+    // comfortably covers a 33-symbol NEC frame, avoiding any risk of the
+    // same "wider than any candidate slot" failure mode -- the TX side
+    // wasn't confirmed to hit it (RX aborted boot first), but there's no
+    // reason to leave a working value further from the safe one.
     rmt_tx_channel_config_t tx_chan_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = RMT_RESOLUTION_HZ,
-        .mem_block_symbols = 64,
+        .mem_block_symbols = 48,
         .trans_queue_depth = 4,
         .gpio_num = IR_TX_GPIO,
     };
