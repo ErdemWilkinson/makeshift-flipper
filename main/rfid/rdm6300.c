@@ -4,11 +4,20 @@
 
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "hal/uart_ll.h"
+#include "soc/uart_periph.h"
+#include "esp_private/periph_ctrl.h"
+#include "esp_private/uart_share_hw_ctrl.h"
 
 // RDM6300 only transmits. Its 5V TX crosses the level shifter before this
 // 3.3V input; no ESP32 TX pin is wired.
+//
+// GPIO1 (Pico GP28) is the hardware plan's confirmed general-purpose spare
+// (C6_STANDALONE_HARDWARE_PLAN.md's "Karar kapisi" section: GPIO1 is the
+// real spare; GPIO15/GP7 is a strapping pin and stays unused for anything
+// external). Wire the physical RDM6300 TX line to GP28.
 #define UART_PORT UART_NUM_1
-#define UART_RX_GPIO 16 // Pico GP0
+#define UART_RX_GPIO 1 // Pico GP28
 #define UART_TX_GPIO UART_PIN_NO_CHANGE
 
 #define FRAME_LEN 14
@@ -27,6 +36,24 @@ void rdm6300_init(void)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
+
+    // On this ESP32-C6, uart_driver_install() -> uart_hal_init() writes UART1
+    // config registers and then spins in uart_ll_update() waiting for the
+    // change to sync into the UART core-clock domain. That sync bit only
+    // clears while UART1's *function* clock (PCR sclk_en) is running. The
+    // v5.3.1 driver enables UART1's bus clock but never its function clock
+    // for a secondary HP UART -- UART0 works only because the ROM/console
+    // left its clock on. With UART1's function clock gated, the very first
+    // uart_ll_update() never returns and the interrupt watchdog reboots the
+    // board (real-hardware bring-up, KNOWN_ISSUES.md Round 28: the hang is in
+    // uart_ll_update, independent of which GPIO is chosen). Select a source
+    // and ungate the function clock ourselves, before install, inside the
+    // RCC-atomic section the shared PCR register requires.
+    HP_UART_SRC_CLK_ATOMIC() {
+        uart_ll_set_sclk(UART_LL_GET_HW(UART_PORT), (soc_module_clk_t)UART_SCLK_DEFAULT);
+        uart_ll_sclk_enable(UART_LL_GET_HW(UART_PORT));
+    }
+
     ESP_ERROR_CHECK(uart_driver_install(UART_PORT, 256, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(UART_PORT, &cfg));
     ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_TX_GPIO, UART_RX_GPIO,
