@@ -27,11 +27,13 @@
 // ---------------------------------------------------------------------------
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_ip_addr.h"
 #include "esp_wifi.h"
 
 #include "freertos/FreeRTOS.h"
@@ -53,6 +55,7 @@ bool c6_bt_scan_is_running(void);
 #define CONNECT_TIMEOUT_MS 10000
 
 static EventGroupHandle_t s_wifi_event_group;
+static esp_netif_t *s_sta_netif;
 static bool s_wifi_ready;
 static volatile bool s_monitor_running;
 
@@ -110,7 +113,8 @@ static bool wifi_init(void)
         ESP_LOGE(TAG, "event loop init failed: %s", esp_err_to_name(err));
         return false;
     }
-    if (esp_netif_create_default_wifi_sta() == NULL) {
+    s_sta_netif = esp_netif_create_default_wifi_sta();
+    if (s_sta_netif == NULL) {
         ESP_LOGE(TAG, "default Wi-Fi STA netif allocation failed");
         return false;
     }
@@ -248,6 +252,32 @@ bool c6_link_connect(const char *ssid, const char *password)
     // finished attempt.
     s_connect_pending = false;
     return (bits & WIFI_CONNECTED_BIT) != 0;
+}
+
+bool c6_link_get_wifi_status(c6_wifi_status_t *out_status)
+{
+    if (out_status == NULL) {
+        return false;
+    }
+    memset(out_status, 0, sizeof(*out_status));
+    if (!s_wifi_ready || s_monitor_running || s_sta_netif == NULL) {
+        return false;
+    }
+    wifi_ap_record_t ap;
+    esp_netif_ip_info_t ip_info;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK ||
+        esp_netif_get_ip_info(s_sta_netif, &ip_info) != ESP_OK ||
+        ip_info.ip.addr == 0) {
+        return false;
+    }
+    memcpy(out_status->ssid, ap.ssid, C6_SSID_MAX_LEN);
+    out_status->ssid[C6_SSID_MAX_LEN] = '\0';
+    sanitize_ssid(out_status->ssid);
+    out_status->rssi = ap.rssi;
+    out_status->channel = ap.primary;
+    snprintf(out_status->ip, sizeof(out_status->ip), IPSTR, IP2STR(&ip_info.ip));
+    snprintf(out_status->gateway, sizeof(out_status->gateway), IPSTR, IP2STR(&ip_info.gw));
+    return true;
 }
 
 bool c6_link_send(const char *ip, uint16_t port, const char *data)

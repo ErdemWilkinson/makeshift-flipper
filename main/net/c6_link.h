@@ -30,6 +30,19 @@ int c6_link_scan(c6_network_t *out_networks, int max_networks);
 // is accepted for open networks; non-empty WPA passwords must be 8-63 bytes.
 bool c6_link_connect(const char *ssid, const char *password);
 
+// Snapshot of the current station association and local IPv4 configuration.
+// This does not test Internet reachability or enumerate the router's clients.
+typedef struct {
+    char ssid[C6_SSID_MAX_LEN + 1];
+    int8_t rssi;
+    uint8_t channel;
+    char ip[16];
+    char gateway[16];
+} c6_wifi_status_t;
+
+// Returns true only while associated with an AP and holding an IPv4 address.
+bool c6_link_get_wifi_status(c6_wifi_status_t *out_status);
+
 // Reserved compatibility entry point; not implemented in the standalone
 // build and currently always returns false.
 bool c6_link_send(const char *ip, uint16_t port, const char *data);

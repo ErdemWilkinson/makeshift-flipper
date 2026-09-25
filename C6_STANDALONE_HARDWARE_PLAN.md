@@ -1,5 +1,10 @@
 # C6 Standalone Donanim Plani
 
+> Historical ESP32-C6-Pico/TCA9554 layout. The current DEV-KIT-NX firmware
+> uses direct button GPIOs; follow `main/input/buttons.c` and
+> `HARDWARE_TEST_MATRIX.md` for button wiring. The RDM6300 RX mapping below
+> is also stale: current firmware uses GPIO1, not GPIO16.
+
 ## Sonuc
 
 Eldeki parcalarla tek kartli saha cihazi mantikli ve yapilabilir. Ana

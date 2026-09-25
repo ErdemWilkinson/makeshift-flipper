@@ -2,8 +2,10 @@
 
 A checklist for verifying this device on real hardware, module by module,
 after any firmware change that touches pins, the joystick, IR, RFID, or the
-Wi-Fi/BLE radio. Pairs with the pin map in
-[C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md).
+Wi-Fi/BLE radio. The current direct-button pin map is in `main/input/buttons.c`;
+the older Pico/TCA9554 mapping in
+[C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) does not
+describe the current ESP32-C6-DEV-KIT-NX carrier wiring.
 
 **This matrix covers the single-MCU ESP32-C6 standalone build only.** The
 former two-chip (ESP32-P4 + ESP32-C6-over-UART) design is retired; if you
@@ -39,21 +41,20 @@ wiring differs — don't just work around it in your head.
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| UP moves the cursor up | Cursor moves | GPIO4 (direct input) |
-| PRESS (center) selects/activates | Menu action fires | GPIO5 (direct input) |
-| DOWN moves the cursor down | Cursor moves | TCA9554 expander, IO3 (I2C) |
-| LEFT backs out to the parent menu | Menu pops back a level | TCA9554 expander, IO5 (I2C) |
-| BACK exits the current screen/action back to the launching menu | Returns to the menu that opened the screen | TCA9554 expander, IO4 (I2C) |
-| RIGHT works even though it shares the physical I2C SDA line | Cursor moves right/selects; no I2C errors logged while held | GPIO22 (I2C SDA), sampled directly -- `buttons.c` skips any TCA9554 transaction while this line reads low |
-| Expander (DOWN/LEFT/BACK) keeps working normally when RIGHT is not pressed | No missed or phantom expander events | I2C: SDA=GPIO22, SCL=GPIO23 |
-| If the TCA9554 read ever fails (logged as a warning), UP/PRESS/RIGHT still work and the expander recovers on its own within ~1s | Device stays usable, no crash, no need to reboot | — |
-| Text entry grid (`text_entry.c`, used by WiFi Setup Manual's password screen) navigates and appends chars correctly | Matches `tests/test_text_entry.c`'s host-tested logic | via same joystick pins |
+| UP moves the cursor up | Cursor moves | LCD GP2 -> C6 GPIO6 (current wiring) |
+| PRESS (center) selects/activates, when physically wired | Menu action fires | LCD GP3 -> C6 GPIO3 (firmware assignment; wire not yet verified) |
+| DOWN moves the cursor down | Cursor moves | LCD GP18 -> C6 GPIO11 (moved from GPIO2; disconnect B first) |
+| LEFT backs out on ordinary screens | Returns to parent menu | LCD GP16 -> C6 GPIO23 |
+| RIGHT enters/selects on ordinary screens | Menu action fires | LCD GP20 -> C6 GPIO22 |
+| A selects; B is intentionally disconnected/disabled | A confirms; GPIO11 is used by DOWN | LCD GP15 -> C6 GPIO10; LCD GP18 -> C6 GPIO11 |
+| Keyboard horizontal navigation | Short LEFT/RIGHT move one column; long LEFT exits, long RIGHT selects | GPIO23/GPIO22; A acts immediately |
+| Text entry grid (`text_entry.c`, used by WiFi Setup Manual's password screen) navigates and appends chars correctly | Matches `tests/test_text_entry.c`'s host-tested logic | via same button pins |
 
-Note: this is the single highest-risk wiring point in the whole build --
-RIGHT and the TCA9554's SDA line are electrically the same net by design
-(see `buttons.c`'s top-of-file comment and
-`C6_STANDALONE_HARDWARE_PLAN.md`). Do not attach any other load to
-GPIO22/GPIO23.
+These are proposed direct wires, not a completed hardware check. Verify the
+actual carrier header labels and common GND before connecting them. In
+particular, GPIO6 is UP on the current screen-only build. RC522 MISO is
+disabled in this profile; attaching an RC522 later requires moving UP off
+GPIO6.
 
 ## 3. Vibration motor
 

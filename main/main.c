@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 
+#include "hardware_profile.h"
 #include "diag/diag.h"
 #include "input/buttons.h"
 #include "ir/ir_direction.h"
@@ -128,6 +129,21 @@ static void wait_for_any_key(void)
     } while (any == BUTTON_COUNT);
 }
 
+// Wait up to `ticks` * 10ms for one joystick edge. Live radio lists keep
+// refreshing even without input; detail screens pass a short timeout and
+// repeat until LEFT/BACK is pressed.
+static button_id_t poll_button_for_ticks(int ticks)
+{
+    for (int i = 0; i < ticks; i++) {
+        button_id_t event = buttons_poll();
+        if (event != BUTTON_COUNT) {
+            return event;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return BUTTON_COUNT;
+}
+
 // Waits (blocking, antenna must already be on) for any card and returns its
 // UID. Used by both the "scan source"/"place target card" steps of
 // dump/clone and by action_rfid_save_1356mhz() -- polls at the same ~10ms
@@ -149,9 +165,9 @@ static bool wait_for_card(const char *title, const char *prompt_line, const char
 {
     for (;;) {
         display_clear();
-        display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
+        display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
         display_draw_text(2, 0, prompt_line);
-        display_draw_text(6, 0, "BACK: cancel");
+        display_draw_text(6, 0, "GERİ: iptal");
         display_flush();
 
         for (int i = 0; i < 20; i++) { // ~200ms between redraws
@@ -165,10 +181,10 @@ static bool wait_for_card(const char *title, const char *prompt_line, const char
             }
             if (result == RC522_SCAN_UNSUPPORTED_UID) {
                 display_clear();
-                display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
-                display_draw_text_color(2, 0, "7/10-byte UID", DISPLAY_COLOR_ERROR);
-                display_draw_text_color(3, 0, "not supported", DISPLAY_COLOR_ERROR);
-                display_draw_text(6, 0, "Press any key");
+                display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+                display_draw_text_color(2, 0, "7/10 bayt UID", DISPLAY_COLOR_ERROR);
+                display_draw_text_color(3, 0, "desteklenmiyor", DISPLAY_COLOR_ERROR);
+                display_draw_text(6, 0, "Bir tuşa bas");
                 display_flush();
                 diag_record_error(diag_module, "RC522_SCAN_UNSUPPORTED_UID");
                 wait_for_any_key();
@@ -179,42 +195,28 @@ static bool wait_for_card(const char *title, const char *prompt_line, const char
     }
 }
 
-// Boot splash: DEVICE_NAME on an accent-filled bar, held for a couple
-// seconds before the main menu takes over. Purely cosmetic (no button
-// short-circuits it -- it's deliberately brief enough that waiting it out
-// isn't annoying) but it's the first thing a user sees, so it's where the
-// device's own identity (name + color theme, see display.h) actually
-// registers, rather than jumping straight to a generic menu list.
-static void render_boot_splash(void)
+// Brief startup notice. This is a usage reminder, not a claim that a
+// disclaimer removes legal responsibility. It times out so an unwired or
+// broken joystick cannot prevent the firmware from booting.
+static void show_startup_notice(void)
 {
+    display_set_background(DISPLAY_BG_DEFAULT);
     display_clear();
-
-    // Accent bar roughly centered vertically, DEVICE_NAME centered inside
-    // it. DISPLAY_ROWS/COLS are 15/30 -- these row/col numbers are tuned
-    // for that grid, not derived from strlen(), since the bar's height is
-    // also a deliberate visual choice, not just "however tall the text is".
-    const int bar_row0 = 5;
-    const int bar_row1 = 9;
-    display_fill_rect(0, bar_row0 * 16, DISPLAY_WIDTH_PX, (bar_row1 - bar_row0) * 16,
-                       DISPLAY_COLOR_ACCENT);
-
-    int name_len = (int)strlen(DEVICE_NAME);
-    int name_col = (DISPLAY_COLS - name_len) / 2;
-    if (name_col < 0) {
-        name_col = 0;
-    }
-    display_draw_text_color(7, name_col, DEVICE_NAME, DISPLAY_COLOR_ACCENT_TEXT);
-
-    static const char *tagline = "RFID - IR - WiFi - BT";
-    int tagline_len = (int)strlen(tagline);
-    int tagline_col = (DISPLAY_COLS - tagline_len) / 2;
-    if (tagline_col < 0) {
-        tagline_col = 0;
-    }
-    display_draw_text_color(11, tagline_col, tagline, DISPLAY_COLOR_DIM);
-
+    display_draw_text_centered(1, "YASAL UYARI", DISPLAY_COLOR_ERROR);
+    display_draw_text(4, 1, "Yalnızca kendi veya açıkça");
+    display_draw_text(5, 1, "izinli cihazlarda kullan.");
+    display_draw_text(7, 1, "Kullanımdan doğan hukuki");
+    display_draw_text(8, 1, "sorumluluk kullanıcıya aittir.");
+    display_draw_text(10, 1, "Bu uyarı izin yerine geçmez.");
+    display_draw_text_centered(13, "SAĞ: devam (5 sn)", DISPLAY_COLOR_ACCENT);
     display_flush();
-    vTaskDelay(pdMS_TO_TICKS(1500));
+    for (int i = 0; i < 500; i++) {
+        button_id_t event = buttons_poll();
+        if (event == BUTTON_RIGHT || event == BUTTON_PRESS) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }
 
 // Authenticates and reads all 16 sectors of `dump->uid`'s card, trying each
@@ -282,10 +284,10 @@ static bool show_dump_and_confirm(const rc522_card_dump_t *dump)
     int sector = 0;
     for (;;) {
         display_clear();
-        char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "Sector %d/%d %s", sector, RC522_SECTOR_COUNT - 1,
-                  dump->sectors[sector].readable ? "" : "(locked)");
-        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
+        char header[DISPLAY_COLS * 2 + 1];
+        snprintf(header, sizeof(header), "Sektör %d/%d %s", sector, RC522_SECTOR_COUNT - 1,
+                  dump->sectors[sector].readable ? "" : "(kilitli)");
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
 
         if (dump->sectors[sector].readable) {
             // RC522_BLOCK_SIZE is 16 bytes (32 hex chars), too wide for one
@@ -305,13 +307,13 @@ static bool show_dump_and_confirm(const rc522_card_dump_t *dump)
                 }
             }
         } else {
-            display_draw_text(2, 0, "No default key worked");
+            display_draw_text(2, 0, "Varsayılan anahtar yok");
         }
 
-        char footer[DISPLAY_COLS + 1];
-        snprintf(footer, sizeof(footer), "%d/%d sectors read", dump->sectors_read, RC522_SECTOR_COUNT);
+        char footer[DISPLAY_COLS * 2 + 1];
+        snprintf(footer, sizeof(footer), "%d/%d sektör okundu", dump->sectors_read, RC522_SECTOR_COUNT);
         display_draw_text(DISPLAY_ROWS - 2, 0, footer);
-        display_draw_text(DISPLAY_ROWS - 1, 0, "PRESS:clone BACK:exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "BAS:kopyala GERİ:çık");
         display_flush();
 
         button_id_t event;
@@ -400,7 +402,7 @@ static void action_rfid_clone(void)
         return;
     }
 
-    if (!wait_for_card("RFID Clone", "Place source card", "RFID Clone", &dump->uid)) {
+    if (!wait_for_card("RFID Kopyala", "Kaynak kartı okut", "RFID Clone", &dump->uid)) {
         free(dump);
         rc522_antenna_off();
         menu_render(s_active_menu);
@@ -408,8 +410,8 @@ static void action_rfid_clone(void)
     }
 
     display_clear();
-    display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Reading sectors...");
+    display_draw_text_centered(0, "RFID Kopyala", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Sektörler okunuyor...");
     display_flush();
     dump_card(dump);
 
@@ -425,7 +427,7 @@ static void action_rfid_clone(void)
     }
 
     rc522_uid_t target_uid;
-    if (!wait_for_card("RFID Clone", "Place TARGET card", "RFID Clone", &target_uid)) {
+    if (!wait_for_card("RFID Kopyala", "Hedef kartı okut", "RFID Clone", &target_uid)) {
         free(dump);
         rc522_antenna_off();
         menu_render(s_active_menu);
@@ -447,8 +449,8 @@ static void action_rfid_clone(void)
     }
 
     display_clear();
-    display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Writing sectors...");
+    display_draw_text_centered(0, "RFID Kopyala", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Sektörler yazılıyor...");
     display_flush();
     int written = clone_to_card(&target_uid, dump, /* write_trailers = */ false);
     if (written == 0) {
@@ -456,16 +458,16 @@ static void action_rfid_clone(void)
     }
 
     display_clear();
-    display_draw_text_color(0, 0, "RFID Clone", DISPLAY_COLOR_ACCENT);
-    char result_line[DISPLAY_COLS + 1];
-    snprintf(result_line, sizeof(result_line), "%d/%d sectors cloned", written, dump->sectors_read);
+    display_draw_text_centered(0, "RFID Kopyala", DISPLAY_COLOR_ACCENT);
+    char result_line[DISPLAY_COLS * 2 + 1];
+    snprintf(result_line, sizeof(result_line), "%d/%d sektör kopyalandı", written, dump->sectors_read);
     display_draw_text(2, 0, result_line);
-    display_draw_text(3, 0, !uid_source_ok ? "UID not read; skipped"
-                            : is_magic      ? "UID cloned (gen1a)"
-                                            : "UID not cloned");
-    display_draw_text(5, 0, "Trailers not written");
-    display_draw_text(6, 0, "(data blocks only)");
-    display_draw_text(7, 0, "Press any key");
+    display_draw_text(3, 0, !uid_source_ok ? "UID okunmadı; atlandı"
+                            : is_magic      ? "UID kopyalandı (gen1a)"
+                                            : "UID kopyalanmadı");
+    display_draw_text(5, 0, "Anahtar blokları yazılmadı");
+    display_draw_text(6, 0, "(yalnızca veri blokları)");
+    display_draw_text(7, 0, "Bir tuşa bas");
     display_flush();
 
     wait_for_any_key();
@@ -482,12 +484,13 @@ static void action_rfid_clone(void)
 static bool prompt_for_name(text_entry_t *entry, const char *prompt)
 {
     text_entry_init(entry);
+    buttons_keyboard_reset();
     for (;;) {
         text_entry_render(entry, prompt, /* mask = */ false);
 
         button_id_t event;
         do {
-            event = buttons_poll();
+            event = buttons_poll_keyboard();
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (event == BUTTON_COUNT);
 
@@ -510,9 +513,9 @@ static void action_rfid_save_125khz(void)
     bool captured = false;
     for (;;) {
         display_clear();
-        display_draw_text_color(0, 0, "Save 125kHz Tag", DISPLAY_COLOR_ACCENT);
-        display_draw_text(2, 0, "Present tag now");
-        display_draw_text(6, 0, "BACK: cancel");
+        display_draw_text_centered(0, "125kHz Etiket Kaydet", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Etiketi okut");
+        display_draw_text(6, 0, "GERİ: iptal");
         display_flush();
 
         for (int i = 0; i < 20 && !captured; i++) { // ~200ms between redraws
@@ -534,23 +537,23 @@ static void action_rfid_save_125khz(void)
     vibration_pulse(80);
 
     text_entry_t entry;
-    bool cancelled = !prompt_for_name(&entry, "Name this tag");
+    bool cancelled = !prompt_for_name(&entry, "Etikete ad ver");
 
     display_clear();
-    display_draw_text_color(0, 0, "Save 125kHz Tag", DISPLAY_COLOR_ACCENT);
+    display_draw_text_centered(0, "125kHz Etiket Kaydet", DISPLAY_COLOR_ACCENT);
     if (cancelled) {
-        display_draw_text_color(2, 0, "Cancelled", DISPLAY_COLOR_DIM);
+        display_draw_text_color(2, 0, "İptal edildi", DISPLAY_COLOR_DIM);
     } else if (entry.length == 0) {
-        display_draw_text_color(2, 0, "Name can't be empty", DISPLAY_COLOR_ERROR);
+        display_draw_text_color(2, 0, "Ad boş olamaz", DISPLAY_COLOR_ERROR);
     } else if (!rfid_library_add_125khz(entry.buffer, &id)) {
-        display_draw_text_color(2, 0, "Library full", DISPLAY_COLOR_ERROR);
-        display_draw_text(3, 0, "Delete one first");
+        display_draw_text_color(2, 0, "Kütüphane dolu", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "Önce bir kayıt sil");
         diag_record_error("RFID Save", "RFID_LIBRARY_FULL");
     } else {
         rfid_library_save(); // best-effort, same as ir_library_save()
-        display_draw_text_color(2, 0, "Saved!", DISPLAY_COLOR_OK);
+        display_draw_text_color(2, 0, "Kaydedildi!", DISPLAY_COLOR_OK);
     }
-    display_draw_text(6, 0, "Press any key");
+    display_draw_text(6, 0, "Bir tuşa bas");
     display_flush();
 
     wait_for_any_key();
@@ -571,7 +574,7 @@ static void action_rfid_save_1356mhz(void)
     rc522_antenna_on();
 
     rc522_uid_t uid;
-    if (!wait_for_card("Save 13.56MHz Tag", "Present tag now", "RFID Save", &uid)) {
+    if (!wait_for_card("13.56MHz Etiket Kaydet", "Etiketi okut", "RFID Save", &uid)) {
         rc522_antenna_off();
         menu_render(s_active_menu);
         return;
@@ -581,23 +584,23 @@ static void action_rfid_save_1356mhz(void)
     vibration_pulse(80);
 
     text_entry_t entry;
-    bool cancelled = !prompt_for_name(&entry, "Name this tag");
+    bool cancelled = !prompt_for_name(&entry, "Etikete ad ver");
 
     display_clear();
-    display_draw_text_color(0, 0, "Save 13.56MHz Tag", DISPLAY_COLOR_ACCENT);
+    display_draw_text_centered(0, "13.56MHz Etiket Kaydet", DISPLAY_COLOR_ACCENT);
     if (cancelled) {
-        display_draw_text_color(2, 0, "Cancelled", DISPLAY_COLOR_DIM);
+        display_draw_text_color(2, 0, "İptal edildi", DISPLAY_COLOR_DIM);
     } else if (entry.length == 0) {
-        display_draw_text_color(2, 0, "Name can't be empty", DISPLAY_COLOR_ERROR);
+        display_draw_text_color(2, 0, "Ad boş olamaz", DISPLAY_COLOR_ERROR);
     } else if (!rfid_library_add_1356mhz(entry.buffer, &uid)) {
-        display_draw_text_color(2, 0, "Library full", DISPLAY_COLOR_ERROR);
-        display_draw_text(3, 0, "Delete one first");
+        display_draw_text_color(2, 0, "Kütüphane dolu", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "Önce bir kayıt sil");
         diag_record_error("RFID Save", "RFID_LIBRARY_FULL");
     } else {
         rfid_library_save(); // best-effort, same as ir_library_save()
-        display_draw_text_color(2, 0, "Saved!", DISPLAY_COLOR_OK);
+        display_draw_text_color(2, 0, "Kaydedildi!", DISPLAY_COLOR_OK);
     }
-    display_draw_text(6, 0, "Press any key");
+    display_draw_text(6, 0, "Bir tuşa bas");
     display_flush();
 
     wait_for_any_key();
@@ -648,13 +651,13 @@ static bool confirm_delete(const char *item_name)
     bool on_delete = false; // start on Cancel
     for (;;) {
         display_clear();
-        display_draw_text_color(0, 0, "Delete?", DISPLAY_COLOR_ERROR);
+        display_draw_text_centered(0, "Silinsin mi?", DISPLAY_COLOR_ERROR);
         display_draw_text(2, 0, item_name);
-        display_draw_text_color(5, 0, on_delete ? "  Cancel" : "> Cancel",
+        display_draw_text_color(5, 0, on_delete ? "  İptal" : "> İptal",
                                 on_delete ? DISPLAY_COLOR_TEXT : DISPLAY_COLOR_ACCENT);
-        display_draw_text_color(6, 0, on_delete ? "> Delete" : "  Delete",
+        display_draw_text_color(6, 0, on_delete ? "> Sil" : "  Sil",
                                 on_delete ? DISPLAY_COLOR_ERROR : DISPLAY_COLOR_TEXT);
-        display_draw_text(DISPLAY_ROWS - 1, 0, "UP/DOWN PRESS BACK");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "YUK/AŞA SAĞ:onay SOL:geri");
         display_flush();
 
         button_id_t event;
@@ -663,12 +666,50 @@ static bool confirm_delete(const char *item_name)
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (event == BUTTON_COUNT);
 
-        if (event == BUTTON_BACK) {
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             return false;
         } else if (event == BUTTON_UP || event == BUTTON_DOWN) {
             on_delete = !on_delete;
         } else if (event == BUTTON_PRESS || event == BUTTON_RIGHT) {
             return on_delete;
+        }
+    }
+}
+
+static bool show_rfid_entry(const rfid_library_entry_t *entry)
+{
+    bool delete_selected = false;
+    for (;;) {
+        display_clear();
+        display_draw_text_centered(0, "RFID Kaydı", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, entry->name);
+        display_draw_text(3, 0, entry->kind == RFID_LIBRARY_KIND_125KHZ
+                                ? "125kHz UID" : "13.56MHz UID");
+        const uint8_t *bytes = entry->kind == RFID_LIBRARY_KIND_125KHZ
+                             ? entry->u.id_125khz.bytes : entry->u.uid_1356mhz.bytes;
+        int length = entry->kind == RFID_LIBRARY_KIND_125KHZ
+                   ? 5 : entry->u.uid_1356mhz.length;
+        char uid_line[DISPLAY_COLS * 2 + 1];
+        int n = snprintf(uid_line, sizeof(uid_line), "UID: ");
+        for (int i = 0; i < length && n < (int)sizeof(uid_line) - 3; i++) {
+            n += snprintf(uid_line + n, sizeof(uid_line) - n, "%02X", bytes[i]);
+        }
+        display_draw_text(5, 0, uid_line);
+        display_draw_text_color(9, 0, delete_selected ? "  Geri" : "> Geri",
+                                delete_selected ? DISPLAY_COLOR_TEXT : DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(10, 0, delete_selected ? "> Sil" : "  Sil",
+                                delete_selected ? DISPLAY_COLOR_ERROR : DISPLAY_COLOR_TEXT);
+        display_draw_text(14, 0, "YUK/AŞA SAĞ:seç SOL:geri");
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            return false;
+        }
+        if (event == BUTTON_UP || event == BUTTON_DOWN) {
+            delete_selected = !delete_selected;
+        } else if (event == BUTTON_RIGHT || event == BUTTON_PRESS) {
+            return delete_selected && confirm_delete(entry->name);
         }
     }
 }
@@ -681,13 +722,13 @@ static void action_rfid_library(void)
         int count = rfid_library_count();
         list_clamp_scroll(selected, &top);
         display_clear();
-        char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "RFID Library (%d)", count);
-        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
+        char header[DISPLAY_COLS * 2 + 1];
+        snprintf(header, sizeof(header), "RFID Kayıtları (%d)", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
 
         if (count == 0) {
-            display_draw_text(2, 0, "No tags saved");
-            display_draw_text(3, 0, "Use RFID Save first");
+            display_draw_text(2, 0, "Kayıtlı etiket yok");
+            display_draw_text(3, 0, "Önce etiket kaydet");
         } else {
             for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
                 const rfid_library_entry_t *e = rfid_library_get(top + i);
@@ -697,7 +738,8 @@ static void action_rfid_library(void)
                 display_draw_text(LIST_HEADER_ROWS + i, 0, line);
             }
         }
-        display_draw_text(DISPLAY_ROWS - 1, 0, count > 0 ? "LEFT: delete" : "BACK: exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0,
+                          count > 0 ? "YUK/AŞA SAĞ:bilgi SOL:çık" : "SOL: çık");
         display_flush();
 
         button_id_t event;
@@ -706,15 +748,15 @@ static void action_rfid_library(void)
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (event == BUTTON_COUNT);
 
-        if (event == BUTTON_BACK) {
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
         } else if (event == BUTTON_UP && selected > 0) {
             selected--;
         } else if (event == BUTTON_DOWN && selected < count - 1) {
             selected++;
-        } else if (event == BUTTON_LEFT && count > 0) {
+        } else if ((event == BUTTON_RIGHT || event == BUTTON_PRESS) && count > 0) {
             const rfid_library_entry_t *e = rfid_library_get(selected);
-            if (confirm_delete(e->name)) {
+            if (show_rfid_entry(e)) {
                 rfid_library_remove(selected);
                 rfid_library_save(); // best-effort, see action_ir_library()'s comment
                 if (selected >= rfid_library_count() && selected > 0) {
@@ -743,28 +785,27 @@ static void action_ir_send_test(void)
     ir_driver_send(&frame);
 
     display_clear();
-    display_draw_text_color(0, 0, "IR Send Test", DISPLAY_COLOR_ACCENT);
-    display_draw_text_color(2, 0, "Test frame sent", DISPLAY_COLOR_OK);
+    display_draw_text_centered(0, "IR Gönderim Testi", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(2, 0, "Test çerçevesi gönderildi", DISPLAY_COLOR_OK);
     display_draw_text(3, 0, "addr=0x00 cmd=0x45");
-    display_draw_text(6, 0, "Press any key");
+    display_draw_text(6, 0, "Bir tuşa bas");
     display_flush();
     wait_for_any_key();
 }
 
 // Blocks (BACK cancels) waiting for one NEC frame via ir_driver_poll_rx(),
 // then lets the user name it with the scroll keyboard and saves it to the
-// library. Mirrors action_wifi_setup_manual()'s "scan/pick -> name it ->
-// save" shape.
+// library. Its naming step uses the same scroll keyboard as Wi-Fi setup.
 static void action_ir_learn(void)
 {
     ir_nec_frame_t frame;
     bool captured = false;
     for (;;) {
         display_clear();
-        display_draw_text_color(0, 0, "IR Learn", DISPLAY_COLOR_ACCENT);
-        display_draw_text(2, 0, "Point remote here");
-        display_draw_text(3, 0, "and press a button");
-        display_draw_text(6, 0, "BACK: cancel");
+        display_draw_text_centered(0, "IR Öğren", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Kumandayı buraya tut");
+        display_draw_text(3, 0, "ve bir düğmeye bas");
+        display_draw_text(6, 0, "GERİ: iptal");
         display_flush();
 
         for (int i = 0; i < 20 && !captured; i++) { // ~200ms between redraws
@@ -786,33 +827,68 @@ static void action_ir_learn(void)
     vibration_pulse(80);
 
     text_entry_t entry;
-    bool cancelled = !prompt_for_name(&entry, "Name this code");
+    bool cancelled = !prompt_for_name(&entry, "Koda ad ver");
 
     display_clear();
-    display_draw_text_color(0, 0, "IR Learn", DISPLAY_COLOR_ACCENT);
+    display_draw_text_centered(0, "IR Öğren", DISPLAY_COLOR_ACCENT);
     if (cancelled) {
-        display_draw_text_color(2, 0, "Cancelled", DISPLAY_COLOR_DIM);
+        display_draw_text_color(2, 0, "İptal edildi", DISPLAY_COLOR_DIM);
     } else if (entry.length == 0) {
-        display_draw_text_color(2, 0, "Name can't be empty", DISPLAY_COLOR_ERROR);
+        display_draw_text_color(2, 0, "Ad boş olamaz", DISPLAY_COLOR_ERROR);
     } else if (!ir_library_add(entry.buffer, &frame)) {
-        display_draw_text_color(2, 0, "Library full", DISPLAY_COLOR_ERROR);
-        display_draw_text(3, 0, "Delete one first");
+        display_draw_text_color(2, 0, "Kütüphane dolu", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "Önce bir kayıt sil");
         diag_record_error("IR Learn", "IR_LIBRARY_FULL");
     } else {
         ir_library_save(); // best-effort, same as diag_save() -- RAM copy is authoritative regardless
-        display_draw_text_color(2, 0, "Saved!", DISPLAY_COLOR_OK);
+        display_draw_text_color(2, 0, "Kaydedildi!", DISPLAY_COLOR_OK);
     }
-    display_draw_text(6, 0, "Press any key");
+    display_draw_text(6, 0, "Bir tuşa bas");
     display_flush();
 
     wait_for_any_key();
     menu_render(s_active_menu);
 }
 
-// Browses saved IR codes: UP/DOWN to select, PRESS to transmit the
-// selected code, LEFT to delete it (with the ring buffer's "oldest
-// first" ordering from ir_library.h -- entries shift up after a delete).
-// BACK exits.
+// Right opens one saved code, where UP/DOWN choose send/delete and LEFT
+// backs out. The physical joystick has no centre press.
+static bool show_ir_entry(const ir_library_entry_t *entry)
+{
+    bool delete_selected = false;
+    for (;;) {
+        display_clear();
+        display_draw_text_centered(0, "IR Kaydı", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, entry->name);
+        char line[DISPLAY_COLS + 1];
+        snprintf(line, sizeof(line), "Adres: 0x%02X Kod: 0x%02X",
+                 entry->frame.address, entry->frame.command);
+        display_draw_text(4, 0, line);
+        display_draw_text_color(9, 0, delete_selected ? "  Gönder" : "> Gönder",
+                                delete_selected ? DISPLAY_COLOR_TEXT : DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(10, 0, delete_selected ? "> Sil" : "  Sil",
+                                delete_selected ? DISPLAY_COLOR_ERROR : DISPLAY_COLOR_TEXT);
+        display_draw_text(14, 0, "YUK/AŞA SAĞ:seç SOL:geri");
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            return false;
+        }
+        if (event == BUTTON_UP || event == BUTTON_DOWN) {
+            delete_selected = !delete_selected;
+        } else if (event == BUTTON_RIGHT || event == BUTTON_PRESS) {
+            if (delete_selected) {
+                return confirm_delete(entry->name);
+            }
+            ir_driver_send(&entry->frame);
+            vibration_pulse(80);
+            return false;
+        }
+    }
+}
+
+// Browses saved IR codes, oldest first. The selected entry's action menu
+// provides both send and delete while LEFT always means exit.
 static void action_ir_library(void)
 {
     int selected = 0;
@@ -821,13 +897,13 @@ static void action_ir_library(void)
         int count = ir_library_count();
         list_clamp_scroll(selected, &top);
         display_clear();
-        char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "IR Library (%d)", count);
-        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
+        char header[DISPLAY_COLS * 2 + 1];
+        snprintf(header, sizeof(header), "IR Kayıtları (%d)", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
 
         if (count == 0) {
-            display_draw_text(2, 0, "No codes saved");
-            display_draw_text(3, 0, "Use IR Learn first");
+            display_draw_text(2, 0, "Kayıtlı kod yok");
+            display_draw_text(3, 0, "Önce IR kodu öğren");
         } else {
             for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
                 const ir_library_entry_t *e = ir_library_get(top + i);
@@ -836,7 +912,8 @@ static void action_ir_library(void)
                 display_draw_text(LIST_HEADER_ROWS + i, 0, line);
             }
         }
-        display_draw_text(DISPLAY_ROWS - 1, 0, count > 0 ? "PRESS:send LEFT:del" : "BACK: exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0,
+                          count > 0 ? "YUK/AŞA SAĞ:bilgi SOL:çık" : "SOL: çık");
         display_flush();
 
         button_id_t event;
@@ -845,19 +922,15 @@ static void action_ir_library(void)
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (event == BUTTON_COUNT);
 
-        if (event == BUTTON_BACK) {
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
         } else if (event == BUTTON_UP && selected > 0) {
             selected--;
         } else if (event == BUTTON_DOWN && selected < count - 1) {
             selected++;
-        } else if (event == BUTTON_PRESS && count > 0) {
+        } else if ((event == BUTTON_RIGHT || event == BUTTON_PRESS) && count > 0) {
             const ir_library_entry_t *e = ir_library_get(selected);
-            ir_driver_send(&e->frame);
-            vibration_pulse(80);
-        } else if (event == BUTTON_LEFT && count > 0) {
-            const ir_library_entry_t *e = ir_library_get(selected);
-            if (confirm_delete(e->name)) {
+            if (show_ir_entry(e)) {
                 ir_library_remove(selected);
                 ir_library_save(); // best-effort, see action_ir_learn()'s comment
                 if (selected >= ir_library_count() && selected > 0) {
@@ -880,16 +953,8 @@ static void action_ir_direction_find(void)
     s_screen_dirty = true;
 }
 
-// Blocks for a few seconds while the C6 scans, then shows the result on
-// screen -- previously only logged via ESP_LOGI/ESP_LOGW and returned
-// immediately with no on-device indication a scan happened, how many APs
-// were found, or why it failed (a device-only user with no serial
-// connection saw nothing at all; see KNOWN_ISSUES.md Round 25 and
-// HARDWARE_TEST_MATRIX.md's "Wi-Fi Scan Test" row, which expects a real
-// AP list to be visible). Replace with a real "browse networks" screen
-// (like action_wifi_setup_manual()'s picker) once there's a UI for
-// picking one to connect to -- this is still just a result display, no
-// selection.
+// Station-mode scan/pick/connect. This is the only Wi-Fi setup path in the
+// menu; passive Wi-Fi monitoring lives separately under Hacking.
 static void action_wifi_scan_test(void)
 {
     // "[STA]" marks this as a station-mode scan (normal client behavior,
@@ -898,94 +963,21 @@ static void action_wifi_scan_test(void)
     // radio modes and the difference matters (Monitor drops any STA
     // connection; a station scan doesn't).
     display_clear();
-    display_draw_text_color(0, 0, "WiFi Scan Test [STA]", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Scanning...");
+    display_draw_text_centered(0, "WiFi Tarama [STA]", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Taranıyor...");
     display_flush();
 
     c6_network_t networks[C6_MAX_NETWORKS];
     int count = c6_link_scan(networks, C6_MAX_NETWORKS);
 
-    display_clear();
-    display_draw_text_color(0, 0, "WiFi Scan Test [STA]", DISPLAY_COLOR_ACCENT);
     if (count < 0) {
         ESP_LOGW(TAG, "Wi-Fi scan failed (C6 not responding?)");
         diag_record_error("WiFi Scan Test", "C6_LINK_SCAN_FAILED");
-        display_draw_text_color(2, 0, "Scan failed", DISPLAY_COLOR_ERROR);
-        display_draw_text(3, 0, "C6 not responding?");
-    } else if (count == 0) {
-        display_draw_text_color(2, 0, "No networks found", DISPLAY_COLOR_DIM);
-    } else {
-        ESP_LOGI(TAG, "Wi-Fi scan found %d network(s):", count);
-        char summary[DISPLAY_COLS + 1];
-        snprintf(summary, sizeof(summary), "%d network(s) found:", count);
-        display_draw_text(1, 0, summary);
-        // LIST_VISIBLE_ROWS rows available below the header+summary lines;
-        // this is a one-shot result display (not a scrollable picker like
-        // action_wifi_setup_manual()'s), so anything past that is just
-        // noted rather than scrolled to.
-        int shown = count < LIST_VISIBLE_ROWS - 1 ? count : LIST_VISIBLE_ROWS - 1;
-        for (int i = 0; i < shown; i++) {
-            char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%.15s (%d dBm)", networks[i].ssid, networks[i].rssi);
-            ESP_LOGI(TAG, "  %s (%d dBm)", networks[i].ssid, networks[i].rssi);
-            display_draw_text(2 + i, 0, line);
-        }
-        for (int i = shown; i < count; i++) {
-            ESP_LOGI(TAG, "  %s (%d dBm)", networks[i].ssid, networks[i].rssi);
-        }
-        if (count > shown) {
-            // The truncation notice shares the bottom row with the footer;
-            // drawing it on its own row (2 + shown) previously collided with
-            // the "Press any key" line and was never visible. Merge them.
-            char more[DISPLAY_COLS + 1];
-            snprintf(more, sizeof(more), "+%d more - any key", count - shown);
-            display_draw_text_color(DISPLAY_ROWS - 1, 0, more, DISPLAY_COLOR_DIM);
-        } else {
-            display_draw_text(DISPLAY_ROWS - 1, 0, "Press any key");
-        }
-        display_flush();
-        wait_for_any_key();
-        return;
-    }
-    display_draw_text(DISPLAY_ROWS - 1, 0, "Press any key");
-    display_flush();
-    wait_for_any_key();
-}
-
-static void action_wifi_setup(void)
-{
-    display_clear();
-    display_draw_text_color(0, 0, "WiFi Setup", DISPLAY_COLOR_ACCENT);
-    display_draw_text_color(2, 0, "Not available", DISPLAY_COLOR_DIM);
-    display_draw_text(4, 0, "Use Setup Manual");
-    display_draw_text(6, 0, "Press any key");
-    display_flush();
-
-    wait_for_any_key();
-    menu_render(s_active_menu);
-}
-
-// No-phone fallback: scan, pick a network with UP/DOWN/PRESS, then type
-// the password on the joystick-driven scroll keyboard. Fully blocking,
-// same as the other setup actions -- there's no other screen to interrupt
-// this with anyway.
-static void action_wifi_setup_manual(void)
-{
-    // "[STA]" for the same reason as action_wifi_scan_test() above -- this
-    // whole flow (scan, pick, connect) is station mode end to end.
-    display_clear();
-    display_draw_text_color(0, 0, "WiFi Setup [STA]", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Scanning...");
-    display_flush();
-
-    c6_network_t networks[C6_MAX_NETWORKS];
-    int count = c6_link_scan(networks, C6_MAX_NETWORKS);
-    if (count < 0) {
-        diag_record_error("WiFi Setup Manual", "C6_LINK_SCAN_FAILED");
         display_clear();
-        display_draw_text_color(0, 0, "Scan failed", DISPLAY_COLOR_ERROR);
-        display_draw_text(1, 0, "Radio unavailable");
-        display_draw_text(2, 0, "Press any key");
+        display_draw_text_centered(0, "WiFi Tarama [STA]", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Tarama başarısız", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "C6 yanıt vermiyor mu?");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "Bir tuşa bas");
         display_flush();
         wait_for_any_key();
         menu_render(s_active_menu);
@@ -993,36 +985,35 @@ static void action_wifi_setup_manual(void)
     }
     if (count == 0) {
         display_clear();
-        display_draw_text_color(0, 0, "No networks found", DISPLAY_COLOR_DIM);
-        display_draw_text(2, 0, "Press any key");
+        display_draw_text_centered(0, "WiFi Tarama [STA]", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Ağ bulunamadı", DISPLAY_COLOR_DIM);
+        display_draw_text(DISPLAY_ROWS - 1, 0, "Bir tuşa bas");
         display_flush();
         wait_for_any_key();
         menu_render(s_active_menu);
         return;
     }
 
-    // --- Network picker: UP/DOWN moves, PRESS selects, LEFT cancels. ---
-    // count can be up to C6_MAX_NETWORKS (16), more than fit in
-    // DISPLAY_ROWS-1 (14) rows below the header -- scroll the window with
-    // `top` the same way action_rfid_library()/action_ir_library() do, so
-    // `selected` never lands on a row that isn't drawn.
+    // --- Scrollable network list: UP/DOWN moves, RIGHT/PRESS connects,
+    // LEFT/BACK leaves. Shows signal strength (dBm: closer to 0 = stronger).
+    // Window scrolls with `top` so `selected` is always on a drawn row. ---
     int selected = 0;
     int top = 0;
     bool picked = false;
-    bool cancelled = false;
     for (;;) {
-        if (selected < top) {
-            top = selected;
-        } else if (selected >= top + (DISPLAY_ROWS - 1)) {
-            top = selected - (DISPLAY_ROWS - 1) + 1;
-        }
+        list_clamp_scroll(selected, &top);
         display_clear();
-        display_draw_text_color(0, 0, "Pick a network:", DISPLAY_COLOR_ACCENT);
-        for (int i = 0; i < count - top && i < DISPLAY_ROWS - 1; i++) {
+        char header[DISPLAY_COLS * 2 + 1];
+        snprintf(header, sizeof(header), "WiFi: %d ağ bulundu", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
+        for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%c%.20s", (top + i == selected) ? '>' : ' ', networks[top + i].ssid);
+            snprintf(line, sizeof(line), "%c%.13s %ddBm",
+                     (top + i == selected) ? '>' : ' ',
+                     networks[top + i].ssid, networks[top + i].rssi);
             display_draw_text(1 + i, 0, line);
         }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "YUK/AŞA SAĞ:bağlan SOL:çık");
         display_flush();
 
         button_id_t event;
@@ -1035,16 +1026,15 @@ static void action_wifi_setup_manual(void)
             selected--;
         } else if (event == BUTTON_DOWN && selected < count - 1) {
             selected++;
-        } else if (event == BUTTON_PRESS) {
+        } else if (event == BUTTON_PRESS || event == BUTTON_RIGHT) {
             picked = true;
             break;
-        } else if (event == BUTTON_BACK) {
-            cancelled = true;
+        } else if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
         }
     }
 
-    if (cancelled || !picked) {
+    if (!picked) {
         menu_render(s_active_menu);
         return;
     }
@@ -1052,8 +1042,9 @@ static void action_wifi_setup_manual(void)
     // --- Password entry via the scroll keyboard. ---
     text_entry_t entry;
     text_entry_init(&entry);
-    char title[DISPLAY_COLS + 1];
-    snprintf(title, sizeof(title), "Pwd for %.12s", networks[selected].ssid);
+    buttons_keyboard_reset();
+    char title[DISPLAY_COLS * 2 + 1];
+    snprintf(title, sizeof(title), "Şifre: %.12s", networks[selected].ssid);
 
     bool entry_cancelled = false;
     for (;;) {
@@ -1061,7 +1052,7 @@ static void action_wifi_setup_manual(void)
 
         button_id_t event;
         do {
-            event = buttons_poll();
+            event = buttons_poll_keyboard();
             vTaskDelay(pdMS_TO_TICKS(10));
         } while (event == BUTTON_COUNT);
 
@@ -1080,31 +1071,123 @@ static void action_wifi_setup_manual(void)
     }
 
     display_clear();
-    display_draw_text_color(0, 0, "Connecting...", DISPLAY_COLOR_ACCENT);
+    display_draw_text_centered(0, "Bağlanıyor...", DISPLAY_COLOR_ACCENT);
     display_flush();
 
     bool ok = c6_link_connect(networks[selected].ssid, entry.buffer);
     if (!ok) {
-        diag_record_error("WiFi Setup Manual", "C6_LINK_CONNECT_FAILED");
+        diag_record_error("WiFi Scan Test", "C6_LINK_CONNECT_FAILED");
     }
 
     display_clear();
-    display_draw_text_color(0, 0, "WiFi Setup", DISPLAY_COLOR_ACCENT);
-    display_draw_text_color(2, 0, ok ? "Connected!" : "Failed",
+    display_draw_text_centered(0, "WiFi Tarama [STA]", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(2, 0, ok ? "Bağlandı!" : "Başarısız",
                              ok ? DISPLAY_COLOR_OK : DISPLAY_COLOR_ERROR);
-    display_draw_text(6, 0, "Press any key");
+    display_draw_text(6, 0, "Bir tuşa bas");
     display_flush();
-
     wait_for_any_key();
-
     menu_render(s_active_menu);
+}
+
+// Local station diagnostics. Association and DHCP do not by themselves
+// prove Internet access, and the router's client list is not available to
+// an ordinary Wi-Fi station without a router-specific administration API.
+static void action_wifi_status(void)
+{
+    for (;;) {
+        c6_wifi_status_t status;
+        bool connected = c6_link_get_wifi_status(&status);
+        display_clear();
+        display_draw_text_centered(0, "WiFi Durum", DISPLAY_COLOR_ACCENT);
+        if (connected) {
+            char line[DISPLAY_COLS * 2 + 1];
+            snprintf(line, sizeof(line), "Ağ: %.23s", status.ssid);
+            display_draw_text(2, 0, line);
+            snprintf(line, sizeof(line), "Sinyal: %d dBm", status.rssi);
+            display_draw_text(3, 0, line);
+            snprintf(line, sizeof(line), "Kanal: %u", status.channel);
+            display_draw_text(4, 0, line);
+            snprintf(line, sizeof(line), "IP: %s", status.ip);
+            display_draw_text(6, 0, line);
+            snprintf(line, sizeof(line), "Ağ geçidi: %s", status.gateway);
+            display_draw_text(7, 0, line);
+            display_draw_text(9, 0, "Ağdaki cihaz sayısı: bilinmez");
+            display_draw_text(11, 0, "İnternet doğrulanmadı");
+        } else {
+            display_draw_text_color(2, 0, "WiFi bağlı değil", DISPLAY_COLOR_DIM);
+            display_draw_text(4, 0, "Önce Tara/Bağlan kullan");
+        }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "SAĞ:yenile SOL:çık");
+        display_flush();
+
+        button_id_t event;
+        do {
+            event = buttons_poll();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } while (event == BUTTON_COUNT);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            break;
+        }
+    }
+    menu_render(s_active_menu);
+}
+
+
+static void show_wifi_ap_details(const c6_monitor_ap_t *ap)
+{
+    display_clear();
+    display_draw_text_centered(0, "WiFi Ağ Bilgisi", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, ap->ssid[0] ? ap->ssid : "(gizli ağ)");
+    char line[DISPLAY_COLS + 1];
+    snprintf(line, sizeof(line), "MAC %02X:%02X:%02X:%02X:%02X:%02X",
+             ap->bssid[0], ap->bssid[1], ap->bssid[2],
+             ap->bssid[3], ap->bssid[4], ap->bssid[5]);
+    display_draw_text(4, 0, line);
+    snprintf(line, sizeof(line), "Kanal %u   RSSI %d dBm", ap->channel, ap->rssi);
+    display_draw_text(6, 0, line);
+    snprintf(line, sizeof(line), "Güvenlik: %.7s", ap->sec);
+    display_draw_text(7, 0, line);
+    snprintf(line, sizeof(line), "Üretici: %.8s", ap->vendor);
+    display_draw_text(8, 0, line);
+    display_draw_text(11, 0, "Pasif izleme: bağlantı yok");
+    display_draw_text(14, 0, "SOL: listeye dön");
+    display_flush();
+    while (true) {
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            return;
+        }
+    }
+}
+
+static void show_bt_device_details(const c6_bt_device_t *device)
+{
+    display_clear();
+    display_draw_text_centered(0, "BLE Aygıt Bilgisi", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, device->name[0] ? device->name : "(adsız aygıt)");
+    char line[DISPLAY_COLS + 1];
+    snprintf(line, sizeof(line), "MAC %02X:%02X:%02X:%02X:%02X:%02X",
+             device->addr[0], device->addr[1], device->addr[2],
+             device->addr[3], device->addr[4], device->addr[5]);
+    display_draw_text(4, 0, line);
+    snprintf(line, sizeof(line), "Sinyal: %d dBm", device->rssi);
+    display_draw_text(6, 0, line);
+    display_draw_text(10, 0, "Bu sürüm yalnızca BLE tarar.");
+    display_draw_text(11, 0, "Eşleştirme/bağlanma yok.");
+    display_draw_text(14, 0, "SOL: listeye dön");
+    display_flush();
+    while (true) {
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            return;
+        }
+    }
 }
 
 // Passive Wi-Fi Monitor: starts the C6's promiscuous channel-hop sniffer
 // (see c6_link.h's c6_link_monitor_start() comment) and shows a live,
-// polled list of APs seen (SSID/channel/RSSI) until BACK. Fully self-
-// contained blocking loop, same shape as action_wifi_setup_manual()'s
-// network picker, except it never exits on its own -- only BACK stops it.
+// polled list of APs seen (SSID/channel/RSSI) until BACK. Like the Wi-Fi
+// network picker it scrolls, but it never exits on its own; only BACK stops it.
 //
 // Starting this disconnects the C6's STA connection and blocks every other
 // C6 feature (WiFi Scan/Setup, Errors -> Send) for as long as the screen
@@ -1121,17 +1204,17 @@ static void action_wifi_monitor(void)
     // label. See action_wifi_scan_test()'s "[STA]" comment for the
     // matching station-mode marker.
     display_clear();
-    display_draw_text_color(0, 0, "WiFi Monitor [MON]", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Starting...");
-    display_draw_text_color(4, 0, "Drops STA connection", DISPLAY_COLOR_DIM);
+    display_draw_text_centered(0, "WiFi İzleme [MON]", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Başlatılıyor...");
+    display_draw_text_color(4, 0, "STA bağlantısı kesilir", DISPLAY_COLOR_DIM);
     display_flush();
 
     if (!c6_link_monitor_start()) {
         diag_record_error("WiFi Monitor", "C6_LINK_MONITOR_START_FAILED");
         display_clear();
-        display_draw_text_color(0, 0, "WiFi Monitor [MON]", DISPLAY_COLOR_ACCENT);
-        display_draw_text_color(2, 0, "Failed to start", DISPLAY_COLOR_ERROR);
-        display_draw_text(6, 0, "Press any key");
+        display_draw_text_centered(0, "WiFi İzleme [MON]", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Başlatılamadı", DISPLAY_COLOR_ERROR);
+        display_draw_text(6, 0, "Bir tuşa bas");
         display_flush();
         wait_for_any_key();
         menu_render(s_active_menu);
@@ -1139,42 +1222,49 @@ static void action_wifi_monitor(void)
     }
 
     c6_monitor_ap_t aps[C6_MONITOR_MAX_APS];
+    int selected = 0;
+    int top = 0;
     for (;;) {
         int count = c6_link_monitor_poll(aps, C6_MONITOR_MAX_APS);
+        if (count == 0) {
+            selected = 0;
+            top = 0;
+        } else {
+            if (selected >= count) {
+                selected = count - 1;
+            }
+            list_clamp_scroll(selected, &top);
+        }
 
         display_clear();
-        char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "WiFi Mon [MON] (%d)", count);
-        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
-        // count can be up to C6_MONITOR_MAX_APS (32); only the first
-        // LIST_VISIBLE_ROWS fit without drawing over the footer below (this
-        // list has no scroll -- it's a live, order-shifting feed, not
-        // something to page through with a cursor).
-        for (int i = 0; i < count && i < LIST_VISIBLE_ROWS; i++) {
+        char header[DISPLAY_COLS * 2 + 1];
+        snprintf(header, sizeof(header), "WiFi İzleme [MON] (%d)", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
+        for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
+            int index = top + i;
             char line[DISPLAY_COLS + 1];
-            // Clamp every text field so the largest channel/RSSI values
-            // plus the terminator always fit within DISPLAY_COLS. Vendor
-            // is a short manufacturer label derived from the BSSID's OUI
-            // (see oui_vendor_lookup() in c6_link.c), "?" if unrecognized.
-            snprintf(line, sizeof(line), "%.6s %.4s c%u %d %.6s",
-                     aps[i].ssid[0] ? aps[i].ssid : "(hid)",
-                     aps[i].sec[0] ? aps[i].sec : "?",
-                     aps[i].channel, aps[i].rssi,
-                     aps[i].vendor[0] ? aps[i].vendor : "?");
+            snprintf(line, sizeof(line), "%c%.8s %.4s k%u %d",
+                     index == selected ? '>' : ' ',
+                     aps[index].ssid[0] ? aps[index].ssid : "(gizli)",
+                     aps[index].sec[0] ? aps[index].sec : "?",
+                     aps[index].channel, aps[index].rssi);
             display_draw_text(LIST_HEADER_ROWS + i, 0, line);
         }
-        display_draw_text(DISPLAY_ROWS - 1, 0, "BACK: stop+exit");
+        if (count == 0) {
+            display_draw_text(2, 0, "Erişim noktası aranıyor...");
+        }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "YUK/AŞA SAĞ:bilgi SOL:çık");
         display_flush();
 
-        bool stop = false;
-        for (int i = 0; i < 50 && !stop; i++) { // ~500ms between list refreshes
-            if (buttons_poll() == BUTTON_BACK) {
-                stop = true;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        if (stop) {
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
+        } else if (event == BUTTON_UP && selected > 0) {
+            selected--;
+        } else if (event == BUTTON_DOWN && selected < count - 1) {
+            selected++;
+        } else if ((event == BUTTON_RIGHT || event == BUTTON_PRESS) && count > 0) {
+            show_wifi_ap_details(&aps[selected]);
         }
     }
 
@@ -1190,16 +1280,16 @@ static void action_wifi_monitor(void)
 static void action_bt_scan(void)
 {
     display_clear();
-    display_draw_text_color(0, 0, "BT Scan", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Starting...");
+    display_draw_text_centered(0, "BT Tarama", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Başlatılıyor...");
     display_flush();
 
     if (!c6_link_bt_scan_start()) {
         diag_record_error("BT Scan", "C6_LINK_BT_SCAN_START_FAILED");
         display_clear();
-        display_draw_text_color(0, 0, "BT Scan", DISPLAY_COLOR_ACCENT);
-        display_draw_text_color(2, 0, "Failed to start", DISPLAY_COLOR_ERROR);
-        display_draw_text(6, 0, "Press any key");
+        display_draw_text_centered(0, "BT Tarama", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Başlatılamadı", DISPLAY_COLOR_ERROR);
+        display_draw_text(6, 0, "Bir tuşa bas");
         display_flush();
         wait_for_any_key();
         menu_render(s_active_menu);
@@ -1207,33 +1297,48 @@ static void action_bt_scan(void)
     }
 
     c6_bt_device_t devices[C6_BT_MAX_DEVICES];
+    int selected = 0;
+    int top = 0;
     for (;;) {
         int count = c6_link_bt_scan_poll(devices, C6_BT_MAX_DEVICES);
+        if (count == 0) {
+            selected = 0;
+            top = 0;
+        } else {
+            if (selected >= count) {
+                selected = count - 1;
+            }
+            list_clamp_scroll(selected, &top);
+        }
 
         display_clear();
         char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "BT Scan (%d)", count);
-        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
-        // Same LIST_VISIBLE_ROWS clamp as action_wifi_monitor() above --
-        // count can be up to C6_BT_MAX_DEVICES (32).
-        for (int i = 0; i < count && i < LIST_VISIBLE_ROWS; i++) {
+        snprintf(header, sizeof(header), "BT Tarama (%d)", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
+        for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
+            int index = top + i;
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%.13s %ddBm",
-                     devices[i].name[0] ? devices[i].name : "(no name)", devices[i].rssi);
+            snprintf(line, sizeof(line), "%c%.17s %ddBm",
+                     index == selected ? '>' : ' ',
+                     devices[index].name[0] ? devices[index].name : "(adsız)",
+                     devices[index].rssi);
             display_draw_text(LIST_HEADER_ROWS + i, 0, line);
         }
-        display_draw_text(DISPLAY_ROWS - 1, 0, "BACK: stop+exit");
+        if (count == 0) {
+            display_draw_text(2, 0, "BLE aygıtı aranıyor...");
+        }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "YUK/AŞA SAĞ:bilgi SOL:çık");
         display_flush();
 
-        bool stop = false;
-        for (int i = 0; i < 50 && !stop; i++) { // ~500ms between list refreshes
-            if (buttons_poll() == BUTTON_BACK) {
-                stop = true;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        if (stop) {
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
+        } else if (event == BUTTON_UP && selected > 0) {
+            selected--;
+        } else if (event == BUTTON_DOWN && selected < count - 1) {
+            selected++;
+        } else if ((event == BUTTON_RIGHT || event == BUTTON_PRESS) && count > 0) {
+            show_bt_device_details(&devices[selected]);
         }
     }
 
@@ -1244,15 +1349,15 @@ static void action_bt_scan(void)
 static void action_about(void)
 {
     display_clear();
-    display_draw_text_color(0, 0, DEVICE_NAME, DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "DIY multi-tool");
+    display_draw_text_centered(0, DEVICE_NAME, DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Makeshiftflipper");
     display_draw_text(3, 0, "ESP32-C6-Pico 4MB");
     display_draw_text(5, 0, "RFID / NFC (13.56 & 125k)");
-    display_draw_text(6, 0, "Infrared TX/RX + learn");
-    display_draw_text(7, 0, "WiFi scan/setup/monitor");
-    display_draw_text(8, 0, "Bluetooth LE scan");
+    display_draw_text(6, 0, "Kızılötesi TX/RX + öğrenme");
+    display_draw_text(7, 0, "WiFi tarama/kurulum/izleme");
+    display_draw_text(8, 0, "Bluetooth LE tarama");
     display_draw_text_color(DISPLAY_ROWS - 2, 0, "github.com/ErdemWilkinson", DISPLAY_COLOR_DIM);
-    display_draw_text_color(DISPLAY_ROWS - 1, 0, "Press any key...", DISPLAY_COLOR_DIM);
+    display_draw_text_color(DISPLAY_ROWS - 1, 0, "Bir tuşa bas...", DISPLAY_COLOR_DIM);
     display_flush();
     wait_for_any_key();
 }
@@ -1262,17 +1367,36 @@ static void action_about(void)
 static void action_security_lab_guide(void)
 {
     display_clear();
-    display_draw_text_color(0, 0, "Security Lab", DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, "Use devices you own");
-    display_draw_text(3, 0, "or have permission to test.");
-    display_draw_text(5, 0, "WiFi/BLE scans listen only.");
-    display_draw_text(6, 0, "No disconnect or injection.");
-    display_draw_text(8, 0, "For recovery tests, use");
-    display_draw_text(9, 0, "your isolated test network.");
-    display_draw_text(DISPLAY_ROWS - 1, 0, "Press any key");
+    display_draw_text_centered(0, "SecLab", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Yalnızca kendi cihazlarında");
+    display_draw_text(3, 0, "veya izinli cihazlarda dene.");
+    display_draw_text(5, 0, "WiFi/BLE yalnızca dinler.");
+    display_draw_text(6, 0, "Bağlantı kesme/enjeksiyon yok.");
+    display_draw_text(8, 0, "Kurtarma testlerinde");
+    display_draw_text(9, 0, "yalıtılmış test ağını kullan.");
+    display_draw_text(DISPLAY_ROWS - 1, 0, "Bir tuşa bas");
     display_flush();
     wait_for_any_key();
     menu_render(s_active_menu);
+}
+
+// Red warning splash shown once on entering the Hacking menu. Purely a
+// scope/consent reminder -- it starts no radio activity. A key press drops
+// into the (red-tinted) Hacking menu.
+static void show_hacking_intro(void)
+{
+    display_set_background(DISPLAY_BG_HACKING);
+    display_clear();
+    display_draw_text_centered(0, "== HACKING ==", DISPLAY_COLOR_ERROR);
+    display_draw_text_color(2, 0, "Yalnızca izinli kullanım.", DISPLAY_COLOR_ERROR);
+    display_draw_text_color(4, 0, "Kendi veya test izni olan", DISPLAY_COLOR_HACKING_TEXT);
+    display_draw_text_color(5, 0, "cihazlarda kullan.", DISPLAY_COLOR_HACKING_TEXT);
+    display_draw_text_color(7, 0, "Buradaki araçlar yalnızca", DISPLAY_COLOR_HACKING_TEXT);
+    display_draw_text_color(8, 0, "alıcıdır (RX).", DISPLAY_COLOR_HACKING_TEXT);
+    display_draw_text_color(9, 0, "Enjeksiyon/saldırı yok.", DISPLAY_COLOR_HACKING_TEXT);
+    display_draw_text_color(DISPLAY_ROWS - 1, 0, "Bir tuşa bas", DISPLAY_COLOR_HACKING_ACCENT);
+    display_flush();
+    wait_for_any_key();
 }
 
 // Formats how long ago `timestamp_us` (an esp_timer_get_time() value) was,
@@ -1282,11 +1406,11 @@ static void format_relative_time(char *out, size_t out_cap, int64_t timestamp_us
 {
     int64_t age_s = (esp_timer_get_time() - timestamp_us) / 1000000;
     if (age_s < 60) {
-        snprintf(out, out_cap, "%llds ago", (long long)age_s);
+        snprintf(out, out_cap, "%lld sn once", (long long)age_s);
     } else if (age_s < 3600) {
-        snprintf(out, out_cap, "%lldm ago", (long long)(age_s / 60));
+        snprintf(out, out_cap, "%lld dk once", (long long)(age_s / 60));
     } else {
-        snprintf(out, out_cap, "%lldh ago", (long long)(age_s / 3600));
+        snprintf(out, out_cap, "%lld sa once", (long long)(age_s / 3600));
     }
 }
 
@@ -1305,11 +1429,11 @@ static void action_error_history(void)
     for (;;) {
         display_clear();
         char header[DISPLAY_COLS + 1];
-        snprintf(header, sizeof(header), "Errors (%d)", count);
-        display_draw_text_color(0, 0, header, DISPLAY_COLOR_ACCENT);
+        snprintf(header, sizeof(header), "Hatalar (%d)", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
 
         if (count == 0) {
-            display_draw_text(2, 0, "No errors recorded");
+            display_draw_text(2, 0, "Kayıtlı hata yok");
         } else {
             // Field widths widened to use the larger DISPLAY_COLS (was
             // 7/5/7 on the old 21-column OLED) -- still clamped with %.*s
@@ -1325,7 +1449,7 @@ static void action_error_history(void)
                 display_draw_text(LIST_HEADER_ROWS + i, 0, line);
             }
         }
-        display_draw_text(DISPLAY_ROWS - 1, 0, "BACK: exit");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "GERİ: çık");
         display_flush();
 
         button_id_t event;
@@ -1360,57 +1484,48 @@ static void action_error_history(void)
 
 // --- Menu tree ---------------------------------------------------------
 // Top level is a set of categories; each opens its own flat submenu.
-// LEFT backs out of a submenu to its parent (menu_link_submenu() below
-// wires that up); BACK (a separate physical button, not part of the menu
-// at all) exits whatever screen/action is active straight back to
-// whichever menu launched it, handled in the main loop / actions above.
+// The physical LEFT switch emits BUTTON_BACK. It returns from a submenu
+// to its parent (menu_link_submenu() below) or exits the active screen;
+// RIGHT enters/selects and UP/DOWN move through items.
 
 static menu_item_t s_rfid_menu_items[] = {
-    {"Read 125kHz",   action_rfid_125khz, NULL},
-    {"Read 13.56MHz", action_nfc_1356mhz, NULL},
-    {"Clone (13.56MHz)", action_rfid_clone, NULL},
-    {"Save 125kHz",    action_rfid_save_125khz,  NULL},
-    {"Save 13.56MHz",  action_rfid_save_1356mhz, NULL},
-    {"RFID Library",   action_rfid_library,      NULL},
+    {"125kHz Oku",   action_rfid_125khz, NULL},
+    {"13.56MHz Oku", action_nfc_1356mhz, NULL},
+    {"13.56MHz Kopyala", action_rfid_clone, NULL},
+    {"125kHz Kaydet",    action_rfid_save_125khz,  NULL},
+    {"13.56MHz Kaydet",  action_rfid_save_1356mhz, NULL},
+    {"RFID Kütüphanesi",   action_rfid_library,      NULL},
 };
 
 static menu_item_t s_ir_menu_items[] = {
-    {"IR Send Test",     action_ir_send_test,      NULL},
-    {"IR Learn",          action_ir_learn,          NULL},
-    {"IR Library",        action_ir_library,        NULL},
+    {"IR Gönderim Testi", action_ir_send_test, NULL},
+    {"IR Öğren",          action_ir_learn,     NULL},
+    {"IR Kütüphanesi",    action_ir_library,   NULL},
     // (N/A): unavailable on this hardware profile, not a bug -- see the
     // action's own comment and KNOWN_ISSUES.md's Round 27. Marked in the
     // label itself so the menu doesn't present a dead control as a normal
     // one; selecting it still shows the full explanation on-screen.
-    {"IR Direction Find (N/A)", action_ir_direction_find, NULL},
+    {"IR Yön Bul (Yok)", action_ir_direction_find, NULL},
 };
 
 static menu_item_t s_wifi_menu_items[] = {
-    {"WiFi Scan Test",     action_wifi_scan_test,   NULL},
-    // (N/A): c6_link_setup() is a stub on this build (see its comment) --
-    // Wi-Fi Setup Manual below is the working join path. Marked in the
-    // label for the same reason as "IR Direction Find (N/A)" above.
-    {"WiFi Setup (N/A)",    action_wifi_setup,       NULL},
-    {"WiFi Setup Manual",   action_wifi_setup_manual, NULL},
-    {"WiFi Monitor",        action_wifi_monitor,     NULL},
+    {"WiFi Tara/Bağlan", action_wifi_scan_test, NULL},
+    {"WiFi Durum", action_wifi_status, NULL},
 };
 
 static menu_item_t s_bluetooth_menu_items[] = {
-    {"BT Scan", action_bt_scan, NULL},
+    {"BT Tara", action_bt_scan, NULL},
 };
 
 static menu_item_t s_security_lab_menu_items[] = {
-    {"WiFi Survey", action_wifi_scan_test, NULL},
-    {"BLE Discovery", action_bt_scan, NULL},
-    {"Lab Safety Guide", action_security_lab_guide, NULL},
+    {"Güvenli Kullanım", action_security_lab_guide, NULL},
 };
 
 // Passive observation shortcuts for authorized lab equipment. These reuse
 // the existing receive-only actions; no packet transmission is performed.
 static menu_item_t s_hacking_menu_items[] = {
-    {"WiFi Recon (RX)", action_wifi_scan_test, NULL},
-    {"AP Monitor (RX)", action_wifi_monitor, NULL},
-    {"BLE Recon (RX)", action_bt_scan, NULL},
+    {"WiFi İzleme (RX)", action_wifi_monitor, NULL},
+    {"BLE Keşif (RX)", action_bt_scan, NULL},
 };
 
 // Indices [0..5] below must stay in sync with the menu_link_submenu()
@@ -1419,13 +1534,13 @@ static menu_item_t s_hacking_menu_items[] = {
 // do nothing when selected, with no compiler warning.
 static menu_item_t s_main_menu_items[] = {
     {"RFID / NFC", NULL, NULL},
-    {"Infrared",   NULL, NULL},
+    {"Kızılötesi", NULL, NULL},
     {"WiFi",       NULL, NULL},
     {"Bluetooth",  NULL, NULL},
-    {"Security Lab", NULL, NULL},
+    {"SecLab", NULL, NULL},
     {"Hacking", NULL, NULL},
-    {"Errors",     action_error_history, NULL},
-    {"About",      action_about, NULL},
+    {"Hatalar",    action_error_history, NULL},
+    {"Hakkında",   action_about, NULL},
 };
 
 static menu_t s_main_menu;
@@ -1462,33 +1577,33 @@ static void render_menu_themed(const menu_t *menu)
 static void render_scan_screen(const char *title)
 {
     display_clear();
-    display_draw_text_color(0, 0, title, DISPLAY_COLOR_ACCENT);
-    display_draw_text(2, 0, s_last_scan_line[0] ? s_last_scan_line : "Scanning...");
-    display_draw_text(6, 0, "BACK button: exit");
+    display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, s_last_scan_line[0] ? s_last_scan_line : "Taranıyor...");
+    display_draw_text(6, 0, "GERİ: çık");
     display_flush();
 }
 
 static void render_ir_direction_screen(uint8_t flags)
 {
     display_clear();
-    display_draw_text_color(0, 0, "IR Direction Find", DISPLAY_COLOR_ACCENT);
+    display_draw_text_centered(0, "IR Yön Bulma", DISPLAY_COLOR_ACCENT);
     if (!ir_direction_is_available()) {
         // ir_direction_init() isn't called on this build (see
         // KNOWN_ISSUES.md's Round 13/15) -- say so explicitly rather than
         // leaving the user on a "Waiting for IR..." screen that can never
         // report anything.
-        display_draw_text_color(2, 0, "Not available", DISPLAY_COLOR_ERROR);
-        display_draw_text(3, 0, "on this build");
-        display_draw_text(5, 0, "(RMT channels used");
-        display_draw_text(6, 0, "by IR RX/TX already)");
-        display_draw_text(8, 0, "BACK button: exit");
+        display_draw_text_color(2, 0, "Kullanılamıyor", DISPLAY_COLOR_ERROR);
+        display_draw_text(3, 0, "bu sürümde");
+        display_draw_text(5, 0, "(RMT kanalları IR RX/TX");
+        display_draw_text(6, 0, "tarafından kullanılıyor)");
+        display_draw_text(8, 0, "GERİ: çık");
         display_flush();
         return;
     }
     if (s_last_scan_line[0]) {
         display_draw_text(2, 0, s_last_scan_line);
     } else {
-        display_draw_text(2, 0, "Waiting for IR...");
+        display_draw_text(2, 0, "IR bekleniyor...");
     }
     char dirs[DISPLAY_COLS + 1];
     snprintf(dirs, sizeof(dirs), "%c%c%c%c",
@@ -1497,7 +1612,7 @@ static void render_ir_direction_screen(uint8_t flags)
              (flags & IR_DIR_SOUTH) ? 'S' : '-',
              (flags & IR_DIR_WEST)  ? 'W' : '-');
     display_draw_text(4, 0, dirs);
-    display_draw_text(6, 0, "BACK button: exit");
+    display_draw_text(6, 0, "GERİ: çık");
     display_flush();
 }
 
@@ -1518,12 +1633,14 @@ void app_main(void)
     rfid_library_load();
 
     display_init();
-    render_boot_splash();
     buttons_init();
+    show_startup_notice();
     ir_driver_init();
     // The four-receiver direction finder is retained for a future hardware
     // profile but is not initialized on this fixed C6-Pico pin map.
-    rc522_init();
+    if (BOARD_HAS_RC522) {
+        rc522_init();
+    }
     rdm6300_init();
     vibration_init();
     c6_link_init();
@@ -1542,6 +1659,17 @@ void app_main(void)
               sizeof(s_security_lab_menu_items) / sizeof(s_security_lab_menu_items[0]));
     menu_init(&s_hacking_menu, s_hacking_menu_items,
               sizeof(s_hacking_menu_items) / sizeof(s_hacking_menu_items[0]));
+
+    menu_set_banner(&s_main_menu, "Makeshift Flipper");
+    menu_set_banner(&s_rfid_menu, "RFID / NFC");
+    menu_set_banner(&s_ir_menu, "Kızılötesi");
+    menu_set_banner(&s_wifi_menu, "WiFi");
+    menu_set_banner(&s_bluetooth_menu, "Bluetooth");
+    menu_set_banner(&s_security_lab_menu, "SecLab");
+    menu_set_banner(&s_hacking_menu, "HACKING");
+    menu_set_accent(&s_hacking_menu, DISPLAY_COLOR_HACKING_ACCENT);
+    menu_set_text_style(&s_hacking_menu, DISPLAY_COLOR_HACKING_TEXT,
+                        DISPLAY_COLOR_HACKING_SELECTED, false);
 
     menu_link_submenu(&s_main_menu, &s_main_menu_items[0], &s_rfid_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[1], &s_ir_menu);
@@ -1570,6 +1698,10 @@ void app_main(void)
                 menu_t *next = menu_handle_button(s_active_menu, event);
                 if (next != s_active_menu) {
                     s_active_menu = next;
+                    // One-time red scope reminder when entering Hacking.
+                    if (next == &s_hacking_menu) {
+                        show_hacking_intro();
+                    }
                 }
                 needs_render = true;
             }
@@ -1649,7 +1781,7 @@ void app_main(void)
                         diag_record_error("13.56MHz NFC", "RC522_SCAN_UNSUPPORTED_UID");
                     }
                     snprintf(s_last_scan_line, sizeof(s_last_scan_line),
-                             "7/10-byte UID: N/A");
+                             "7/10 bayt UID: yok");
                 } else if (result == RC522_SCAN_ERROR) {
                     if (!s_rc522_scan_error_latched) {
                         s_rc522_scan_error_latched = true;

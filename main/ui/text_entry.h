@@ -5,11 +5,9 @@
 
 #include "input/buttons.h"
 
-// A joystick-driven "scroll keyboard": a grid of characters the user
-// scrolls through with UP/DOWN/LEFT/RIGHT and picks with PRESS, building up
-// a text buffer one character at a time. Meant as the no-phone fallback for
-// entering things like a Wi-Fi password -- slower than typing, but needs
-// nothing but the joystick already on the board.
+// Keyboard controls: UP/DOWN change row, short LEFT/RIGHT move across columns,
+// A/centre PRESS (or long RIGHT) select a cell, and long LEFT cancels.
+// Outside this screen, LEFT backs out and RIGHT enters/selects as before.
 
 #define TEXT_ENTRY_MAX_LEN 63
 
@@ -24,11 +22,10 @@ typedef struct {
 void text_entry_init(text_entry_t *entry);
 
 // Feeds one button event in:
-//  - UP/DOWN/LEFT/RIGHT move the grid cursor
-//  - PRESS appends the character under the cursor (or triggers OK/DEL/CLEAR
-//    if the cursor is on one of those special cells)
-// Returns true if PRESS was on the "OK" cell (caller should treat the
-// buffer as finished/submitted).
+//  - UP/DOWN change row with wraparound
+//  - LEFT/RIGHT move one column with wraparound
+//  - PRESS activates the selected character or OK/DEL/CLEAR
+// Returns true when OK is selected.
 bool text_entry_handle_button(text_entry_t *entry, button_id_t button);
 
 // Draws the current buffer plus the character grid with the cursor

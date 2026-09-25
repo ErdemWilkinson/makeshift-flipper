@@ -40,6 +40,9 @@ typedef uint16_t display_color_t;
 #define DISPLAY_COLOR_BACKGROUND DISPLAY_RGB(2, 1, 1)       // near-black, faint warm tint
 #define DISPLAY_COLOR_TEXT       DISPLAY_RGB(30, 40, 10)    // warm amber
 #define DISPLAY_COLOR_ACCENT     DISPLAY_RGB(31, 18, 2)     // hot red-orange -- selection highlight, headers
+#define DISPLAY_COLOR_HACKING_ACCENT DISPLAY_RGB(31, 4, 4) // red highlight for Hacking only
+#define DISPLAY_COLOR_HACKING_TEXT DISPLAY_RGB(28, 3, 3)   // red text on black
+#define DISPLAY_COLOR_HACKING_SELECTED DISPLAY_RGB(31, 16, 16) // brighter red cursor row
 #define DISPLAY_COLOR_ACCENT_TEXT DISPLAY_RGB(0, 0, 0)      // text drawn on top of an accent-filled area
 #define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 4, 4)      // red -- error/failure states
 #define DISPLAY_COLOR_OK         DISPLAY_RGB(10, 46, 8)     // green -- success/connected states (kept distinct from accent)
@@ -48,13 +51,13 @@ typedef uint16_t display_color_t;
 // Per-screen background tints. Kept dark so the amber body text stays
 // readable; each main category sets one on entry to give the section its
 // own identity. Names match the main-menu categories.
-#define DISPLAY_BG_DEFAULT   DISPLAY_RGB(2, 1, 1)    // near-black warm (home/default)
+#define DISPLAY_BG_DEFAULT   DISPLAY_RGB(5, 0, 8)    // dark purple home screen
 #define DISPLAY_BG_RFID      DISPLAY_RGB(1, 3, 6)    // deep blue
 #define DISPLAY_BG_INFRARED  DISPLAY_RGB(6, 1, 1)    // deep red
 #define DISPLAY_BG_WIFI      DISPLAY_RGB(1, 5, 5)    // deep teal
 #define DISPLAY_BG_BLUETOOTH DISPLAY_RGB(2, 2, 7)    // deep indigo
-#define DISPLAY_BG_SECURITY  DISPLAY_RGB(1, 5, 2)    // deep green
-#define DISPLAY_BG_HACKING   DISPLAY_RGB(4, 1, 5)    // deep purple
+#define DISPLAY_BG_SECURITY  DISPLAY_RGB(5, 4, 0)    // deep olive/gold
+#define DISPLAY_BG_HACKING   DISPLAY_RGB(0, 0, 0)    // black, with red text
 #define DISPLAY_BG_ERRORS    DISPLAY_RGB(6, 3, 0)    // deep amber/brown
 #define DISPLAY_BG_ABOUT     DISPLAY_RGB(3, 3, 4)    // cool slate
 
@@ -76,6 +79,8 @@ void display_clear(void);
 // (this is a thin wrapper for DISPLAY_COLOR_TEXT, the common case).
 void display_draw_text(int row, int col, const char *text);
 void display_draw_text_color(int row, int col, const char *text, display_color_t color);
+// Centers UTF-8 text by display glyphs (not byte length).
+void display_draw_text_centered(int row, const char *text, display_color_t color);
 
 // Draws text at an arbitrary pixel position (not grid-snapped), in `fg` on
 // a `bg`-filled cell background (both explicit -- there is no invert/XOR
