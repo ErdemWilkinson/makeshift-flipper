@@ -45,6 +45,24 @@ typedef uint16_t display_color_t;
 #define DISPLAY_COLOR_OK         DISPLAY_RGB(10, 46, 8)     // green -- success/connected states (kept distinct from accent)
 #define DISPLAY_COLOR_DIM        DISPLAY_RGB(14, 10, 4)     // dim warm brown -- secondary/disabled text
 
+// Per-screen background tints. Kept dark so the amber body text stays
+// readable; each main category sets one on entry to give the section its
+// own identity. Names match the main-menu categories.
+#define DISPLAY_BG_DEFAULT   DISPLAY_RGB(2, 1, 1)    // near-black warm (home/default)
+#define DISPLAY_BG_RFID      DISPLAY_RGB(1, 3, 6)    // deep blue
+#define DISPLAY_BG_INFRARED  DISPLAY_RGB(6, 1, 1)    // deep red
+#define DISPLAY_BG_WIFI      DISPLAY_RGB(1, 5, 5)    // deep teal
+#define DISPLAY_BG_BLUETOOTH DISPLAY_RGB(2, 2, 7)    // deep indigo
+#define DISPLAY_BG_SECURITY  DISPLAY_RGB(1, 5, 2)    // deep green
+#define DISPLAY_BG_HACKING   DISPLAY_RGB(4, 1, 5)    // deep purple
+#define DISPLAY_BG_ERRORS    DISPLAY_RGB(6, 3, 0)    // deep amber/brown
+#define DISPLAY_BG_ABOUT     DISPLAY_RGB(3, 3, 4)    // cool slate
+
+// Sets the active background color used by display_clear() and the text
+// helpers. Screens call this to retint the whole UI before drawing.
+void display_set_background(display_color_t color);
+display_color_t display_get_background(void);
+
 // Brings up SPI + the ST7789 panel. Call once at startup.
 void display_init(void);
 

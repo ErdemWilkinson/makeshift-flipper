@@ -1257,6 +1257,24 @@ static void action_about(void)
     wait_for_any_key();
 }
 
+// Scope reminder for the passive radio tools grouped under Security Lab.
+// This screen does not start radio activity or change radio state.
+static void action_security_lab_guide(void)
+{
+    display_clear();
+    display_draw_text_color(0, 0, "Security Lab", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Use devices you own");
+    display_draw_text(3, 0, "or have permission to test.");
+    display_draw_text(5, 0, "WiFi/BLE scans listen only.");
+    display_draw_text(6, 0, "No disconnect or injection.");
+    display_draw_text(8, 0, "For recovery tests, use");
+    display_draw_text(9, 0, "your isolated test network.");
+    display_draw_text(DISPLAY_ROWS - 1, 0, "Press any key");
+    display_flush();
+    wait_for_any_key();
+    menu_render(s_active_menu);
+}
+
 // Formats how long ago `timestamp_us` (an esp_timer_get_time() value) was,
 // relative to now -- boot-relative, not wall-clock (no RTC on this
 // device), so this is only meaningful within the current boot session.
@@ -1381,7 +1399,21 @@ static menu_item_t s_bluetooth_menu_items[] = {
     {"BT Scan", action_bt_scan, NULL},
 };
 
-// Indices [0..3] below must stay in sync with the menu_link_submenu()
+static menu_item_t s_security_lab_menu_items[] = {
+    {"WiFi Survey", action_wifi_scan_test, NULL},
+    {"BLE Discovery", action_bt_scan, NULL},
+    {"Lab Safety Guide", action_security_lab_guide, NULL},
+};
+
+// Passive observation shortcuts for authorized lab equipment. These reuse
+// the existing receive-only actions; no packet transmission is performed.
+static menu_item_t s_hacking_menu_items[] = {
+    {"WiFi Recon (RX)", action_wifi_scan_test, NULL},
+    {"AP Monitor (RX)", action_wifi_monitor, NULL},
+    {"BLE Recon (RX)", action_bt_scan, NULL},
+};
+
+// Indices [0..5] below must stay in sync with the menu_link_submenu()
 // calls in app_main() -- reordering these items without updating those
 // calls (or their hardcoded indices) makes the moved category silently
 // do nothing when selected, with no compiler warning.
@@ -1390,6 +1422,8 @@ static menu_item_t s_main_menu_items[] = {
     {"Infrared",   NULL, NULL},
     {"WiFi",       NULL, NULL},
     {"Bluetooth",  NULL, NULL},
+    {"Security Lab", NULL, NULL},
+    {"Hacking", NULL, NULL},
     {"Errors",     action_error_history, NULL},
     {"About",      action_about, NULL},
 };
@@ -1399,6 +1433,31 @@ static menu_t s_rfid_menu;
 static menu_t s_ir_menu;
 static menu_t s_wifi_menu;
 static menu_t s_bluetooth_menu;
+static menu_t s_security_lab_menu;
+static menu_t s_hacking_menu;
+
+// Gives each menu its own background tint, then renders it. The main menu
+// keeps the default near-black; each category carries its section color into
+// its submenu so the color persists while you're inside that section.
+static void render_menu_themed(const menu_t *menu)
+{
+    display_color_t bg = DISPLAY_BG_DEFAULT;
+    if (menu == &s_rfid_menu) {
+        bg = DISPLAY_BG_RFID;
+    } else if (menu == &s_ir_menu) {
+        bg = DISPLAY_BG_INFRARED;
+    } else if (menu == &s_wifi_menu) {
+        bg = DISPLAY_BG_WIFI;
+    } else if (menu == &s_bluetooth_menu) {
+        bg = DISPLAY_BG_BLUETOOTH;
+    } else if (menu == &s_security_lab_menu) {
+        bg = DISPLAY_BG_SECURITY;
+    } else if (menu == &s_hacking_menu) {
+        bg = DISPLAY_BG_HACKING;
+    }
+    display_set_background(bg);
+    menu_render(menu);
+}
 
 static void render_scan_screen(const char *title)
 {
@@ -1479,11 +1538,17 @@ void app_main(void)
               sizeof(s_wifi_menu_items) / sizeof(s_wifi_menu_items[0]));
     menu_init(&s_bluetooth_menu, s_bluetooth_menu_items,
               sizeof(s_bluetooth_menu_items) / sizeof(s_bluetooth_menu_items[0]));
+    menu_init(&s_security_lab_menu, s_security_lab_menu_items,
+              sizeof(s_security_lab_menu_items) / sizeof(s_security_lab_menu_items[0]));
+    menu_init(&s_hacking_menu, s_hacking_menu_items,
+              sizeof(s_hacking_menu_items) / sizeof(s_hacking_menu_items[0]));
 
     menu_link_submenu(&s_main_menu, &s_main_menu_items[0], &s_rfid_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[1], &s_ir_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[2], &s_wifi_menu);
     menu_link_submenu(&s_main_menu, &s_main_menu_items[3], &s_bluetooth_menu);
+    menu_link_submenu(&s_main_menu, &s_main_menu_items[4], &s_security_lab_menu);
+    menu_link_submenu(&s_main_menu, &s_main_menu_items[5], &s_hacking_menu);
 
     // Catches a forgotten/misindexed menu_link_submenu() call above at
     // boot (see KNOWN_ISSUES.md) instead of leaving a menu item that
@@ -1494,7 +1559,7 @@ void app_main(void)
     menu_assert_fully_wired(&s_main_menu);
 
     s_active_menu = &s_main_menu;
-    menu_render(s_active_menu);
+    render_menu_themed(s_active_menu);
 
     while (1) {
         button_id_t event = buttons_poll();
@@ -1513,14 +1578,14 @@ void app_main(void)
                 needs_render = true;
             }
             if (needs_render) {
-                menu_render(s_active_menu);
+                render_menu_themed(s_active_menu);
             }
         } else if (event == BUTTON_BACK) {
             if (s_screen == APP_SCREEN_SCAN_1356MHZ) {
                 rc522_antenna_off();
             }
             s_screen = APP_SCREEN_MENU;
-            menu_render(s_active_menu);
+            render_menu_themed(s_active_menu);
         } else if (s_screen == APP_SCREEN_IR_DIRECTION) {
             uint8_t flags = 0;
             ir_nec_frame_t frame;
