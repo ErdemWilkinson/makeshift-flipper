@@ -180,7 +180,7 @@ void menu_render(const menu_t *menu)
             display_fill_rect(0, y, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX, DISPLAY_COLOR_ACCENT);
             display_draw_text_px(x, y, label, DISPLAY_COLOR_ACCENT_TEXT, DISPLAY_COLOR_ACCENT);
         } else {
-            display_draw_text_px(x, y, label, DISPLAY_COLOR_TEXT, DISPLAY_COLOR_BACKGROUND);
+            display_draw_text_px(x, y, label, DISPLAY_COLOR_TEXT, display_get_background());
         }
     }
 

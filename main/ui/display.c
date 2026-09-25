@@ -100,6 +100,13 @@ void display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
+    // The device is held rotated 90 degrees clockwise from the panel's native
+    // portrait orientation, so swap X/Y and mirror one axis to land the UI
+    // upright in landscape. swap_xy alone transposes; the mirror picks which
+    // of the two 90-degree directions (flip the mirror axis if it comes out
+    // upside-down or mirror-imaged).
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     display_clear();
@@ -108,10 +115,26 @@ void display_init(void)
              LCD_SCK_GPIO, LCD_MOSI_GPIO, LCD_CS_GPIO, LCD_DC_GPIO, LCD_RST_GPIO);
 }
 
+// The active background color. Screens can retint the whole UI by setting
+// this before drawing; display_clear() and the text helpers read it so text
+// cells blend into whatever background is current. Defaults to the theme's
+// near-black so anything that never calls the setter looks unchanged.
+static display_color_t s_active_bg = DISPLAY_COLOR_BACKGROUND;
+
+void display_set_background(display_color_t color)
+{
+    s_active_bg = color;
+}
+
+display_color_t display_get_background(void)
+{
+    return s_active_bg;
+}
+
 void display_clear(void)
 {
     for (int i = 0; i < PANEL_WIDTH * PANEL_HEIGHT; i++) {
-        s_framebuf[i] = DISPLAY_COLOR_BACKGROUND;
+        s_framebuf[i] = s_active_bg;
     }
 }
 
@@ -163,7 +186,7 @@ void display_draw_text_color(int row, int col, const char *text, display_color_t
     }
     clipped[i] = '\0';
 
-    display_draw_text_px(col * 8, row * 16, clipped, color, DISPLAY_COLOR_BACKGROUND);
+    display_draw_text_px(col * 8, row * 16, clipped, color, s_active_bg);
 }
 
 void display_draw_text(int row, int col, const char *text)
