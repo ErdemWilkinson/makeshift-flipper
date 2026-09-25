@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include "input/buttons.h"
+#include "display.h"
 
 struct menu_s;
 
@@ -28,10 +29,28 @@ typedef struct menu_s {
     // Set by menu_link_submenu() on the child; NULL for a top-level menu.
     // LEFT walks back up this chain.
     struct menu_s *parent;
+
+    // Optional top row and per-menu colors. Most menus keep a filled
+    // selection; Hacking uses red lettering on uninterrupted black.
+    const char *banner;
+    display_color_t accent_color;
+    display_color_t text_color;
+    display_color_t selected_text_color;
+    bool fill_selection;
 } menu_t;
 
 // item_count may be 0 for a category placeholder that isn't wired up yet.
 void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count);
+
+// Reserve a non-selectable top row for this menu's centered title.
+void menu_set_banner(menu_t *menu, const char *text);
+
+// Set the banner and selected-row color without changing other menus.
+void menu_set_accent(menu_t *menu, display_color_t color);
+
+// Override only this menu's text/selection styling.
+void menu_set_text_style(menu_t *menu, display_color_t text_color,
+                         display_color_t selected_text_color, bool fill_selection);
 
 // Wires parent_item (which must belong to parent->items) to open child when
 // selected, and records parent as child's parent so LEFT can back out of

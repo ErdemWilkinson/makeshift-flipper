@@ -37,6 +37,10 @@ static const char *const s_grid[GRID_ROWS][GRID_COLS] = {
     {"^","<","*","SP","|","","","","",""},
 };
 
+// Centre/A selects a cell. On this keyboard only, short RIGHT/LEFT move the
+// cursor; the rest of the UI treats RIGHT as enter and LEFT as back.
+#define CONTROL_ROW_CELLS 5
+
 #define CELL_W_PX 24
 #define CELL_H_PX 16 // matches the 8x16 font's row height
 #define CELL_Y0_PX 32 // leave the top 2 rows (32px) for the title/buffer text
@@ -74,24 +78,30 @@ bool text_entry_handle_button(text_entry_t *entry, button_id_t button)
 {
     switch (button) {
         case BUTTON_UP:
-            if (entry->cursor_row > 0) {
-                entry->cursor_row--;
+            entry->cursor_row = (entry->cursor_row + GRID_ROWS - 1) % GRID_ROWS;
+            if (entry->cursor_row == GRID_ROWS - 1 && entry->cursor_col >= CONTROL_ROW_CELLS) {
+                entry->cursor_col = CONTROL_ROW_CELLS - 1;
             }
             return false;
         case BUTTON_DOWN:
-            if (entry->cursor_row < GRID_ROWS - 1) {
-                entry->cursor_row++;
+            entry->cursor_row = (entry->cursor_row + 1) % GRID_ROWS;
+            if (entry->cursor_row == GRID_ROWS - 1 && entry->cursor_col >= CONTROL_ROW_CELLS) {
+                entry->cursor_col = CONTROL_ROW_CELLS - 1;
             }
             return false;
         case BUTTON_LEFT:
-            if (entry->cursor_col > 0) {
-                entry->cursor_col--;
+            if (entry->cursor_row == GRID_ROWS - 1) {
+                entry->cursor_col = (entry->cursor_col + CONTROL_ROW_CELLS - 1) % CONTROL_ROW_CELLS;
+            } else {
+                entry->cursor_col = (entry->cursor_col + GRID_COLS - 1) % GRID_COLS;
             }
             return false;
+        case BUTTON_BACK:
+            // The caller leaves the editor on B or long LEFT.
+            return false;
         case BUTTON_RIGHT:
-            if (entry->cursor_col < GRID_COLS - 1) {
-                entry->cursor_col++;
-            }
+            entry->cursor_col = (entry->cursor_col + 1) %
+                                (entry->cursor_row == GRID_ROWS - 1 ? CONTROL_ROW_CELLS : GRID_COLS);
             return false;
         case BUTTON_PRESS: {
             const char *label = s_grid[entry->cursor_row][entry->cursor_col];
@@ -120,7 +130,7 @@ bool text_entry_handle_button(text_entry_t *entry, button_id_t button)
 void text_entry_render(const text_entry_t *entry, const char *title, bool mask)
 {
     display_clear();
-    display_draw_text(0, 0, title);
+    display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
 
     if (mask) {
         // Password entry: show '*' per character instead of the real text,
@@ -159,6 +169,9 @@ void text_entry_render(const text_entry_t *entry, const char *title, bool mask)
             }
         }
     }
+
+    display_draw_text(13, 0, "YUK/ASA:satir SOL/SAG:sutun");
+    display_draw_text(14, 0, "SOL uzun:cik SAG uzun:sec");
 
     display_flush();
 }

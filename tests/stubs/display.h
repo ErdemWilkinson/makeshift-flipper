@@ -29,15 +29,20 @@ typedef uint16_t display_color_t;
 #define DISPLAY_COLOR_BACKGROUND DISPLAY_RGB(2, 1, 1)
 #define DISPLAY_COLOR_TEXT       DISPLAY_RGB(30, 40, 10)
 #define DISPLAY_COLOR_ACCENT     DISPLAY_RGB(31, 18, 2)
+#define DISPLAY_COLOR_HACKING_ACCENT DISPLAY_RGB(31, 4, 4)
+#define DISPLAY_COLOR_HACKING_TEXT DISPLAY_RGB(28, 3, 3)
+#define DISPLAY_COLOR_HACKING_SELECTED DISPLAY_RGB(31, 16, 16)
 #define DISPLAY_COLOR_ACCENT_TEXT DISPLAY_RGB(0, 0, 0)
 #define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 4, 4)
 #define DISPLAY_COLOR_OK         DISPLAY_RGB(10, 46, 8)
 #define DISPLAY_COLOR_DIM        DISPLAY_RGB(14, 10, 4)
 
 void display_init(void);
+display_color_t display_get_background(void);
 void display_clear(void);
 void display_draw_text(int row, int col, const char *text);
 void display_draw_text_color(int row, int col, const char *text, display_color_t color);
+void display_draw_text_centered(int row, const char *text, display_color_t color);
 void display_draw_text_px(int x, int y, const char *text, display_color_t fg, display_color_t bg);
 void display_fill_rect(int x, int y, int w, int h, display_color_t color);
 void display_flush(void);

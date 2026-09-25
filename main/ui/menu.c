@@ -6,8 +6,12 @@
 
 #include "display.h"
 
-#define VISIBLE_ROWS DISPLAY_ROWS
 #define ROW_HEIGHT_PX 16 // matches the 8x16 font
+
+static int visible_rows(const menu_t *menu)
+{
+    return menu->banner ? DISPLAY_ROWS - 1 : DISPLAY_ROWS;
+}
 
 // Entry animation: the whole list slides in from the right edge and eases
 // into place. Small and dependency-free on purpose (no float math needed).
@@ -24,6 +28,29 @@ void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count)
     menu->scroll_offset = 0;
     menu->anim_offset_px = ANIM_START_OFFSET_PX;
     menu->parent = NULL;
+    menu->banner = NULL;
+    menu->accent_color = DISPLAY_COLOR_ACCENT;
+    menu->text_color = DISPLAY_COLOR_TEXT;
+    menu->selected_text_color = DISPLAY_COLOR_ACCENT_TEXT;
+    menu->fill_selection = true;
+}
+
+void menu_set_banner(menu_t *menu, const char *text)
+{
+    menu->banner = text;
+}
+
+void menu_set_accent(menu_t *menu, display_color_t color)
+{
+    menu->accent_color = color;
+}
+
+void menu_set_text_style(menu_t *menu, display_color_t text_color,
+                         display_color_t selected_text_color, bool fill_selection)
+{
+    menu->text_color = text_color;
+    menu->selected_text_color = selected_text_color;
+    menu->fill_selection = fill_selection;
 }
 
 void menu_assert_fully_wired(const menu_t *menu)
@@ -53,8 +80,8 @@ static void menu_clamp_scroll(menu_t *menu)
 {
     if (menu->selected_index < menu->scroll_offset) {
         menu->scroll_offset = menu->selected_index;
-    } else if (menu->selected_index >= menu->scroll_offset + VISIBLE_ROWS) {
-        menu->scroll_offset = menu->selected_index - VISIBLE_ROWS + 1;
+    } else if (menu->selected_index >= menu->scroll_offset + visible_rows(menu)) {
+        menu->scroll_offset = menu->selected_index - visible_rows(menu) + 1;
     }
 }
 
@@ -133,13 +160,32 @@ void menu_render(const menu_t *menu)
 {
     display_clear();
 
-    for (int row = 0; row < VISIBLE_ROWS; row++) {
+    if (menu->banner) {
+        int len = 0;
+        for (const unsigned char *p = (const unsigned char *)menu->banner; *p; p++) {
+            if ((*p & 0xC0) != 0x80) {
+                len++;
+            }
+        }
+        if (len > DISPLAY_COLS) {
+            len = DISPLAY_COLS;
+        }
+        int col = (DISPLAY_COLS - len) / 2;
+        if (menu->fill_selection) {
+            display_fill_rect(0, 0, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX, menu->accent_color);
+        }
+        display_draw_text_color(0, col, menu->banner,
+                                menu->fill_selection ? DISPLAY_COLOR_ACCENT_TEXT
+                                                     : menu->selected_text_color);
+    }
+
+    for (int row = 0; row < visible_rows(menu); row++) {
         int idx = menu->scroll_offset + row;
         if (idx >= (int)menu->item_count) {
             break;
         }
 
-        int y = row * ROW_HEIGHT_PX;
+        int y = (menu->banner ? ROW_HEIGHT_PX : 0) + row * ROW_HEIGHT_PX;
         // Later rows lag slightly behind earlier ones for a subtle cascade,
         // capped so it never overshoots the base offset.
         int row_lag = row * 2;
@@ -149,7 +195,8 @@ void menu_render(const menu_t *menu)
         }
 
         bool is_selected = (idx == menu->selected_index);
-        char label[DISPLAY_COLS + 1];
+        // A Turkish character occupies two UTF-8 bytes but one display cell.
+        char label[DISPLAY_COLS * 4 + 1];
         int n = 0;
         label[n++] = is_selected ? '>' : ' ';
         // DISPLAY_COLS - 1 usable columns after the cursor char above. If
@@ -157,30 +204,45 @@ void menu_render(const menu_t *menu)
         // silently cutting it off mid-word with no indication anything's
         // missing.
         int usable = DISPLAY_COLS - 1;
+        const char *source = menu->items[idx].label;
         int label_len = 0;
-        while (menu->items[idx].label[label_len] != '\0') {
-            label_len++;
+        for (const unsigned char *p = (const unsigned char *)source; *p; p++) {
+            if ((*p & 0xC0) != 0x80) {
+                label_len++;
+            }
         }
-        if (label_len <= usable) {
-            for (int i = 0; i < label_len; i++) {
-                label[n++] = menu->items[idx].label[i];
+        int keep = label_len <= usable ? usable : usable - 3;
+        int copied = 0;
+        for (const unsigned char *p = (const unsigned char *)source; *p && copied < keep; ) {
+            // Copy a complete UTF-8 sequence, never half of a glyph.
+            int bytes = (*p < 0x80) ? 1 : ((*p & 0xE0) == 0xC0) ? 2
+                      : ((*p & 0xF0) == 0xE0) ? 3 : ((*p & 0xF8) == 0xF0) ? 4 : 1;
+            for (int i = 1; i < bytes; i++) {
+                if (p[i] == '\0' || (p[i] & 0xC0) != 0x80) {
+                    bytes = 1;
+                    break;
+                }
             }
-        } else {
-            int keep = (usable > 3) ? usable - 3 : 0;
-            for (int i = 0; i < keep; i++) {
-                label[n++] = menu->items[idx].label[i];
+            for (int i = 0; i < bytes; i++) {
+                label[n++] = (char)*p++;
             }
-            for (int i = 0; i < 3 && n < DISPLAY_COLS; i++) {
+            copied++;
+        }
+        if (label_len > usable) {
+            for (int i = 0; i < 3 && n < (int)sizeof(label) - 1; i++) {
                 label[n++] = '.';
             }
         }
         label[n] = '\0';
 
         if (is_selected && menu->anim_offset_px == 0) {
-            display_fill_rect(0, y, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX, DISPLAY_COLOR_ACCENT);
-            display_draw_text_px(x, y, label, DISPLAY_COLOR_ACCENT_TEXT, DISPLAY_COLOR_ACCENT);
+            if (menu->fill_selection) {
+                display_fill_rect(0, y, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX, menu->accent_color);
+            }
+            display_draw_text_px(x, y, label, menu->selected_text_color,
+                                 menu->fill_selection ? menu->accent_color : display_get_background());
         } else {
-            display_draw_text_px(x, y, label, DISPLAY_COLOR_TEXT, display_get_background());
+            display_draw_text_px(x, y, label, menu->text_color, display_get_background());
         }
     }
 
