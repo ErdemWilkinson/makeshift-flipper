@@ -11,6 +11,7 @@ static int g_banner_col;
 static int g_selected_y;
 static display_color_t g_selected_color;
 static display_color_t g_last_text_color;
+static display_color_t g_background;
 static char g_last_label[DISPLAY_COLS * 4 + 1];
 
 void display_clear(void) {}
@@ -36,7 +37,8 @@ void display_fill_rect(int x, int y, int w, int h, display_color_t color)
     g_selected_y = y;
     g_selected_color = color;
 }
-display_color_t display_get_background(void) { return DISPLAY_COLOR_BACKGROUND; }
+void display_set_background(display_color_t color) { g_background = color; }
+display_color_t display_get_background(void) { return g_background; }
 void display_flush(void) {}
 
 #include "../main/ui/menu.c"
@@ -65,6 +67,7 @@ static void setup(void)
     g_banner_col = -1;
     g_selected_y = -1;
     g_last_text_color = 0;
+    g_background = DISPLAY_COLOR_BACKGROUND;
     g_last_label[0] = '\0';
 }
 
@@ -96,8 +99,10 @@ MT_TEST(hacking_menu_uses_red_text_without_filled_row)
     menu_set_banner(&s_child, "HACKING");
     menu_set_text_style(&s_child, DISPLAY_COLOR_HACKING_TEXT,
                         DISPLAY_COLOR_HACKING_SELECTED, false);
+    menu_set_background(&s_child, DISPLAY_BG_HACKING);
     s_child.anim_offset_px = 0;
     menu_render(&s_child);
+    MT_CHECK_EQ_INT(g_background, DISPLAY_BG_HACKING);
     MT_CHECK_EQ_INT(g_banner_col, 11);
     MT_CHECK_EQ_INT(g_selected_y, -1);
     MT_CHECK_EQ_INT(g_last_text_color, DISPLAY_COLOR_HACKING_TEXT);

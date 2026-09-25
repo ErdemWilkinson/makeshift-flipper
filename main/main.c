@@ -1667,6 +1667,7 @@ void app_main(void)
     menu_set_banner(&s_bluetooth_menu, "Bluetooth");
     menu_set_banner(&s_security_lab_menu, "SecLab");
     menu_set_banner(&s_hacking_menu, "HACKING");
+    menu_set_background(&s_hacking_menu, DISPLAY_BG_HACKING);
     menu_set_accent(&s_hacking_menu, DISPLAY_COLOR_HACKING_ACCENT);
     menu_set_text_style(&s_hacking_menu, DISPLAY_COLOR_HACKING_TEXT,
                         DISPLAY_COLOR_HACKING_SELECTED, false);
