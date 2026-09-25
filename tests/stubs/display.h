@@ -36,8 +36,10 @@ typedef uint16_t display_color_t;
 #define DISPLAY_COLOR_ERROR      DISPLAY_RGB(31, 4, 4)
 #define DISPLAY_COLOR_OK         DISPLAY_RGB(10, 46, 8)
 #define DISPLAY_COLOR_DIM        DISPLAY_RGB(14, 10, 4)
+#define DISPLAY_BG_HACKING       DISPLAY_RGB(0, 0, 0)
 
 void display_init(void);
+void display_set_background(display_color_t color);
 display_color_t display_get_background(void);
 void display_clear(void);
 void display_draw_text(int row, int col, const char *text);

@@ -33,6 +33,8 @@ void menu_init(menu_t *menu, const menu_item_t *items, size_t item_count)
     menu->text_color = DISPLAY_COLOR_TEXT;
     menu->selected_text_color = DISPLAY_COLOR_ACCENT_TEXT;
     menu->fill_selection = true;
+    menu->has_background_override = false;
+    menu->background_color = 0;
 }
 
 void menu_set_banner(menu_t *menu, const char *text)
@@ -51,6 +53,12 @@ void menu_set_text_style(menu_t *menu, display_color_t text_color,
     menu->text_color = text_color;
     menu->selected_text_color = selected_text_color;
     menu->fill_selection = fill_selection;
+}
+
+void menu_set_background(menu_t *menu, display_color_t color)
+{
+    menu->background_color = color;
+    menu->has_background_override = true;
 }
 
 void menu_assert_fully_wired(const menu_t *menu)
@@ -158,6 +166,9 @@ void menu_animate_tick(menu_t *menu)
 
 void menu_render(const menu_t *menu)
 {
+    if (menu->has_background_override) {
+        display_set_background(menu->background_color);
+    }
     display_clear();
 
     if (menu->banner) {
