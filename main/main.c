@@ -1362,7 +1362,11 @@ static void action_wifi_monitor(void)
         return;
     }
 
-    c6_monitor_ap_t aps[C6_MONITOR_MAX_APS];
+    // static for the same reason as action_bt_scan's devices[]: a 32-entry AP
+    // array on the main task stack is large enough to risk the stack-protection
+    // fault seen with the BLE list. Entered only from the single-threaded menu
+    // loop, so a static scratch buffer is safe.
+    static c6_monitor_ap_t aps[C6_MONITOR_MAX_APS];
     int selected = 0;
     int top = 0;
     for (;;) {
@@ -1613,7 +1617,12 @@ static void action_bt_scan(void)
         return;
     }
 
-    c6_bt_device_t devices[C6_BT_MAX_DEVICES];
+    // static, not on the stack: c6_bt_device_t grew (beacon fields) and 32 of
+    // them is ~3KB, which overflowed the main task stack when combined with
+    // snprintf() below (Guru Meditation "Stack protection fault" in _vfprintf_r
+    // during BLE Keşif / BT Tara). This screen is only ever entered from the
+    // single-threaded menu loop, so a static scratch buffer is safe here.
+    static c6_bt_device_t devices[C6_BT_MAX_DEVICES];
     int selected = 0;
     int top = 0;
     for (;;) {

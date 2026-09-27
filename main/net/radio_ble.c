@@ -95,19 +95,27 @@ static void decode_beacon(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
 {
     out->beacon_type = C6_BEACON_NONE;
     out->beacon_info[0] = '\0';
+    // Some GAP disc events carry no advertisement payload (data == NULL) or a
+    // zero length; walking those would dereference a null/empty buffer.
+    if (data == NULL || len < 2) {
+        return;
+    }
     size_t i = 0;
-    while (i + 1 < len) {
+    // i + 2 <= len guarantees data[i] (field_len) and data[i+1] (field_type)
+    // are both in range before we read them.
+    while (i + 2 <= len) {
         uint8_t field_len = data[i];
-        if (field_len == 0 || i + 1 + field_len > len) {
+        if (field_len == 0 || (size_t)(i + 1 + field_len) > len) {
             break;
         }
         uint8_t field_type = data[i + 1];
         const uint8_t *p = &data[i + 2];
         uint8_t plen = field_len - 1; // payload length after the type byte
 
-        if (field_type == 0xFF && plen >= 25 &&
+        if (field_type == 0xFF && plen >= 24 &&
             p[0] == 0x4C && p[1] == 0x00 && p[2] == 0x02 && p[3] == 0x15) {
             // iBeacon: UUID = p[4..19], major = p[20..21], minor = p[22..23].
+            // Highest index read is 23, so plen >= 24 is the exact requirement.
             uint16_t major = ((uint16_t)p[20] << 8) | p[21];
             uint16_t minor = ((uint16_t)p[22] << 8) | p[23];
             out->beacon_type = C6_BEACON_IBEACON;
