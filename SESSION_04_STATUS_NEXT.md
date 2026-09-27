@@ -5,45 +5,66 @@
 
 ## ✅ Şu an ÇALIŞAN durum
 
-Cihaz gerçek donanımda çalışıyor:
-- ESP32-C6 + Pico-LCD-1.3 bağlı, boot temiz
-- Ekran çalışıyor, 90° rotasyon düzgün, menüler görünüyor
-- Butonlar çalışıyor (UP/DOWN gezinme, RIGHT/A seç, LEFT geri)
-- Menü renkleri, ERDEMFLIP banner, Hacking kırmızı ekran hepsi aktif
-- WiFi tara/bağlan (dBm + kaydırma), WiFi Durum, WiFi Ağım (AP) çalışıyor
-- WiFi QR paylaşımı flashlandı (göz doğrulaması bekliyor)
-- Pasif Hacking araçları flashlandı (göz doğrulaması bekliyor): WiFi İzleme,
-  Kanal Haritası, Çerçeve İstat, BLE Keşif (iBeacon/Eddystone etiketli)
+Cihaz gerçek donanımda çalışıyor ve aşağıdakiler cihazda test edildi:
+- ESP32-C6 + Pico-LCD-1.3 bağlı, boot temiz, ana menüde açılıyor
+- Ekran, 90° rotasyon, menüler; butonlar (UP/DOWN/RIGHT/A/LEFT)
+- Ekran klavyesi: kısa LEFT/RIGHT imleç, "ENT" hücresi onay, uzun LEFT çıkış
+- WiFi Tara/Bağlan (yakından uzağa sıralı), WiFi Durum, WiFi Ağım (AP) + QR
+- Hacking pasif araçları: WiFi İzleme (zayıf AP kırmızı '!'), Kanal Haritası,
+  Çerçeve İstat, Probe Yakala — hepsi yakından uzağa sıralı
+- BLE: BT Tara (aktif tarama, isimli+yakın sıralı, cihaz-tipi tahmini,
+  iBeacon/Eddystone), BLE Radar (canlı mesafe + kalibre açı, yakından uzağa)
 
 ## ⚠️ Flash durumu
 
-**Son commit (`dba57ee`, pasif WiFi/BLE özellikleri) 2026-09-27'de COM7'ye
-FLASHLANDI** (`Hash of data verified`, `Done`). Bir önceki WiFi QR commit'i
-de bu flash'a dahil. Flash yazma/doğrulama başarılı — ancak ekran davranışı
-(kanal haritası çubukları, çerçeve istat sayaçları, BLE beacon etiketi)
-fiziksel panelde **kullanıcı tarafından göz doğrulaması bekliyor**; kod
-incelemesi + build + başarılı flash bunu kanıtlamaz.
-
-Yeniden flash gerekirse:
+Tüm yukarıdaki özellikler 2026-09-27'de COM7'ye **flashlandı ve cihazda
+kullanıldı**. En güncel commit: `b8bfeb44`. Yeniden flash:
 ```powershell
 cd C:\mkf_verify; & C:\esp-idf\esp-idf\export.ps1 *>$null; idf.py -p COM7 flash
 ```
-Test edilecekler: WiFi Ağım (AP) → UP → QR; Hacking → Kanal Haritası (RX);
-Hacking → Çerçeve İstat (RX); BT Tara → beacon 'i'/'E' etiketi + detay.
+Not: Probe Yakala/tip-tahmini gibi son eklemelerin davranış testi kullanıcıya
+kalmış olabilir; kod build+flash edildi.
 
-## Git geçmişi (bu makinede, `master` dalı)
+## 🧩 Bu makinede build/flash (ÖNEMLİ tuzak)
+
+Ana proje yolu Türkçe karakter içeriyor (`Masaüstü`), ESP-IDF bunu bozuyor.
+Build/flash **`C:\mkf_verify`** kopyasında yapılır. Kaynak değiştirince o
+dosyayı mkf_verify'a KOPYALA, sonra orada build et. (Geçmişte text_entry.c
+kopyalanmayı unutuldu, eski kod build edildi — build öncesi tüm değişen
+dosyaların senkron olduğunu doğrula.)
+
+## Git geçmişi (bu makinede, `master` dalı — hepsi push'lu)
 
 ```
-dba57ee  Pasif WiFi kanal haritası + çerçeve istat + BLE beacon  <- EN SON (flashlandı)
-ad6fbab  Wi-Fi QR sharing + DIAG temizliği   (flashlandı)
-0e3d34c  Hacking menü arka planı siyah
-c62db1f  C6 doğrudan kontroller + Türkçe menüler   (Codex)
-cebc020  Donanım bring-up: butonlar, rotasyon, renkler
-830f534  RDM6300/UART1 watchdog düzeltmesi
-138f0d2  İlk C6 donanım bring-up: RMT + GPIO16
+b8bfeb44 Pasif keşif: probe yakala + BLE cihaz tipi + zayıf-AP  <- EN SON
+a75f6579 BLE aktif tarama (isimler) + MAC fallback + sıralama + ENTER
+2cd36f67 BLE radar + stack-overflow crash + klavye/boot giriş düzeltmeleri
+4370ab2d BLE tarama stack-overflow düzeltmesi
+b4a47bb1 SESSION belgeleri
+dba57ee5 Pasif WiFi kanal haritası + çerçeve istat + BLE beacon
+ad6fbabb Wi-Fi QR paylaşımı
 ```
 
 ## 🐞 Çözülen büyük hatalar (tekrar olursa referans)
+
+0. **Stack overflow → reset ("Stack protection fault" / _vfprintf_r):**
+   BLE Keşif, BT Tara, WiFi Ağım (QR) gibi ekranlar açılınca cihaz resetliyordu.
+   **Kök neden:** main task stack'i sadece 3584 byte; ekranlardaki büyük yerel
+   diziler (`c6_bt_device_t devices[32]`, `qr_code_t` ~3.2KB, `networks[16]`,
+   `diag_entry_t[24]`) stack'i taşırıyordu. **Fix:** (a) `sdkconfig.defaults`
+   `CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192`, (b) bu büyük dizileri `static`
+   yaptım (tek-thread menü döngüsünden çağrıldıkları için güvenli). Yeni büyük
+   yerel dizi eklerken bunu hatırla.
+
+0b. **Boot'ta RFID menüsüne atlama:** Yasal uyarıyı geçmek için basılan SAĞ,
+   menüye "seç" olarak sızıp RFID'ye giriyordu. **Fix:** `buttons_wait_all_
+   released()` — uyarıdan çıkmadan tüm tuşların bırakılmasını bekle + kenar
+   durumunu sıfırla.
+
+0c. **Klavyede SOL çalışmıyordu:** İki sorun: (1) `text_entry.c`'nin LEFT-case'li
+   sürümü mkf_verify'a kopyalanmamıştı (eski kod build ediliyordu), (2) klavye
+   giriş mantığı kırılgandı. **Fix:** klavye girişi ham GPIO seviyesinden
+   yeniden yazıldı (`buttons_poll_keyboard`), kısa LEFT=sola, uzun=çıkış.
 
 1. **RMT boot-abort:** `ir_driver.c`'de `mem_block_symbols=128` C6'da
    `rmt_new_rx_channel`'ı sonsuz `ESP_ERR_NOT_FOUND` yapıyordu → boot'ta
@@ -101,28 +122,34 @@ firmware'a ait değil. `.gitignore`'a eklenebilir.
 ## ➡️ SIRADAKI İŞLER
 
 Kullanıcı "ekleyebileceklerini ekle, boş şeyler (oyun/not/hesaplayıcı)
-ekleme" dedi. Aşağıdaki listenin ilk üçü **2026-09-27'de yapıldı, derlendi
-(uyarısız) ve flashlandı** (commit `dba57ee`):
+ekleme" dedi. **2026-09-27'de eklenen ve flashlanan** özellikler:
 
-1. ✅ **WiFi çerçeve istatistiği** — promiscuous modda mgmt/beacon/probe/data/
-   ctrl sayımı + istatistik ekranı. `c6_link_monitor_frame_stats()`,
-   Hacking → "Çerçeve İstat (RX)".
-2. ✅ **BLE beacon decoder** — iBeacon (manufacturer data) + Eddystone
-   (service data) çözme. `radio_ble.c` decode_beacon(), BT listesinde
-   'i'/'E' etiketi + detay ekranı.
-3. ✅ **Kanal ısı haritası** — 1-13 kanal doluluğu (AP sayısı + en iyi RSSI)
-   çubuk grafik. `c6_link_monitor_channel_stats()`, Hacking → "Kanal
-   Haritası (RX)".
+1. ✅ **WiFi çerçeve istatistiği** — `c6_link_monitor_frame_stats()`,
+   Hacking → "Çerçeve İstat".
+2. ✅ **BLE beacon decoder** — iBeacon + Eddystone, `decode_beacon()`,
+   BT listesinde 'i'/'E' etiketi + detay.
+3. ✅ **Kanal ısı haritası** — `c6_link_monitor_channel_stats()`,
+   Hacking → "Kanal Haritası".
+4. ✅ **BLE Radar** — canlı mesafe (yumuşatılmış RSSI) + kalibre açı (bir tur
+   dön), yakından uzağa sıralı. Bluetooth → "BLE Radar".
+5. ✅ **Aktif BLE tarama** — isimleri getirir (scan-response), MAC fallback,
+   isimli+yakın sıralı, cihaz-tipi tahmini (`classify_ble_kind`).
+6. ✅ **Probe Yakala** — çevredeki cihazların aradığı SSID'ler,
+   `c6_link_monitor_probe_poll()`, Hacking → "Probe Yakala".
+7. ✅ **Zayıf AP işareti** — WiFi İzleme'de OPEN/WEP ağlar kırmızı '!'.
+8. ✅ **Yakından uzağa sıralama** — tüm listelerde (WiFi tara, WiFi izleme,
+   BT tara, BLE radar).
+9. ✅ **Ekran klavyesi "ENT"** — onay hücresi netleştirildi, LEFT düzeltildi.
 
 Kalan (henüz yapılmadı):
 
-4. **MIFARE sektör haritası** — hangi sektörler okunabilir/kilitli
-   (RC522 gerekir — önce GPIO6 çakışması çözülmeli, donanım şu an kapalı)
-5. **IR protokol genişletme** — NEC dışı RC5/RC6/Sony/Samsung
+- **MIFARE sektör haritası** — RC522 gerekir (GPIO6 çakışması, donanım kapalı)
+- **IR protokol genişletme** — NEC dışı RC5/RC6/Sony/Samsung
+- **Sinyal gücü grafiği** (öneri) — seçili cihazın RSSI zaman grafiği
 
 **Yapılmayacaklar (kullanıcı reddetti):** oyunlar, not defteri, hesap
 makinesi, SD kart (donanım yok), IR-barkod (fiziksel imkansız), her türlü
-Wi-Fi/BLE saldırı özelliği (deauth/injection/cracking).
+Wi-Fi/BLE saldırı özelliği (deauth/injection/cracking/spoofing/spam).
 
 ## Önerilen ilk adım (yeni session için)
 

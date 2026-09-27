@@ -4,12 +4,14 @@ An ESP32-C6 handheld firmware project for experiments on equipment you own or
 are explicitly authorized to test. One C6 runs the display, controls and
 on-chip Wi-Fi/BLE; there is no ESP32-P4 companion or inter-MCU UART link.
 
-> **Current prototype, not a finished multi-tool.** The display/control
-> firmware has been built, flashed and observed booting on an ESP32-C6. Host
-> logic tests pass. The RFID readers, IR hardware, vibration motor and
-> battery system have **not** been validated as an assembled device. A menu
-> item or compiled driver is not proof that its external module is connected
-> or working. See [hardware checks](HARDWARE_TEST_MATRIX.md).
+> **Working prototype, not a finished multi-tool.** The display/control
+> firmware runs on real ESP32-C6 hardware: display, buttons, menus, the
+> on-chip Wi-Fi and BLE features (scan, AP, monitor, channel map, frame
+> stats, probe capture, BLE scan/radar) have been built, flashed and used on
+> the device. The RFID readers, IR hardware, vibration motor and battery
+> system have **not** been validated as an assembled device. A menu item or
+> compiled driver is not proof that its external module is connected or
+> working. See [hardware checks](HARDWARE_TEST_MATRIX.md).
 
 > **Authorization matters.** Use the radio, RFID and IR functions only on
 > devices and networks you own or have explicit permission to test. The
@@ -28,10 +30,10 @@ profile and conflicts are described below.
 | --- | --- | --- |
 | RFID / NFC | 125 kHz RDM6300 reading and saved-tag library; 13.56 MHz RC522 read/save/limited MIFARE Classic clone workflow in source | External readers not validated. RC522 initialization is disabled in the current screen-only profile. Do not expect its menu actions to work. |
 | Kızılötesi | NEC send, receive/learn and saved-code library | IR receiver and LED driver need physical testing. “IR Yön Bul (Yok)” explicitly reports unavailable. |
-| WiFi | Scan, manual station connection/status, and a local WPA2 access point (“WiFi Ağım”) | AP creation is newly implemented and still needs a real phone/laptop connection test. STA status does not prove Internet access or reveal the router's client count. |
-| Bluetooth | Passive BLE advertisement scan with a scrollable device list/details | No pairing, manual connection or GATT access. |
+| WiFi | Scan (sorted nearest-first), manual station connection/status, a local WPA2 access point (“WiFi Ağım”) with a Wi-Fi-join QR code | STA status does not prove Internet access or reveal the router's client count. 2.4 GHz only (the C6 has no 5 GHz radio), so 5 GHz networks/hotspots never appear. |
+| Bluetooth | Active BLE scan with a device list (named-first, then nearest-first), a best-effort device-kind guess, iBeacon/Eddystone decoding, and **BLE Radar** direction/range mapping | No pairing, manual connection or GATT access. Active scan emits scan-request packets (like a phone). Radar bearings/distances are coarse RSSI estimates, not exact meters/degrees. |
 | SecLab | Authorized-use guidance | Informational screen only. |
-| Hacking | Receive-only Wi-Fi AP monitor and a shortcut to passive BLE discovery | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. |
+| Hacking | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, and a shortcut to passive BLE discovery | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
 | Hatalar / Hakkında | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
 
 “WiFi Ağım (AP)” creates a local network without an Internet uplink. The C6
@@ -46,13 +48,40 @@ sharing, captive portal, HTTP server or file-transfer service yet: joining
 the network alone does not transfer files. USB-C currently serves
 power/flashing/serial diagnostics, not an implemented data-export workflow.
 
-Wi-Fi monitoring disconnects the station connection, hops channels and
+While the AP is running, UP shows a Wi-Fi-join **QR code** (the standard
+`WIFI:` payload) so a phone can join by scanning instead of typing the
+password.
+
+Wi-Fi monitoring disconnects the station connection, hops channels 1–13 and
 cannot run alongside the local AP, a normal scan/connect or BLE discovery in
 this firmware. The local AP also blocks these other radio actions until it
 is stopped.
 Stopping the monitor does not automatically reconnect to the previous Wi-Fi
 network. BLE discovery is passive; the list is not a list of every device on
 your Wi-Fi network.
+
+### Passive recon tools (Hacking / Bluetooth)
+
+All of these are receive-only: they read what devices already broadcast over
+the air and transmit nothing (the one exception is the BLE **active** scan,
+which emits small scan-request packets, exactly as a phone does when listing
+nearby devices). All Wi-Fi tools here use the same channel-hopping monitor
+and see every nearby 2.4 GHz network, not just one.
+
+- **Kanal Haritası (Channel map):** per-channel (1–13) occupancy bar chart —
+  how many APs are on each channel and the strongest signal — for picking a
+  clear channel for your own router.
+- **Çerçeve İstat (Frame stats):** running tally of 802.11 frame types
+  (beacon / probe / data / control) seen, as an activity/traffic overview.
+- **Probe Yakala (Probe capture):** distinct SSIDs that nearby client
+  devices ask for in probe requests, with a sighting count. Useful for
+  seeing what network names your own devices leak. No device addresses are
+  stored.
+- **BLE Radar:** locates BLE devices around you without extra hardware. You
+  calibrate bearings with one timed 360° turn (mark start/end with RIGHT),
+  after which distances update live from smoothed RSSI as you move; targets
+  are ordered nearest-first. Bearings assume a steady turn; it is a coarse
+  estimate, not an exact fix.
 
 Camera/OCR, microphone/voice control, GPS, Sub-GHz, cellular and general
 remote-control features are not part of the current firmware. For a broader
