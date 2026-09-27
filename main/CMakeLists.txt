@@ -5,6 +5,7 @@ idf_component_register(
         "ui/display.c"
         "ui/font8x16_basic.c"
         "ui/text_entry.c"
+        "ui/qrcode.c"
         "input/buttons.c"
         "ir/ir_nec.c"
         "ir/ir_driver.c"

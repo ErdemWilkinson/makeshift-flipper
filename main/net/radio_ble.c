@@ -35,9 +35,10 @@ static SemaphoreHandle_t s_lock; // guards the device list below
 static c6_bt_device_t s_devices[C6_BT_MAX_DEVICES];
 static int s_device_count;
 
-// Defined in c6_link.c. This firmware profile does not run promiscuous
-// Wi-Fi channel hopping and BLE discovery at the same time.
+// Defined in c6_link.c. This profile does not run local AP or promiscuous
+// Wi-Fi channel hopping alongside BLE discovery.
 bool c6_wifi_monitor_is_running(void);
+bool c6_link_ap_is_running(void);
 
 // BLE names are arbitrary bytes; replace control bytes so they render
 // safely on-screen. There is no longer a comma-delimited UART protocol.
@@ -175,7 +176,8 @@ void c6_bt_init(void)
 
 bool c6_link_bt_scan_start(void)
 {
-    if (!s_nimble_ready || c6_wifi_monitor_is_running()) {
+    if (!s_nimble_ready || c6_wifi_monitor_is_running() ||
+        c6_link_ap_is_running()) {
         return false;
     }
     if (s_running) {

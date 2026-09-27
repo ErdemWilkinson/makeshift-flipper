@@ -43,6 +43,22 @@ typedef struct {
 // Returns true only while associated with an AP and holding an IPv4 address.
 bool c6_link_get_wifi_status(c6_wifi_status_t *out_status);
 
+// Local, password-protected SoftAP. Starting it disconnects STA; stopping it
+// restores STA mode without reconnecting to the old network. There is no
+// Internet uplink, HTTP server, file transfer, or captive portal.
+#define C6_AP_PASSWORD_LEN 12
+typedef struct {
+    char ssid[C6_SSID_MAX_LEN + 1];
+    char password[C6_AP_PASSWORD_LEN + 1];
+    char ip[16];
+    int client_count; // -1 if the driver could not provide a fresh count
+} c6_ap_status_t;
+
+bool c6_link_ap_start(void);
+bool c6_link_ap_stop(void);
+bool c6_link_ap_is_running(void);
+bool c6_link_ap_get_status(c6_ap_status_t *out_status);
+
 // Reserved compatibility entry point; not implemented in the standalone
 // build and currently always returns false.
 bool c6_link_send(const char *ip, uint16_t port, const char *data);
@@ -77,8 +93,8 @@ typedef struct {
 } c6_monitor_ap_t;
 
 // Passive beacon/probe-response monitor. It disconnects STA, channel-hops
-// while active, and is mutually exclusive with normal scan/connect and BLE
-// discovery. Stopping does not reconnect the previous station.
+// while active, and is mutually exclusive with SoftAP, normal scan/connect
+// and BLE discovery. Stopping does not reconnect the previous station.
 bool c6_link_monitor_start(void);
 bool c6_link_monitor_stop(void);
 int c6_link_monitor_poll(c6_monitor_ap_t *out_aps, int max_aps);
@@ -93,7 +109,7 @@ typedef struct {
 } c6_bt_device_t;
 
 // Passive BLE advertisement discovery. It never connects or accesses GATT
-// and is mutually exclusive with Wi-Fi monitor mode in this firmware.
+// and is mutually exclusive with SoftAP and Wi-Fi monitor mode in this firmware.
 bool c6_link_bt_scan_start(void);
 bool c6_link_bt_scan_stop(void);
 int c6_link_bt_scan_poll(c6_bt_device_t *out_devices, int max_devices);

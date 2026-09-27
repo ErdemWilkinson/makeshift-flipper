@@ -23,6 +23,7 @@
 #include "ui/display.h"
 #include "ui/menu.h"
 #include "ui/text_entry.h"
+#include "ui/qrcode.h"
 
 static const char *TAG = "main";
 
@@ -953,10 +954,20 @@ static void action_ir_direction_find(void)
     s_screen_dirty = true;
 }
 
-// Station-mode scan/pick/connect. This is the only Wi-Fi setup path in the
-// menu; passive Wi-Fi monitoring lives separately under Hacking.
+// Station-mode scan/pick/connect. The local AP has its own menu action;
+// passive Wi-Fi monitoring lives separately under Hacking.
 static void action_wifi_scan_test(void)
 {
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "WiFi Tarama [STA]", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
     // "[STA]" marks this as a station-mode scan (normal client behavior,
     // same as a phone listing nearby Wi-Fi) so it's visually distinct from
     // "[MON]" (promiscuous Wi-Fi Monitor, below) -- the two use different
@@ -1113,6 +1124,9 @@ static void action_wifi_status(void)
             display_draw_text(7, 0, line);
             display_draw_text(9, 0, "Ağdaki cihaz sayısı: bilinmez");
             display_draw_text(11, 0, "İnternet doğrulanmadı");
+        } else if (c6_link_ap_is_running()) {
+            display_draw_text_color(2, 0, "Yerel WiFi ağı açık", DISPLAY_COLOR_OK);
+            display_draw_text(4, 0, "Bilgi: WiFi Ağım menüsü");
         } else {
             display_draw_text_color(2, 0, "WiFi bağlı değil", DISPLAY_COLOR_DIM);
             display_draw_text(4, 0, "Önce Tara/Bağlan kullan");
@@ -1127,6 +1141,115 @@ static void action_wifi_status(void)
         } while (event == BUTTON_COUNT);
         if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
+        }
+    }
+    menu_render(s_active_menu);
+}
+
+// A local WPA2 SoftAP with DHCP, but no Internet uplink or application
+// service. The AP stays up after leaving this screen until explicitly
+// stopped here; the password changes on each new start and is shown only
+// on the device. START/STOP deliberately changes the radio's STA/AP mode.
+// Draws a QR code centered on a white quiet-zone background, scaled to fill
+// the panel, and waits for a key. QR readers need a light background with dark
+// modules and a margin, so we invert the panel to white here regardless of the
+// current theme tint.
+static void show_qr_screen(const qr_code_t *qr, const char *caption)
+{
+    // White background (framebuffer expects DISPLAY_RGB values via helpers;
+    // fill the whole panel white, then draw dark modules).
+    display_fill_rect(0, 0, DISPLAY_WIDTH_PX, DISPLAY_HEIGHT_PX, DISPLAY_RGB(31, 63, 31));
+
+    int quiet = 4; // modules of margin
+    int total = qr->size + quiet * 2;
+    int scale = DISPLAY_WIDTH_PX / total;
+    if (scale < 1) {
+        scale = 1;
+    }
+    int drawn = qr->size * scale;
+    int origin = (DISPLAY_WIDTH_PX - drawn) / 2;
+    for (int y = 0; y < qr->size; y++) {
+        for (int x = 0; x < qr->size; x++) {
+            if (qr->modules[y * qr->size + x]) {
+                display_fill_rect(origin + x * scale, origin + y * scale,
+                                  scale, scale, DISPLAY_RGB(0, 0, 0));
+            }
+        }
+    }
+    if (caption) {
+        // one-line caption in the bottom margin, dark on the white field
+        display_draw_text_px(4, DISPLAY_HEIGHT_PX - 16, caption,
+                             DISPLAY_RGB(0, 0, 0), DISPLAY_RGB(31, 63, 31));
+    }
+    display_flush();
+    wait_for_any_key();
+}
+
+static void action_wifi_my_network(void)
+{
+    bool operation_failed = false;
+    for (;;) {
+        c6_ap_status_t status;
+        bool active = c6_link_ap_get_status(&status);
+        display_clear();
+        display_draw_text_centered(0, "WiFi Ağım [AP]", DISPLAY_COLOR_ACCENT);
+        if (active) {
+            char line[DISPLAY_COLS + 1];
+            display_draw_text_color(2, 0, "Ağ açık - WPA2", DISPLAY_COLOR_OK);
+            snprintf(line, sizeof(line), "Ad: %.25s", status.ssid);
+            display_draw_text(4, 0, line);
+            snprintf(line, sizeof(line), "Şifre: %s", status.password);
+            display_draw_text(5, 0, line);
+            snprintf(line, sizeof(line), "Yerel IP: %s", status.ip);
+            display_draw_text(7, 0, line);
+            if (status.client_count >= 0) {
+                snprintf(line, sizeof(line), "Bağlı cihaz: %d/4", status.client_count);
+            } else {
+                snprintf(line, sizeof(line), "Bağlı cihaz: ?/4");
+            }
+            display_draw_text(8, 0, line);
+            display_draw_text(10, 0, "İnternet / web servisi yok");
+            display_draw_text(11, 0, "YUKARI: QR ile paylaş");
+            display_draw_text(12, 0, "SOL: çık (ağ açık kalır)");
+            display_draw_text(14, 0, "SAĞ/A: ağı kapat");
+        } else {
+            display_draw_text_color(2, 0, "Ağ kapalı", DISPLAY_COLOR_DIM);
+            display_draw_text(4, 0, "SAĞ/A ile ağ oluştur");
+            display_draw_text(6, 0, "STA bağlantısı kesilir");
+            display_draw_text(8, 0, "İnternet paylaşımı yok");
+            display_draw_text(14, 0, "SAĞ/A: aç  SOL: çık");
+        }
+        if (operation_failed) {
+            display_draw_text_color(13, 0, "İşlem başarısız", DISPLAY_COLOR_ERROR);
+        }
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            break;
+        }
+        if (event == BUTTON_UP && active) {
+            // Share the running AP's credentials as a Wi-Fi QR: a phone that
+            // scans it joins automatically, no manual password typing.
+            qr_code_t qr;
+            if (qr_encode_wifi(&qr, status.ssid, status.password)) {
+                show_qr_screen(&qr, "Tara: WiFi'ye baglan");
+            } else {
+                display_clear();
+                display_draw_text_color(2, 0, "QR olusturulamadi", DISPLAY_COLOR_ERROR);
+                display_draw_text(4, 0, "Bir tusa bas");
+                display_flush();
+                wait_for_any_key();
+            }
+            continue;
+        }
+        if (event == BUTTON_RIGHT || event == BUTTON_PRESS) {
+            bool ok = active ? c6_link_ap_stop() : c6_link_ap_start();
+            operation_failed = !ok;
+            if (!ok) {
+                diag_record_error("WiFi Local AP", active ?
+                                  "C6_AP_STOP_FAILED" : "C6_AP_START_FAILED");
+            }
         }
     }
     menu_render(s_active_menu);
@@ -1197,6 +1320,16 @@ static void show_bt_device_details(const c6_bt_device_t *device)
 // monitor mode after the user backs out.
 static void action_wifi_monitor(void)
 {
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "WiFi İzleme [MON]", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
     // "[MON]" marks this as promiscuous Wi-Fi Monitor mode, the C6's radio
     // in receive-everything mode rather than station mode -- distinct
     // enough (drops the STA connection, can't scan/connect while running)
@@ -1279,6 +1412,16 @@ static void action_wifi_monitor(void)
 // connects to anything.
 static void action_bt_scan(void)
 {
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "BT Tarama", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
     display_clear();
     display_draw_text_centered(0, "BT Tarama", DISPLAY_COLOR_ACCENT);
     display_draw_text(2, 0, "Başlatılıyor...");
@@ -1511,6 +1654,7 @@ static menu_item_t s_ir_menu_items[] = {
 static menu_item_t s_wifi_menu_items[] = {
     {"WiFi Tara/Bağlan", action_wifi_scan_test, NULL},
     {"WiFi Durum", action_wifi_status, NULL},
+    {"WiFi Ağım (AP)", action_wifi_my_network, NULL},
 };
 
 static menu_item_t s_bluetooth_menu_items[] = {

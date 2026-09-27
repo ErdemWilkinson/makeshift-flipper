@@ -15,10 +15,11 @@ retired design, not the current firmware — see
 [KNOWN_ISSUES.md](KNOWN_ISSUES.md)'s Round 27 for how that mismatch was
 found and fixed.
 
-The single-MCU ESP32-C6 firmware builds clean under ESP-IDF v5.3.1 and
-produces a flashable image, but the hardware has not been assembled or
-flashed. Treat every row below as unverified until checked off on your own
-hardware. Follow the bring-up order in
+The single-MCU ESP32-C6 firmware builds under ESP-IDF v5.3.x and has been
+flashed to a display/control prototype. Serial boot output and some controls
+have been checked, but this does **not** validate every peripheral or radio
+feature. Treat each row below as unverified until individually checked on
+the device. Follow the bring-up order in
 [C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) (display +
 buttons first, then RFID, IR, and last the power/battery chain).
 
@@ -48,7 +49,7 @@ wiring differs — don't just work around it in your head.
 | RIGHT enters/selects on ordinary screens | Menu action fires | LCD GP20 -> C6 GPIO22 |
 | A selects; B is intentionally disconnected/disabled | A confirms; GPIO11 is used by DOWN | LCD GP15 -> C6 GPIO10; LCD GP18 -> C6 GPIO11 |
 | Keyboard horizontal navigation | Short LEFT/RIGHT move one column; long LEFT exits, long RIGHT selects | GPIO23/GPIO22; A acts immediately |
-| Text entry grid (`text_entry.c`, used by WiFi Setup Manual's password screen) navigates and appends chars correctly | Matches `tests/test_text_entry.c`'s host-tested logic | via same button pins |
+| Text entry grid (`text_entry.c`, used by WiFi Tara/Bağlan's password screen) navigates and appends chars correctly | Matches `tests/test_text_entry.c`'s host-tested logic | via same button pins |
 
 These are proposed direct wires, not a completed hardware check. Verify the
 actual carrier header labels and common GND before connecting them. In
@@ -116,22 +117,27 @@ with the display and the rest of the UI on one core.
 | Check | Expected | Notes |
 |---|---|---|
 | Wi-Fi + BLE both initialize at boot | No radio-init error in the log | Watch for allocation failures — framebuffer + both radio stacks on one chip |
-| Wi-Fi scan returns real nearby networks | Scan screen lists actual SSIDs with RSSI | "WiFi Scan Test" |
+| Wi-Fi scan returns real nearby networks | Scan screen lists actual SSIDs with RSSI | "WiFi Tara/Bağlan" |
 | Wi-Fi Monitor collects APs over a multi-minute run without UI stalls | AP list keeps growing/updating; display stays responsive | Single core runs UI + radio; watch for lag under heavy traffic |
 | BLE scan returns real nearby advertisers | BT screen lists devices with address/RSSI | "BT Scan" |
-| Wi-Fi scan/connect, Wi-Fi Monitor, and BT Scan are confirmed mutually exclusive (starting one while another runs fails cleanly, not silently) | The busy mode's UI shows/logs a clean rejection, not a hang or corrupted state | See `c6_bt_scan_is_running()`/`c6_wifi_monitor_is_running()` cross-checks in `main/net/c6_link.c` and `main/net/radio_ble.c` |
-| Leaving Wi-Fi Monitor and immediately using WiFi Setup Manual to join a network succeeds reliably, not just sometimes | Connect succeeds even right after a monitor session, not only after waiting a few seconds first | **Known race, see [KNOWN_ISSUES.md](KNOWN_ISSUES.md) Round 27**: `c6_link_monitor_start()`'s `esp_wifi_disconnect()` is asynchronous; its delayed `WIFI_FAIL_BIT` can land after a following `c6_link_connect()` call, making a successful join look like a failure. If this row fails, that's the known cause — not a new bug. |
+| Wi-Fi scan/connect, local AP, Wi-Fi Monitor, and BT Scan remain mutually exclusive | A conflicting screen explains the need to stop the AP; no hang or corrupted radio state | Check both Wi-Fi and BLE paths in `main/net/` |
+| Leaving Wi-Fi Monitor and immediately using WiFi Tara/Bağlan to join a network succeeds reliably | Connect succeeds even right after a monitor session | `s_connect_pending` now ignores a delayed disconnect from monitor teardown; this timing-sensitive path still needs a real-device test. |
 
 ## 8. C6 Wi-Fi menu
 
 | Check | Expected | Pin(s)/Bus |
 |---|---|---|
-| "WiFi Scan Test" returns a real AP list | SSIDs match what's actually broadcasting nearby | C6 Wi-Fi radio (no dedicated GPIO, on-chip) |
-| "WiFi Setup Manual" (on-device password entry) connects successfully | Device gets an IP; confirm via a subsequent WiFi Scan Test | Uses the joystick text-entry grid from section 2 |
-| "WiFi Monitor" shows real nearby beacon/probe-response traffic, correctly channel-hopping 1-13 | AP list changes as you move / as nearby APs change channel | No Wi-Fi country is configured, so the regulatory channel set is whatever ESP-IDF's default allows -- a channel your regulatory domain disallows will fail to hop, get logged (`ESP_LOGW`), and quarantined (skipped) after 3 consecutive failures per session, rather than being retried forever or silently skipped with no record. See `hop_timer_cb()`/`s_channel_quarantined` in `main/net/c6_link.c`. |
+| "WiFi Tara/Bağlan" returns a real AP list | SSIDs match what's actually broadcasting nearby | C6 Wi-Fi radio (no dedicated GPIO, on-chip) |
+| "WiFi Tara/Bağlan" connects after on-device password entry | "WiFi Durum" shows the station IP | Uses the joystick text-entry grid from section 2 |
+| Hacking → "WiFi İzleme (RX)" shows nearby beacon/probe-response traffic while hopping channels | AP list changes as nearby APs change | No Wi-Fi country is configured, so allowed channels follow ESP-IDF defaults; rejected channels are logged and quarantined after three failures. |
 | Each listed AP shows a short vendor label derived from its BSSID's OUI (e.g. "TP-Link", "Netgear"), or "?" for an unrecognized OUI | Label matches the AP's actual known hardware vendor where the OUI is in the built-in table | `oui_vendor_lookup()` in `main/net/c6_link.c` — a small built-in table (~25 entries), not a full IEEE OUI database, so "?" for most consumer APs is expected and not a bug |
 | WiFi Monitor does not attempt to reconnect STA automatically after stopping (by design) | Confirm this is still true, not an accidental regression | — |
-| "WiFi Setup" (the old SoftAP-based flow) is understood to be a stub on this build | Selecting it shows "Not available / Use Setup Manual" — this is expected, not a bug (see [KNOWN_ISSUES.md](KNOWN_ISSUES.md) Round 27) | `c6_link_setup()` always returns false |
+| "WiFi Ağım (AP)" starts a WPA2-protected local network | A phone sees the displayed SSID and can join using the on-screen password; it receives a local IP without Internet | Test with a second device; no web/file service is installed |
+| AP status reflects actual associations | Count rises when a phone joins and falls when it leaves; maximum four clients | `esp_wifi_ap_get_sta_list()` reports associated clients, not all nearby devices |
+| Leaving the AP screen keeps the AP running; reopening shows the same credentials | Network remains visible and the status screen matches it | LEFT exits without stopping |
+| Stopping the AP restores STA mode without automatically reconnecting | Wi-Fi scan works again; previous router link is not silently re-established | Check start/stop several times; also test a failed AP start |
+| AP refuses monitor/BLE/STA actions while active | UI reports that AP must be stopped first | AP and those radio workflows are intentionally exclusive |
+| The old captive-portal setup remains absent | No web page opens just because the local AP exists | `c6_link_setup()` is still a stub; the new local AP is a separate feature |
 
 ## 9. C6 Bluetooth (NimBLE, passive scan)
 
@@ -143,9 +149,8 @@ with the display and the rest of the UI on one core.
 
 ## Known gaps not covered above
 
-- No hardware bring-up has happened yet against this pin map — every row
-  above is unverified. This matrix is the checklist for working through
-  that, not a report of what's already verified. See
+- Display/control bring-up has begun, but the rows above remain a checklist,
+  not a blanket claim of complete device validation. See
   [KNOWN_ISSUES.md](KNOWN_ISSUES.md)'s Round 27 for the audit that found
   this matrix itself was out of date (still describing the retired P4
   pin map) and produced this rewrite.

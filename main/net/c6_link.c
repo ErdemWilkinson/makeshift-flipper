@@ -7,7 +7,7 @@
 // talked to a separate ESP32-C6 over UART, and every call sent a command
 // line and parsed reply lines. There is no second chip here: the ESP32-C6
 // runs the UI AND the radio, so this file now calls esp_wifi_* directly and
-// fills the SAME c6_link_* API the UI already uses. main.c is unchanged.
+// fills the c6_link_* API the UI uses. Local SoftAP support extends that API.
 //
 // What maps to what, vs. the old radio-side UART handlers:
 //   c6_link_init      <- wifi_commands_init      (netif + esp_wifi STA up)
@@ -34,6 +34,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_ip_addr.h"
+#include "esp_random.h"
 #include "esp_wifi.h"
 
 #include "freertos/FreeRTOS.h"
@@ -49,15 +50,19 @@ static const char *TAG = "c6_link";
 void c6_bt_init(void);
 bool c6_bt_scan_is_running(void);
 
-// --- Wi-Fi station bring-up / connect bookkeeping --------------------------
+// --- Wi-Fi station and local AP bring-up / connect bookkeeping --------------
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 #define CONNECT_TIMEOUT_MS 10000
 
 static EventGroupHandle_t s_wifi_event_group;
 static esp_netif_t *s_sta_netif;
+static esp_netif_t *s_ap_netif;
 static bool s_wifi_ready;
 static volatile bool s_monitor_running;
+static volatile bool s_ap_running;
+static char s_ap_ssid[C6_SSID_MAX_LEN + 1];
+static char s_ap_password[C6_AP_PASSWORD_LEN + 1];
 
 // Guards against a stale STA-disconnect event clobbering a connect
 // attempt's result (KNOWN_ISSUES.md Round 27). c6_link_monitor_start() calls
@@ -90,7 +95,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         // Only a disconnect belonging to an in-flight c6_link_connect() call
-        // should be able to fail it -- see s_connect_generation's comment.
+        // should be able to fail it -- see s_connect_pending's comment.
         // A disconnect from monitor teardown, or from a connect attempt that
         // has already timed out/returned, is silently dropped here instead.
         if (s_connect_pending) {
@@ -118,6 +123,12 @@ static bool wifi_init(void)
         ESP_LOGE(TAG, "default Wi-Fi STA netif allocation failed");
         return false;
     }
+    // The default AP netif supplies the local DHCP server when AP mode is
+    // started later. Its allocation failure must not disable STA Wi-Fi.
+    s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (s_ap_netif == NULL) {
+        ESP_LOGW(TAG, "default Wi-Fi AP netif unavailable; local AP disabled");
+    }
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init_cfg);
@@ -136,6 +147,11 @@ static bool wifi_init(void)
     if (err == ESP_OK) {
         err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                          &wifi_event_handler, NULL);
+    }
+    if (err == ESP_OK) {
+        // Generated AP passwords and manually entered STA credentials stay
+        // in RAM, avoiding a flash write every time the mode changes.
+        err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     }
     if (err == ESP_OK) {
         err = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -164,7 +180,8 @@ void c6_link_init(void)
 
 int c6_link_scan(c6_network_t *out_networks, int max_networks)
 {
-    if (!s_wifi_ready || s_monitor_running || c6_bt_scan_is_running() ||
+    if (!s_wifi_ready || s_monitor_running || s_ap_running ||
+        c6_bt_scan_is_running() ||
         out_networks == NULL || max_networks <= 0) {
         return -1;
     }
@@ -212,7 +229,8 @@ int c6_link_scan(c6_network_t *out_networks, int max_networks)
 
 bool c6_link_connect(const char *ssid, const char *password)
 {
-    if (!s_wifi_ready || s_monitor_running || c6_bt_scan_is_running() ||
+    if (!s_wifi_ready || s_monitor_running || s_ap_running ||
+        c6_bt_scan_is_running() ||
         s_wifi_event_group == NULL || ssid == NULL || password == NULL) {
         return false;
     }
@@ -260,7 +278,8 @@ bool c6_link_get_wifi_status(c6_wifi_status_t *out_status)
         return false;
     }
     memset(out_status, 0, sizeof(*out_status));
-    if (!s_wifi_ready || s_monitor_running || s_sta_netif == NULL) {
+    if (!s_wifi_ready || s_monitor_running || s_ap_running ||
+        s_sta_netif == NULL) {
         return false;
     }
     wifi_ap_record_t ap;
@@ -280,6 +299,135 @@ bool c6_link_get_wifi_status(c6_wifi_status_t *out_status)
     return true;
 }
 
+// Re-establish only the Wi-Fi station interface. Deliberately do not call
+// esp_wifi_connect(): returning from a local AP must not silently reconnect
+// to a previous network. Also used to recover from a failed AP start.
+static bool restore_sta_mode(void)
+{
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED) {
+        ESP_LOGE(TAG, "Wi-Fi stop during STA restore failed: %s", esp_err_to_name(err));
+        s_wifi_ready = false;
+        return false;
+    }
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err == ESP_OK) {
+        err = esp_wifi_start();
+    }
+    s_wifi_ready = (err == ESP_OK);
+    if (!s_wifi_ready) {
+        ESP_LOGE(TAG, "Wi-Fi STA restore failed: %s", esp_err_to_name(err));
+    }
+    return s_wifi_ready;
+}
+
+bool c6_link_ap_start(void)
+{
+    if (s_ap_running) {
+        return true;
+    }
+    if (!s_wifi_ready || s_ap_netif == NULL || s_monitor_running ||
+        c6_bt_scan_is_running()) {
+        return false;
+    }
+
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
+        return false;
+    }
+    char ssid[C6_SSID_MAX_LEN + 1];
+    snprintf(ssid, sizeof(ssid), "Makeshift-%02X%02X%02X",
+             mac[3], mac[4], mac[5]);
+    uint8_t secret[6];
+    esp_fill_random(secret, sizeof(secret));
+    char password[C6_AP_PASSWORD_LEN + 1];
+    snprintf(password, sizeof(password), "%02X%02X%02X%02X%02X%02X",
+             secret[0], secret[1], secret[2], secret[3], secret[4], secret[5]);
+
+    wifi_config_t cfg = {0};
+    memcpy(cfg.ap.ssid, ssid, strlen(ssid));
+    cfg.ap.ssid_len = (uint8_t)strlen(ssid);
+    memcpy(cfg.ap.password, password, C6_AP_PASSWORD_LEN);
+    cfg.ap.channel = 1;
+    cfg.ap.max_connection = 4;
+    cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+
+    s_connect_pending = false;
+    // Switching to exclusive AP mode intentionally drops the STA link.
+    esp_wifi_disconnect();
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi stop before AP failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (err == ESP_OK) {
+        err = esp_wifi_set_config(WIFI_IF_AP, &cfg);
+    }
+    if (err == ESP_OK) {
+        err = esp_wifi_start();
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "local AP start failed: %s", esp_err_to_name(err));
+        restore_sta_mode();
+        return false;
+    }
+    snprintf(s_ap_ssid, sizeof(s_ap_ssid), "%s", ssid);
+    memcpy(s_ap_password, password, sizeof(password));
+    s_ap_running = true;
+    ESP_LOGI(TAG, "local AP started: SSID=%s (password shown only on LCD)", s_ap_ssid);
+    return true;
+}
+
+bool c6_link_ap_stop(void)
+{
+    if (!s_ap_running) {
+        return true;
+    }
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "local AP stop failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    s_ap_running = false;
+    memset(s_ap_password, 0, sizeof(s_ap_password));
+    s_ap_ssid[0] = '\0';
+    ESP_LOGI(TAG, "local AP stopped");
+    return restore_sta_mode();
+}
+
+bool c6_link_ap_is_running(void)
+{
+    return s_ap_running;
+}
+
+bool c6_link_ap_get_status(c6_ap_status_t *out_status)
+{
+    if (out_status == NULL) {
+        return false;
+    }
+    memset(out_status, 0, sizeof(*out_status));
+    if (!s_ap_running || s_ap_netif == NULL) {
+        return false;
+    }
+    memcpy(out_status->ssid, s_ap_ssid, sizeof(s_ap_ssid));
+    memcpy(out_status->password, s_ap_password, sizeof(s_ap_password));
+    out_status->client_count = -1;
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(s_ap_netif, &ip_info) == ESP_OK &&
+        ip_info.ip.addr != 0) {
+        snprintf(out_status->ip, sizeof(out_status->ip), IPSTR,
+                 IP2STR(&ip_info.ip));
+    } else {
+        strncpy(out_status->ip, "?", sizeof(out_status->ip) - 1);
+    }
+    wifi_sta_list_t clients = {0};
+    if (esp_wifi_ap_get_sta_list(&clients) == ESP_OK) {
+        out_status->client_count = clients.num;
+    }
+    return true;
+}
+
 bool c6_link_send(const char *ip, uint16_t port, const char *data)
 {
     // TCP send is not part of any current UI action on the standalone build
@@ -295,10 +443,9 @@ bool c6_link_send(const char *ip, uint16_t port, const char *data)
 
 bool c6_link_setup(const char *pin)
 {
-    // The web-based Wi-Fi setup AP (old wifi_setup_ap.c) is a larger piece
-    // (HTTP server + captive portal) deferred past this radio bring-up. Until
-    // it's ported, the UI explicitly reports it unavailable; WiFi Setup
-    // Manual (scan + connect above) is the working path.
+    // The old web-based setup flow (HTTP server + captive portal) remains
+    // unavailable. c6_link_ap_start() is a separate local network without
+    // a web interface; manual scan/connect remains the STA join path.
     (void)pin;
     return false;
 }
@@ -585,7 +732,7 @@ static void hop_timer_cb(TimerHandle_t t)
 
 bool c6_link_monitor_start(void)
 {
-    if (!s_wifi_ready || c6_bt_scan_is_running()) {
+    if (!s_wifi_ready || s_ap_running || c6_bt_scan_is_running()) {
         return false;
     }
     if (s_monitor_running) {
