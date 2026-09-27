@@ -465,7 +465,14 @@ bool c6_link_send_error_log(const diag_entry_t *entries, int count)
 #define MONITOR_CHANNEL_HOP_MS 400
 #define FRAME_SUBTYPE_BEACON         0x80
 #define FRAME_SUBTYPE_PROBE_RESPONSE 0x50
+#define FRAME_SUBTYPE_PROBE_REQUEST  0x40
 #define FRAME_SUBTYPE_MASK           0xF0
+// The two Type bits of the Frame Control field (bits 2-3 of the first octet):
+// 00 = management, 01 = control, 10 = data.
+#define FRAME_TYPE_MASK              0x0C
+#define FRAME_TYPE_MGMT              0x00
+#define FRAME_TYPE_CTRL             0x04
+#define FRAME_TYPE_DATA             0x08
 
 // Small built-in table of IEEE-registered OUI prefixes (first 3 BSSID
 // bytes) for well-known Wi-Fi chipset/AP vendors, used only to label the
@@ -549,6 +556,13 @@ static SemaphoreHandle_t s_monitor_lock; // guards the AP list below
 // BSSID past the cap is dropped, a repeat sighting updates rssi/channel.
 static c6_monitor_ap_t s_monitor_aps[C6_MONITOR_MAX_APS];
 static int s_monitor_ap_count;
+
+// Cumulative frame-type tally for the current monitor session. Written only in
+// monitor_rx_cb() (Wi-Fi task context, not an ISR) and snapshotted under
+// s_monitor_lock by c6_link_monitor_frame_stats(). uint32_t counters are
+// updated as a single word, but the lock keeps a poll from reading a half-set
+// of counters mid-update. Zeroed at the start of every monitor session.
+static c6_frame_stats_t s_frame_stats;
 
 static const char *parse_security_mode(const uint8_t *payload, int len)
 {
@@ -634,16 +648,49 @@ static void monitor_upsert(const c6_monitor_ap_t *ap)
 
 static void monitor_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 {
-    if (type != WIFI_PKT_MGMT || !s_monitor_running) {
+    if (!s_monitor_running) {
         return;
     }
     const wifi_promiscuous_pkt_t *pkt = (const wifi_promiscuous_pkt_t *)buf;
     const uint8_t *payload = pkt->payload;
     int len = pkt->rx_ctrl.sig_len;
-    if (len < 36) {
+    if (len < 1) {
         return;
     }
+
+    // Frame-type tally. Every frame the promiscuous filter lets through is
+    // classified from the Frame Control octet (payload[0]); this needs only
+    // that one byte, so it runs for short control frames too. Guarded by the
+    // same lock the AP list uses so a concurrent frame_stats() poll never
+    // reads a partially-updated set of counters.
+    uint8_t fc_type = payload[0] & FRAME_TYPE_MASK;
     uint8_t subtype = payload[0] & FRAME_SUBTYPE_MASK;
+    if (s_monitor_lock != NULL &&
+        xSemaphoreTake(s_monitor_lock, 0) == pdTRUE) {
+        s_frame_stats.total++;
+        if (fc_type == FRAME_TYPE_MGMT) {
+            if (subtype == FRAME_SUBTYPE_BEACON) {
+                s_frame_stats.mgmt_beacon++;
+            } else if (subtype == FRAME_SUBTYPE_PROBE_REQUEST) {
+                s_frame_stats.mgmt_probe_req++;
+            } else if (subtype == FRAME_SUBTYPE_PROBE_RESPONSE) {
+                s_frame_stats.mgmt_probe_resp++;
+            } else {
+                s_frame_stats.mgmt_other++;
+            }
+        } else if (fc_type == FRAME_TYPE_DATA) {
+            s_frame_stats.data++;
+        } else if (fc_type == FRAME_TYPE_CTRL) {
+            s_frame_stats.ctrl++;
+        }
+        xSemaphoreGive(s_monitor_lock);
+    }
+
+    // Beyond the tally, only beacons/probe-responses feed the deduped AP list,
+    // and only those carry the fixed fields + IEs the parse below reads.
+    if (type != WIFI_PKT_MGMT || len < 36) {
+        return;
+    }
     if (subtype != FRAME_SUBTYPE_BEACON && subtype != FRAME_SUBTYPE_PROBE_RESPONSE) {
         return;
     }
@@ -750,9 +797,10 @@ bool c6_link_monitor_start(void)
         return false;
     }
 
-    // Clear last session's list.
+    // Clear last session's list and frame tally.
     if (xSemaphoreTake(s_monitor_lock, portMAX_DELAY) == pdTRUE) {
         s_monitor_ap_count = 0;
+        memset(&s_frame_stats, 0, sizeof(s_frame_stats));
         xSemaphoreGive(s_monitor_lock);
     }
 
@@ -766,8 +814,14 @@ bool c6_link_monitor_start(void)
     // active connection first (no auto-reconnect, same as the old design).
     esp_wifi_disconnect();
 
+    // Accept management, data and control frames. The AP list still only acts
+    // on beacons/probe-responses (see monitor_rx_cb), but the frame-type tally
+    // and, indirectly, a fuller picture of channel activity need data/ctrl
+    // frames to pass the hardware filter too. Still strictly receive-only.
     wifi_promiscuous_filter_t filter = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT,
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT |
+                       WIFI_PROMIS_FILTER_MASK_DATA |
+                       WIFI_PROMIS_FILTER_MASK_CTRL,
     };
     esp_err_t err = esp_wifi_set_promiscuous_filter(&filter);
     if (err != ESP_OK) {
@@ -832,4 +886,51 @@ int c6_link_monitor_poll(c6_monitor_ap_t *out_aps, int max_aps)
         xSemaphoreGive(s_monitor_lock);
     }
     return n;
+}
+
+bool c6_link_monitor_channel_stats(c6_channel_stats_t *out_stats)
+{
+    if (out_stats == NULL || !s_monitor_running || s_monitor_lock == NULL) {
+        return false;
+    }
+    memset(out_stats, 0, sizeof(*out_stats));
+    if (xSemaphoreTake(s_monitor_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return false;
+    }
+    for (int i = 0; i < s_monitor_ap_count; i++) {
+        uint8_t ch = s_monitor_aps[i].channel;
+        if (ch < 1 || ch > C6_CHANNEL_COUNT) {
+            continue; // out-of-range / unknown channel -- skip, don't clobber [0]
+        }
+        if (out_stats->ap_count[ch] < 0xFF) {
+            out_stats->ap_count[ch]++;
+        }
+        int8_t rssi = s_monitor_aps[i].rssi;
+        // best_rssi starts at 0 (sentinel for "none seen"); real RSSI is
+        // negative, so the first sighting always replaces the sentinel and
+        // later ones keep the strongest (closest to 0).
+        if (out_stats->best_rssi[ch] == 0 || rssi > out_stats->best_rssi[ch]) {
+            out_stats->best_rssi[ch] = rssi;
+        }
+    }
+    xSemaphoreGive(s_monitor_lock);
+    return true;
+}
+
+int c6_link_monitor_current_channel(void)
+{
+    return s_monitor_running ? s_monitor_channel : 0;
+}
+
+bool c6_link_monitor_frame_stats(c6_frame_stats_t *out_stats)
+{
+    if (out_stats == NULL || !s_monitor_running || s_monitor_lock == NULL) {
+        return false;
+    }
+    if (xSemaphoreTake(s_monitor_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return false;
+    }
+    *out_stats = s_frame_stats;
+    xSemaphoreGive(s_monitor_lock);
+    return true;
 }

@@ -99,13 +99,63 @@ bool c6_link_monitor_start(void);
 bool c6_link_monitor_stop(void);
 int c6_link_monitor_poll(c6_monitor_ap_t *out_aps, int max_aps);
 
+// Per-channel occupancy derived from the live monitor AP list: how many
+// distinct APs are currently seen on each 2.4GHz channel, and the strongest
+// RSSI among them. Indices 1..13 are valid (index 0 unused); channel 0 in an
+// AP entry, if it ever occurs, is ignored. Purely a local visualization of
+// the same passive beacon list c6_link_monitor_poll() returns -- no extra
+// radio activity. Returns false if the monitor isn't running.
+#define C6_CHANNEL_COUNT 13
+typedef struct {
+    uint8_t ap_count[C6_CHANNEL_COUNT + 1];   // [1..13], APs seen on that channel
+    int8_t  best_rssi[C6_CHANNEL_COUNT + 1];  // [1..13], strongest RSSI, 0 if none
+} c6_channel_stats_t;
+bool c6_link_monitor_channel_stats(c6_channel_stats_t *out_stats);
+
+// The 2.4GHz channel the hopping monitor is currently parked on (1..13), or 0
+// when the monitor isn't running. Cosmetic, for the monitor screens' status line.
+int c6_link_monitor_current_channel(void);
+
+// Cumulative 802.11 frame-type tally for the current monitor session, counted
+// in the promiscuous callback across every channel the hopper visits. Passive:
+// it only classifies frames the radio already receives, transmits nothing, and
+// keeps no addresses or payloads -- just counters. Reset on each
+// c6_link_monitor_start(). Returns false if the monitor isn't running.
+typedef struct {
+    uint32_t mgmt_beacon;      // beacon frames
+    uint32_t mgmt_probe_req;   // probe requests (client looking for a network)
+    uint32_t mgmt_probe_resp;  // probe responses
+    uint32_t mgmt_other;       // other management frames (auth/assoc/deauth/...)
+    uint32_t data;             // data frames
+    uint32_t ctrl;             // control frames (ACK/RTS/CTS/...)
+    uint32_t total;            // sum of all frames classified
+} c6_frame_stats_t;
+bool c6_link_monitor_frame_stats(c6_frame_stats_t *out_stats);
+
 #define C6_BT_MAX_DEVICES 32
 #define C6_BT_NAME_MAX_LEN 31
+
+// Recognized beacon advertisement formats, decoded passively from the
+// advertisement payload the device already broadcasts. Purely local parsing;
+// nothing is transmitted and no connection is made.
+typedef enum {
+    C6_BEACON_NONE = 0,   // no recognized beacon frame in the advertisement
+    C6_BEACON_IBEACON,    // Apple iBeacon (manufacturer data, Apple + type 0x02)
+    C6_BEACON_EDDYSTONE,  // Google Eddystone (service data, UUID 0xFEAA)
+} c6_beacon_type_t;
+
+#define C6_BEACON_INFO_MAX_LEN 40
 
 typedef struct {
     uint8_t addr[6];
     char name[C6_BT_NAME_MAX_LEN + 1];
     int8_t rssi;
+    // Decoded beacon summary. type is C6_BEACON_NONE when the advertisement
+    // carried no recognized beacon frame; info is a short human-readable
+    // detail line (e.g. iBeacon UUID tail + major/minor, or Eddystone frame
+    // kind) and is "" when type is C6_BEACON_NONE.
+    c6_beacon_type_t beacon_type;
+    char beacon_info[C6_BEACON_INFO_MAX_LEN + 1];
 } c6_bt_device_t;
 
 // Passive BLE advertisement discovery. It never connects or accesses GATT
