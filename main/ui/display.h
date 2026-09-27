@@ -92,5 +92,12 @@ void display_draw_text_px(int x, int y, const char *text, display_color_t fg, di
 // and status bars/badges).
 void display_fill_rect(int x, int y, int w, int h, display_color_t color);
 
+// Pixel/vector primitives for freeform screens (e.g. the BLE radar). All clip
+// to the panel per pixel, so off-screen coordinates are harmless.
+void display_draw_pixel(int x, int y, display_color_t color);
+void display_draw_line(int x0, int y0, int x1, int y1, display_color_t color);
+void display_draw_circle(int cx, int cy, int r, display_color_t color);   // outline
+void display_fill_circle(int cx, int cy, int r, display_color_t color);   // solid disc
+
 // Pushes the internal frame buffer to the physical panel.
 void display_flush(void);

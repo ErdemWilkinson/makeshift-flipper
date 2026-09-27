@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -218,6 +219,10 @@ static void show_startup_notice(void)
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    // Don't let the RIGHT/PRESS that dismissed this notice leak into the first
+    // menu render as a fresh "enter", which was launching the RFID submenu at
+    // boot. Wait for the key to be released and clear the button edge state.
+    buttons_wait_all_released();
 }
 
 // Authenticates and reads all 16 sectors of `dump->uid`'s card, trying each
@@ -978,7 +983,9 @@ static void action_wifi_scan_test(void)
     display_draw_text(2, 0, "Taranıyor...");
     display_flush();
 
-    c6_network_t networks[C6_MAX_NETWORKS];
+    // static: ~0.5KB scan-result array kept off the small main task stack, same
+    // reasoning as the BLE/QR buffers. Called only from the single-threaded UI.
+    static c6_network_t networks[C6_MAX_NETWORKS];
     int count = c6_link_scan(networks, C6_MAX_NETWORKS);
 
     if (count < 0) {
@@ -1231,7 +1238,12 @@ static void action_wifi_my_network(void)
         if (event == BUTTON_UP && active) {
             // Share the running AP's credentials as a Wi-Fi QR: a phone that
             // scans it joins automatically, no manual password typing.
-            qr_code_t qr;
+            // static, not on the stack: qr_code_t holds a 57x57 module buffer
+            // (~3.2KB). On the stack it blew the main task stack the moment
+            // this screen was entered (the compiler reserves the frame up
+            // front), resetting the device when opening WiFi Ağım. Entered
+            // only from the single-threaded menu loop, so static is safe.
+            static qr_code_t qr;
             if (qr_encode_wifi(&qr, status.ssid, status.password)) {
                 show_qr_screen(&qr, "Tara: WiFi'ye baglan");
             } else {
@@ -1680,6 +1692,375 @@ static void action_bt_scan(void)
     menu_render(s_active_menu);
 }
 
+// --- BLE Radar (yön + mesafe haritalama) -----------------------------------
+// Locates BLE devices around the user WITHOUT any extra hardware (no compass,
+// no gyro, single antenna). It exploits body-shadowing while the user turns in
+// place: as you rotate holding the device, each target's RSSI peaks when you
+// are facing roughly toward it. We time the rotation instead of measuring an
+// angle -- the user marks the start and end of one full 360 turn, so elapsed
+// time maps linearly to bearing (0..360). For every device we remember the
+// moment its RSSI was strongest; that moment, as a fraction of the full turn,
+// is its bearing. RSSI magnitude sets the distance from center (stronger =
+// closer). The result is drawn as a radar: center = you, rings = signal
+// strength (-40/-60/-80 dBm), blips = devices at their estimated bearing.
+//
+// This is a coarse estimate, not a metric fix: RSSI-to-distance is noisy and
+// bearing assumes a steady turn speed. It is genuinely useful for "which
+// direction is that beacon" but should not be read as exact meters/degrees.
+
+#define RADAR_MAX_TARGETS C6_BT_MAX_DEVICES
+// RSSI range mapped onto the radar radius. Anything >= NEAR sits at the center
+// ring, anything <= FAR sits at the outer ring.
+#define RADAR_RSSI_NEAR (-40)
+#define RADAR_RSSI_FAR  (-90)
+
+// Per-target peak tracking, kept in static storage (parallel to the BLE list)
+// so the large arrays stay off the main task stack -- same lesson as the BLE
+// scan crash fix.
+static uint8_t  s_radar_addr[RADAR_MAX_TARGETS][6];
+static int8_t   s_radar_peak_rssi[RADAR_MAX_TARGETS]; // strongest seen -> bearing
+static int64_t  s_radar_peak_us[RADAR_MAX_TARGETS];   // time of that peak -> bearing
+static int8_t   s_radar_live_rssi[RADAR_MAX_TARGETS]; // most recent RSSI -> live distance
+static int64_t  s_radar_seen_us[RADAR_MAX_TARGETS];   // last time this target was heard
+static char     s_radar_name[RADAR_MAX_TARGETS][C6_BT_NAME_MAX_LEN + 1];
+static int      s_radar_target_count;
+
+// A target not heard for this long is treated as gone and dimmed/dropped from
+// the live view (BLE advertising is intermittent, so allow a few seconds).
+#define RADAR_STALE_US (6 * 1000000)
+
+// Fills `order` with target indices sorted nearest-first by live RSSI (higher
+// RSSI = closer = earlier). Simple insertion sort; target count is small (<=32).
+// Returns the number of entries written (== s_radar_target_count).
+static int radar_sorted_order(int *order)
+{
+    int n = s_radar_target_count;
+    for (int i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    for (int i = 1; i < n; i++) {
+        int key = order[i];
+        int j = i - 1;
+        while (j >= 0 && s_radar_live_rssi[order[j]] < s_radar_live_rssi[key]) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = key;
+    }
+    return n;
+}
+
+// Map an RSSI (dBm, negative) to a 0..1 distance fraction from center.
+static float radar_distance_frac(int8_t rssi)
+{
+    if (rssi >= RADAR_RSSI_NEAR) {
+        return 0.0f;
+    }
+    if (rssi <= RADAR_RSSI_FAR) {
+        return 1.0f;
+    }
+    return (float)(RADAR_RSSI_NEAR - rssi) /
+           (float)(RADAR_RSSI_NEAR - RADAR_RSSI_FAR);
+}
+
+// Fold new poll results into the trackers. Always refreshes the live RSSI and
+// last-seen time (used for the continuously-updating distance). When track_peak
+// is true (calibration turn only), it also records the strongest RSSI and the
+// time it occurred, which fixes each target's bearing. In the live phase
+// track_peak is false, so distances move as the user walks around but the
+// bearings stay locked to the calibration turn.
+static void radar_update(const c6_bt_device_t *devs, int count, int64_t now_us,
+                         bool track_peak)
+{
+    for (int i = 0; i < count; i++) {
+        int found = -1;
+        for (int j = 0; j < s_radar_target_count; j++) {
+            if (memcmp(s_radar_addr[j], devs[i].addr, 6) == 0) {
+                found = j;
+                break;
+            }
+        }
+        if (found < 0) {
+            if (s_radar_target_count >= RADAR_MAX_TARGETS) {
+                continue;
+            }
+            found = s_radar_target_count++;
+            memcpy(s_radar_addr[found], devs[i].addr, 6);
+            s_radar_peak_rssi[found] = devs[i].rssi;
+            s_radar_peak_us[found] = now_us;
+            s_radar_live_rssi[found] = devs[i].rssi; // seed the smoothed value
+            snprintf(s_radar_name[found], sizeof(s_radar_name[found]), "%s",
+                     devs[i].name[0] ? devs[i].name : "(adsiz)");
+        } else {
+            if (track_peak && devs[i].rssi > s_radar_peak_rssi[found]) {
+                s_radar_peak_rssi[found] = devs[i].rssi;
+                s_radar_peak_us[found] = now_us;
+                if (devs[i].name[0]) {
+                    snprintf(s_radar_name[found], sizeof(s_radar_name[found]),
+                             "%s", devs[i].name);
+                }
+            }
+            // Smooth the live RSSI so blips don't jitter with raw radio noise
+            // (RSSI swings several dB between reads even when nothing moves).
+            // Exponential moving average: new = old + a*(sample - old), a=1/4.
+            int old = s_radar_live_rssi[found];
+            int sample = devs[i].rssi;
+            s_radar_live_rssi[found] = (int8_t)(old + (sample - old) / 4);
+        }
+        s_radar_seen_us[found] = now_us;
+    }
+}
+
+#define RADAR_TWO_PI 6.28318531f
+#define RADAR_HALF_PI 1.57079633f
+
+// Draw the radar. `denom_us` is the duration one full turn maps to (the live
+// elapsed time during phase 2, or the final turn duration in phase 3); bearing
+// for each target = (peak_us - start_us)/denom_us * 360, clockwise from the top
+// (12 o'clock = where the user first faced). `sweep_frac` in [0,1] draws the
+// rotating sweep line at that fraction of a turn; pass < 0 to omit it (static
+// result view). `title` heads the screen.
+static void radar_render(const char *title, int64_t start_us, int64_t denom_us,
+                         int highlight, float sweep_frac)
+{
+    const int cx = DISPLAY_WIDTH_PX / 2;
+    const int cy = DISPLAY_HEIGHT_PX / 2 + 8; // leave room for the header
+    const int r_outer = 104;
+
+    display_clear();
+    display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+
+    // Range rings (RSSI scale) + labels.
+    display_draw_circle(cx, cy, r_outer, DISPLAY_COLOR_DIM);
+    display_draw_circle(cx, cy, r_outer * 2 / 3, DISPLAY_COLOR_DIM);
+    display_draw_circle(cx, cy, r_outer / 3, DISPLAY_COLOR_DIM);
+    // Cross hairs.
+    display_draw_line(cx - r_outer, cy, cx + r_outer, cy, DISPLAY_COLOR_DIM);
+    display_draw_line(cx, cy - r_outer, cx, cy + r_outer, DISPLAY_COLOR_DIM);
+
+    // Rotating sweep line (radar beam). Drawn before the blips so blips sit on
+    // top of it. Its angle = the direction the user is facing right now.
+    if (sweep_frac >= 0.0f) {
+        float sa = sweep_frac * RADAR_TWO_PI - RADAR_HALF_PI;
+        int sx = cx + (int)(cosf(sa) * r_outer);
+        int sy = cy + (int)(sinf(sa) * r_outer);
+        display_draw_line(cx, cy, sx, sy, DISPLAY_COLOR_ACCENT);
+    }
+
+    // "You are here" dot at center.
+    display_fill_circle(cx, cy, 3, DISPLAY_COLOR_OK);
+
+    // Nearest-first ordering. `highlight` is a POSITION in this sorted order
+    // (0 = nearest), so cycling with RIGHT walks near -> far. Translate it to
+    // the real target index for drawing and the footer.
+    int order[RADAR_MAX_TARGETS];
+    int n = radar_sorted_order(order);
+    int hi_real = (highlight >= 0 && highlight < n) ? order[highlight] : -1;
+
+    int64_t now = esp_timer_get_time();
+    for (int oi = 0; oi < n; oi++) {
+        int i = order[oi];
+        float frac_time = 0.0f;
+        if (denom_us > 0) {
+            frac_time = (float)(s_radar_peak_us[i] - start_us) / (float)denom_us;
+            if (frac_time < 0.0f) frac_time = 0.0f;
+            if (frac_time > 1.0f) frac_time = 1.0f;
+        }
+        // Bearing (fixed at calibration): 0 at top, increasing clockwise.
+        float ang = frac_time * RADAR_TWO_PI - RADAR_HALF_PI;
+        // Distance updates live from the most recent RSSI, so the blip slides
+        // toward the center as the user gets closer.
+        float dist = radar_distance_frac(s_radar_live_rssi[i]);
+        int px = cx + (int)(cosf(ang) * dist * r_outer);
+        int py = cy + (int)(sinf(ang) * dist * r_outer);
+        bool stale = (now - s_radar_seen_us[i]) > RADAR_STALE_US;
+        display_color_t c;
+        if (stale) {
+            c = DISPLAY_COLOR_DIM;             // not heard recently -> faded
+        } else if (i == hi_real) {
+            c = DISPLAY_COLOR_ACCENT;
+        } else {
+            c = DISPLAY_RGB(6, 40, 31);        // cyan-ish
+        }
+        display_fill_circle(px, py, (i == hi_real) ? 4 : 3, c);
+    }
+
+    // Footer: highlighted target detail, or a summary.
+    if (n > 0 && hi_real >= 0) {
+        char line[DISPLAY_COLS + 1];
+        int deg = 0;
+        if (denom_us > 0) {
+            float f = (float)(s_radar_peak_us[hi_real] - start_us) /
+                      (float)denom_us;
+            if (f < 0.0f) {
+                f = 0.0f;
+            }
+            if (f > 1.0f) {
+                f = 1.0f;
+            }
+            deg = (int)(f * 360.0f) % 360;
+        }
+        // "#pos" shows rank (1 = nearest) so the near->far order is visible.
+        snprintf(line, sizeof(line), ">#%d %.10s", highlight + 1,
+                 s_radar_name[hi_real]);
+        display_draw_text(DISPLAY_ROWS - 2, 0, line);
+        // Live RSSI so the number moves as you approach; bearing stays fixed.
+        snprintf(line, sizeof(line), " ~%d derece  %d dBm", deg,
+                 s_radar_live_rssi[hi_real]);
+        display_draw_text(DISPLAY_ROWS - 1, 0, line);
+    } else {
+        char line[DISPLAY_COLS + 1];
+        // Clamp to two digits so the fixed suffix always fits DISPLAY_COLS
+        // (keeps -Werror=format-truncation happy; count never exceeds 32).
+        int shown = s_radar_target_count > 99 ? 99 : s_radar_target_count;
+        snprintf(line, sizeof(line), "%2d hedef  SAG/SOL", shown);
+        display_draw_text(DISPLAY_ROWS - 1, 0, line);
+    }
+    display_flush();
+}
+
+static void action_bt_radar(void)
+{
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "BLE Radar", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
+    display_clear();
+    display_draw_text_centered(0, "BLE Radar", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "BLE başlatılıyor...");
+    display_flush();
+
+    if (!c6_link_bt_scan_start()) {
+        diag_record_error("BLE Radar", "C6_LINK_BT_SCAN_START_FAILED");
+        display_clear();
+        display_draw_text_centered(0, "BLE Radar", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Başlatılamadı", DISPLAY_COLOR_ERROR);
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
+
+    static c6_bt_device_t devices[C6_BT_MAX_DEVICES]; // static: keep off stack
+
+    // Outer loop lets the user run repeated sweeps without leaving the screen.
+    for (;;) {
+        // ---- Phase 1: wait for the user to start turning ----
+        display_clear();
+        display_draw_text_centered(0, "BLE Radar", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Cihazı düz tut.");
+        display_draw_text(3, 0, "Yavaş ve SABİT hızda");
+        display_draw_text(4, 0, "kendi etrafında dön.");
+        display_draw_text(6, 0, "Dönmeye BAŞLARKEN SAĞ'a bas.");
+        display_draw_text(8, 0, "Tam tur bitince yine SAĞ.");
+        display_draw_text_color(DISPLAY_ROWS - 1, 0, "SAĞ: başla   SOL: çık",
+                                DISPLAY_COLOR_DIM);
+        display_flush();
+
+        bool exit_screen = false;
+        for (;;) {
+            button_id_t e = poll_button_for_ticks(50);
+            if (e == BUTTON_BACK || e == BUTTON_LEFT) {
+                exit_screen = true;
+                break;
+            }
+            if (e == BUTTON_RIGHT || e == BUTTON_PRESS) {
+                break;
+            }
+        }
+        if (exit_screen) {
+            break;
+        }
+
+        // ---- Phase 2: collect peaks while the user turns ----
+        s_radar_target_count = 0;
+        int64_t start_us = esp_timer_get_time();
+        bool finished = false;
+        for (;;) {
+            int64_t now = esp_timer_get_time();
+            int count = c6_link_bt_scan_poll(devices, C6_BT_MAX_DEVICES);
+            radar_update(devices, count, now, true /* calibrate bearings */);
+
+            // Live radar during the turn. Using elapsed time as the bearing
+            // denominator means each target lands at the fraction of the turn
+            // completed when it was strongest, and the sweep line sits at the
+            // current heading (frac 1.0), so a freshly-seen device appears right
+            // at the tip of the beam -- exactly where the user is now facing.
+            int64_t elapsed = now - start_us;
+            int elapsed_s = (int)(elapsed / 1000000);
+            radar_render("BLE Radar [DON]", start_us, elapsed,
+                         -1 /* no highlight yet */, 1.0f /* beam at heading */);
+            char line[DISPLAY_COLS + 1];
+            snprintf(line, sizeof(line), "Don... %ds  %d hedef",
+                     elapsed_s, s_radar_target_count > 99 ? 99
+                                : s_radar_target_count);
+            display_draw_text(1, 0, line);
+            display_draw_text_color(DISPLAY_ROWS - 1, 0,
+                                    "Tur bitince SAG   SOL:iptal",
+                                    DISPLAY_COLOR_DIM);
+            display_flush();
+
+            button_id_t e = poll_button_for_ticks(50);
+            if (e == BUTTON_RIGHT || e == BUTTON_PRESS) {
+                finished = true;
+                break;
+            }
+            if (e == BUTTON_BACK || e == BUTTON_LEFT) {
+                finished = false;
+                break;
+            }
+        }
+
+        if (!finished) {
+            continue; // back to phase 1 (or exit if they press LEFT there)
+        }
+
+        int64_t turn_us = esp_timer_get_time() - start_us;
+
+        // ---- Phase 3: LIVE radar. Bearings are locked from the calibration
+        // turn; distances keep updating from fresh RSSI as the user walks, so
+        // blips slide toward/away from center in real time. RIGHT cycles the
+        // highlighted target, UP re-calibrates, LEFT exits.
+        int highlight = s_radar_target_count > 0 ? 0 : -1;
+        bool recalibrate = false;
+        for (;;) {
+            int64_t now = esp_timer_get_time();
+            int count = c6_link_bt_scan_poll(devices, C6_BT_MAX_DEVICES);
+            radar_update(devices, count, now, false /* keep bearings fixed */);
+
+            radar_render("BLE Radar", start_us, turn_us, highlight,
+                         -1.0f /* static: no sweep line */);
+
+            button_id_t e = poll_button_for_ticks(50); // live refresh (smoothed)
+            if (e == BUTTON_BACK || e == BUTTON_LEFT) {
+                break;
+            }
+            if ((e == BUTTON_RIGHT || e == BUTTON_PRESS) &&
+                s_radar_target_count > 0) {
+                highlight = (highlight + 1) % s_radar_target_count;
+            }
+            if (e == BUTTON_UP) {
+                recalibrate = true; // UP restarts a fresh calibration sweep.
+                break;
+            }
+        }
+        if (!recalibrate) {
+            break; // LEFT/BACK in phase 3 leaves the radar screen entirely.
+        }
+        // recalibrate: loop back to phase 1 for a fresh calibration turn.
+    }
+
+    c6_link_bt_scan_stop();
+    menu_render(s_active_menu);
+}
+
 static void action_about(void)
 {
     display_clear();
@@ -1756,7 +2137,9 @@ static void format_relative_time(char *out, size_t out_cap, int64_t timestamp_us
 // until it is reopened.
 static void action_error_history(void)
 {
-    diag_entry_t entries[DIAG_HISTORY_CAPACITY];
+    // static: the 24-entry history array is ~2KB, too large for the small main
+    // task stack. Called only from the single-threaded UI, so static is safe.
+    static diag_entry_t entries[DIAG_HISTORY_CAPACITY];
     int count = diag_get_history(entries, DIAG_HISTORY_CAPACITY);
 
     int top = 0;
@@ -1850,6 +2233,7 @@ static menu_item_t s_wifi_menu_items[] = {
 
 static menu_item_t s_bluetooth_menu_items[] = {
     {"BT Tara", action_bt_scan, NULL},
+    {"BLE Radar", action_bt_radar, NULL},
 };
 
 static menu_item_t s_security_lab_menu_items[] = {

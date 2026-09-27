@@ -1,6 +1,7 @@
 #include "display.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -274,6 +275,76 @@ void display_fill_rect(int x, int y, int w, int h, display_color_t color)
     for (int yy = y; yy < y + h; yy++) {
         for (int xx = x; xx < x + w; xx++) {
             set_pixel(xx, yy, color);
+        }
+    }
+}
+
+void display_draw_pixel(int x, int y, display_color_t color)
+{
+    set_pixel(x, y, color);
+}
+
+// Bresenham line. Off-screen endpoints are fine; set_pixel() clips per pixel.
+void display_draw_line(int x0, int y0, int x1, int y1, display_color_t color)
+{
+    int dx = abs(x1 - x0);
+    int dy = -abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for (;;) {
+        set_pixel(x0, y0, color);
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+        int e2 = 2 * err;
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+// Midpoint circle outline (not filled).
+void display_draw_circle(int cx, int cy, int r, display_color_t color)
+{
+    if (r < 0) {
+        return;
+    }
+    int x = r;
+    int y = 0;
+    int err = 1 - r;
+    while (x >= y) {
+        set_pixel(cx + x, cy + y, color);
+        set_pixel(cx + y, cy + x, color);
+        set_pixel(cx - y, cy + x, color);
+        set_pixel(cx - x, cy + y, color);
+        set_pixel(cx - x, cy - y, color);
+        set_pixel(cx - y, cy - x, color);
+        set_pixel(cx + y, cy - x, color);
+        set_pixel(cx + x, cy - y, color);
+        y++;
+        if (err < 0) {
+            err += 2 * y + 1;
+        } else {
+            x--;
+            err += 2 * (y - x) + 1;
+        }
+    }
+}
+
+// Small solid disc (filled circle), for plotting radar blips.
+void display_fill_circle(int cx, int cy, int r, display_color_t color)
+{
+    for (int dy = -r; dy <= r; dy++) {
+        for (int dx = -r; dx <= r; dx++) {
+            if (dx * dx + dy * dy <= r * r) {
+                set_pixel(cx + dx, cy + dy, color);
+            }
         }
     }
 }
