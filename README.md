@@ -1,158 +1,147 @@
-# Makeshift Flipper / EMAG
+# Makeshift Flipper
 
-An open, single-MCU handheld for authorized, local hardware experiments.
-One **ESP32-C6** runs everything: the interface and peripheral logic
-(display, input, RFID/NFC, IR) plus its own Wi-Fi and passive Bluetooth
-Low Energy radio.
+An ESP32-C6 handheld firmware project for experiments on equipment you own or
+are explicitly authorized to test. One C6 runs the display, controls and
+on-chip Wi-Fi/BLE; there is no ESP32-P4 companion or inter-MCU UART link.
 
-> **Responsibility disclaimer:** The hardware and firmware in this
-> repository are technically capable of more than the intended, authorized
-> uses described below — that is true of any RFID reader, IR transceiver,
-> or Wi-Fi/BLE radio, and no firmware control can fully prevent someone
-> from repurposing what they hold in their hands. Nothing here grants
-> permission to act beyond what the law and the target's owner allow. If
-> you use this device — or code derived from it — to read, clone,
-> transmit, or monitor something you do not own or are not explicitly
-> authorized to test, that is your action and your legal responsibility
-> alone. Neither the author(s) of this project nor any state or authority
-> approves, endorses, or is responsible for unauthorized or unlawful use;
-> building or owning this device does not authorize anything it is
-> technically able to do.
+> **Current prototype, not a finished multi-tool.** The display/control
+> firmware has been built, flashed and observed booting on an ESP32-C6. Host
+> logic tests pass. The RFID readers, IR hardware, vibration motor and
+> battery system have **not** been validated as an assembled device. A menu
+> item or compiled driver is not proof that its external module is connected
+> or working. See [hardware checks](HARDWARE_TEST_MATRIX.md).
 
-> **Prototype status:** The firmware builds clean for the ESP32-C6 and has
-> host-side logic tests, but the hardware has not yet been assembled — pin
-> wiring, the shared SPI bus, the RIGHT-button/I2C-SDA sharing, and Wi-Fi+
-> BLE coexistence still need real-hardware validation. Features described
-> below are implemented scope, not claims of field-proven operation.
+> **Authorization matters.** Use the radio, RFID and IR functions only on
+> devices and networks you own or have explicit permission to test. The
+> Hacking menu is a grouping for passive observation, not permission to
+> interfere with other devices. You are responsible for your own use.
 
-> **Single-MCU (C6-standalone) architecture:** the device used to be a
-> two-chip design (an ESP32-P4 main MCU plus an ESP32-C6 radio companion
-> over UART). It is now a single ESP32-C6 that runs both the UI and the
-> radio directly — no second chip, no UART link. The former P4 is freed for
-> a separate lab/TinyML project. See
-> [MCU_ARCHITECTURE_DECISION.md](MCU_ARCHITECTURE_DECISION.md) for why, and
-> [C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) for the
-> exact pin plan and bring-up order.
+![Conceptual target architecture; external modules and battery are not the current assembled build](docs/makeshift-flipper-technical-overview.jpg)
 
-![Technical overview](docs/makeshift-flipper-technical-overview.jpg)
+The diagram is a **target concept**, not an as-built wiring diagram. In
+particular, do not wire the RC522, motor or LiPo from it. The current pin
+profile and conflicts are described below.
 
-## Purpose and boundaries
+## What the current firmware exposes
 
-This project is for devices, cards, remotes, accounts, and networks that you
-own or are explicitly authorized to test. It is intentionally designed around
-local, consent-based use:
-
-- Wi-Fi monitoring is receive-only; there is no deauthentication, packet
-  injection, password capture, or cracking functionality.
-- BLE support is passive advertisement discovery only; it does not pair,
-  connect, or access GATT data.
-- RFID/NFC and IR features must be used only with authorized test targets.
-- Camera/OCR, microphone, GPS, Sub-GHz, remote control, and cellular features
-  are **not** part of the current firmware.
-
-See the [capability and use-boundary assessment](CAPABILITY_AND_THREAT_ASSESSMENT.md)
-for the detailed feature, privacy, safety, and added-component evaluation.
-
-## What this hardware can do — legitimate use vs. what it can be misused for
-
-The right-hand column is not a feature list or how-to; it exists so you
-know what to explicitly avoid. Doing any of it without owning the target
-or holding the owner's explicit, recorded authorization is on you — see
-the disclaimer above and the
-[full assessment](CAPABILITY_AND_THREAT_ASSESSMENT.md) for details and
-built-in limits.
-
-| Capability | Legitimate, authorized use | Possible with this hardware, but unauthorized/unlawful — do not do this |
+| Menu | Current software behavior | Validation boundary |
 | --- | --- | --- |
-| 125 kHz RFID (RDM6300) | Reading your own EM4100 tags; lab asset inventory | Reading someone else's access card or fob without their permission |
-| 13.56 MHz NFC (RC522) | Inspecting/backing up your own MIFARE Classic test card | Cloning another person's or an organization's access card to gain entry you're not authorized for |
-| Infrared (learn + NEC transmit) | Backing up your own remote; home-automation testing | Controlling or disrupting someone else's TV, A/C, or other IR device without consent |
-| Wi-Fi scan/monitor (on-chip C6 radio) | Surveying your own network's coverage/channels | Passively logging neighboring networks or devices for tracking or profiling purposes |
-| Passive BLE scan (on-chip C6 radio) | Checking your own BLE devices' advertisement visibility | Using nearby device addresses/RSSI to track people's presence or movement |
-| Diagnostics / local log export | Keeping your own device's error history for debugging | Exporting or retaining scan/card data about people or networks you have no authorization over |
+| RFID / NFC | 125 kHz RDM6300 reading and saved-tag library; 13.56 MHz RC522 read/save/limited MIFARE Classic clone workflow in source | External readers not validated. RC522 initialization is disabled in the current screen-only profile. Do not expect its menu actions to work. |
+| Kızılötesi | NEC send, receive/learn and saved-code library | IR receiver and LED driver need physical testing. “IR Yön Bul (Yok)” explicitly reports unavailable. |
+| WiFi | Scan, manual station connection/status, and a local WPA2 access point (“WiFi Ağım”) | AP creation is newly implemented and still needs a real phone/laptop connection test. STA status does not prove Internet access or reveal the router's client count. |
+| Bluetooth | Passive BLE advertisement scan with a scrollable device list/details | No pairing, manual connection or GATT access. |
+| SecLab | Authorized-use guidance | Informational screen only. |
+| Hacking | Receive-only Wi-Fi AP monitor and a shortcut to passive BLE discovery | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. |
+| Hatalar / Hakkında | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
 
-## Current firmware scope
+“WiFi Ağım (AP)” creates a local network without an Internet uplink. The C6
+shows its SSID, a newly generated 12-character WPA2 password, local IP and
+the number of associated clients (maximum four). The default AP network
+interface provides DHCP. RIGHT/A starts or stops it; LEFT leaves the screen
+without stopping the AP. Reopening the screen shows its current status.
+Starting the AP disconnects any STA connection; stopping it restores STA
+mode but does not reconnect automatically. The password changes on every
+new AP start and is not logged or saved in flash. There is **no** Internet
+sharing, captive portal, HTTP server or file-transfer service yet: joining
+the network alone does not transfer files. USB-C currently serves
+power/flashing/serial diagnostics, not an implemented data-export workflow.
 
-| Area | Implemented scope | Validation status |
-| --- | --- | --- |
-| Interface | 240x240 ST7789 color UI on a Waveshare Pico-LCD-1.3, digital 5-way joystick + BACK button, error history | Builds; needs hardware validation |
-| RFID/NFC | 125 kHz EM4100 reads; RC522 MIFARE Classic UID read, saved UID library, limited authorized clone flow | Hardware validation pending |
-| Infrared | NEC receive, learn, save, browse, delete, and transmit | Hardware validation pending |
-| Wi-Fi | On-chip scan, owner-managed manual connect, passive channel-hopping AP monitor | Hardware validation pending |
-| Bluetooth | Passive BLE advertisement scan (on-chip NimBLE) | Hardware validation pending |
-| Diagnostics | On-device rolling error history | Hardware validation pending |
+Wi-Fi monitoring disconnects the station connection, hops channels and
+cannot run alongside the local AP, a normal scan/connect or BLE discovery in
+this firmware. The local AP also blocks these other radio actions until it
+is stopped.
+Stopping the monitor does not automatically reconnect to the previous Wi-Fi
+network. BLE discovery is passive; the list is not a list of every device on
+your Wi-Fi network.
 
-> Wi-Fi web-based Setup AP, TCP send, and PC log upload from the old two-chip
-> design are not part of the standalone build yet; Wi-Fi Setup Manual
-> (scan + connect) is the working join path.
+Camera/OCR, microphone/voice control, GPS, Sub-GHz, cellular and general
+remote-control features are not part of the current firmware. For a broader
+capability and misuse-boundary discussion, see
+[CAPABILITY_AND_THREAT_ASSESSMENT.md](CAPABILITY_AND_THREAT_ASSESSMENT.md).
 
-## Architecture
+## Current hardware profile
 
-```text
-ESP32-C6 (main/)
-  UI, input, display
-  RFID/NFC and IR drivers
-  Wi-Fi + passive BLE, called directly on-chip (main/net/)
-```
+The active settings are in [`main/hardware_profile.h`](main/hardware_profile.h):
+joystick UP uses GPIO6 and `BOARD_HAS_RC522` is `0`. The display is
+write-only on this profile, so SPI MISO is not claimed. An RC522 would also
+need GPIO6 for MISO; enabling it requires changing the physical UP wiring
+and then revalidating both devices. Merely connecting an RC522 will not turn
+the feature on.
 
-A single ESP-IDF project, targeting `esp32c6`. The Wi-Fi/BLE code lives in
-[`main/net/c6_link.c`](main/net/c6_link.c) (Wi-Fi: init, scan, connect,
-promiscuous monitor) and [`main/net/radio_ble.c`](main/net/radio_ble.c)
-(NimBLE passive BLE scan). They fill the same `c6_link_*` API the UI has
-always called — the old UART transport is gone.
+| Current firmware assignment | ESP32-C6 GPIO | Source |
+| --- | ---: | --- |
+| ST7789 SCK / MOSI / CS / DC / RST / backlight | 18 / 19 / 9 / 8 / 20 / 21 | [`display.c`](main/ui/display.c) |
+| Joystick UP / DOWN / LEFT / RIGHT | 6 / 11 / 23 / 22 | [`buttons.c`](main/input/buttons.c) |
+| A button / B button | 10 / disconnected and disabled | [`buttons.c`](main/input/buttons.c) |
+| Joystick centre press (firmware assignment, wire unverified) | 3 | [`buttons.c`](main/input/buttons.c) |
 
-## Build
+Ordinary menus use UP/DOWN to move, RIGHT or A to select and LEFT to go back.
+On the text keyboard, a short LEFT/RIGHT moves horizontally, a long LEFT
+exits, a long RIGHT selects, and A selects immediately. The centre press is
+not needed for the current one-handed control scheme.
 
-Install and export ESP-IDF v5.3.1 or newer, then build from the repository
-root:
+**Unresolved pin conflict:** the vibration driver also configures GPIO3 as
+an output. Do not wire both a centre button and motor driver to GPIO3. The
+centre-button wire and motor hardware must be reconciled in firmware and
+wiring before either is treated as supported. A motor also needs a driver
+and flyback protection; never connect it directly to a C6 GPIO.
+
+Other module assignments remain source-level plans, not evidence of working
+peripherals: RDM6300 receive is GPIO1 through a 5 V-to-3.3 V level shifter;
+IR receive/transmit are GPIO14/GPIO17; RC522 would share LCD SPI SCK/MOSI
+with separate CS GPIO7, reset GPIO2 and MISO GPIO6. Do not power an RC522
+from 5 V. The old TCA9554 button map in
+[C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) is historical
+and **does not describe the current direct-GPIO build**. Use the source and
+[HARDWARE_TEST_MATRIX.md](HARDWARE_TEST_MATRIX.md) before changing wires.
+
+## Build, flash and tests
+
+The project targets `esp32c6`, 4 MB flash and the custom
+[`partitions.csv`](partitions.csv) layout. The current build was verified
+with ESP-IDF 5.3.x on Windows. From an exported ESP-IDF shell:
 
 ```sh
-idf.py set-target esp32c6
 idf.py build
-idf.py -p COMx flash monitor
+idf.py -p COM7 flash
+idf.py -p COM7 monitor
 ```
 
-> **Windows note:** ESP-IDF's config tooling fails on paths containing
-> non-ASCII characters (e.g. a Turkish "Masaüstü"). If your checkout is on
-> such a path, build from an ASCII-only copy (e.g. `C:\mkf_build`).
+`COM7` was the verified C6 USB-Serial/JTAG port on one Windows machine;
+replace it with **your** device's port. Confirm the chip identity before
+flashing if multiple serial devices are attached. If you change the target
+or start from a fresh configuration, use `idf.py set-target esp32c6` first.
 
-The host-side logic tests run in any Bash/GCC environment, no ESP-IDF
-toolchain needed:
+ESP-IDF's Windows build tools may fail when the checkout path contains
+non-ASCII characters. An ASCII-only project copy was used for the latest
+build/flash; copy source changes there before building. A successful build
+or flash proves neither screen appearance nor every peripheral. Check the
+real device with the [test matrix](HARDWARE_TEST_MATRIX.md).
+
+Hardware-independent host tests can be run with Bash and a C compiler:
 
 ```sh
 bash tests/run_tests.sh
 ```
 
-## Hardware and validation
+The black Hacking-menu change and the new SoftAP code passed the host suite
+and ESP-IDF build, were flashed to the C6, and produced serial boot output.
+An actual phone/laptop joining the AP and its DHCP/client-count behavior
+still need testing.
 
-The pin assignments, expected behavior, and validation order are kept in
-dedicated documents:
+## Project layout and further reading
 
-- [C6 standalone hardware plan](C6_STANDALONE_HARDWARE_PLAN.md) — the exact
-  pin map, power tree, missing-parts BOM, and step-by-step bring-up order.
-- [Shopping list](ERDEM_SATIN_ALINACAKLAR.md) — the parts still needed for
-  the portable, battery-powered build.
-- [Hardware test matrix](HARDWARE_TEST_MATRIX.md) — the checkable real-device
-  verification list.
-- [Known issues](KNOWN_ISSUES.md) — confirmed fixes, open risks, and items
-  awaiting real-hardware evidence.
-
-Do not mark a feature as working until it has passed the relevant row in the
-hardware test matrix.
-
-## Repository map
-
-| Path | Role |
+| Path | Purpose |
 | --- | --- |
-| `main/` | ESP32-C6 firmware: UI, input, RFID/NFC, IR, diagnostics, and on-chip Wi-Fi/BLE (`main/net/`) |
-| `tests/` | Hardware-independent host tests for parsers, storage libraries, UI entry, and diagnostics |
-| `HARDWARE_TEST_MATRIX.md` | Hardware acceptance checklist |
-| `C6_STANDALONE_HARDWARE_PLAN.md` | Pin map, power tree, BOM, and bring-up order |
-| `CAPABILITY_AND_THREAT_ASSESSMENT.md` | Capability, use-boundary, privacy, and added-component assessment |
+| `main/` | ESP32-C6 firmware: UI, direct-GPIO controls, RFID/IR drivers, diagnostics and on-chip radios |
+| `main/net/c6_link.c`, `main/net/radio_ble.c` | Station Wi-Fi, local AP, scan/monitor and passive BLE; the `c6_link_*` name is historical, not a UART link |
+| `tests/` | Host-side logic tests; not a replacement for hardware testing |
+| [HARDWARE_TEST_MATRIX.md](HARDWARE_TEST_MATRIX.md) | Device-level checks and current direct-button map; some older prose may still need reconciliation |
+| [C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) | Historical Pico/TCA9554 plan and unassembled power concept; **not** the current button pin map |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Historical audit notes; some older P4/C6 and “not yet flashed” statements are stale |
+| [MCU_ARCHITECTURE_DECISION.md](MCU_ARCHITECTURE_DECISION.md) | Why the field unit moved to one C6 |
 
-## Project hygiene
-
-OCR and ASR data, models, training reports, and virtual environments belong to
-their dedicated research repositories, not to this firmware repository. The
-root `.gitignore` excludes those local experiment directories so firmware
-history and GitHub releases stay small, reproducible, and reviewable.
+The portable LiPo/charger/power-path system has not been validated. Do not
+assume a TP4056 alone provides safe simultaneous charging and operation.
+Keep the battery build separate from the USB-powered firmware bring-up until
+its wiring, protection and current budget are tested.

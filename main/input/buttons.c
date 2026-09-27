@@ -72,8 +72,6 @@ void buttons_init(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     ESP_ERROR_CHECK(gpio_config(&cfg));
-    ESP_LOGI("btn", "DIAG init: UP=IO%d DOWN=IO%d PRESS=IO%d; B disabled",
-             GPIO_UP, GPIO_DOWN, GPIO_PRESS);
 }
 
 static button_id_t poll_one(digital_button_t *button, bool released)
@@ -93,23 +91,11 @@ static button_id_t poll_one(digital_button_t *button, bool released)
 
 button_id_t buttons_poll(void)
 {
-    // DIAG: raw levels of UP/DOWN, ~2x/sec. 1=released
-    // (pull-up), 0=pressed. If a level never drops to 0 on press, that wire
-    // isn't reaching the pin.
-    static int64_t s_diag_last;
-    int64_t dnow = esp_timer_get_time();
-    if (dnow - s_diag_last > 500000) {
-        s_diag_last = dnow;
-        ESP_LOGI("btn", "DIAG lvl UP(IO%d)=%d DOWN(IO%d)=%d",
-                 GPIO_UP, gpio_get_level(GPIO_UP),
-                 GPIO_DOWN, gpio_get_level(GPIO_DOWN));
-    }
     for (size_t i = 0; i < BUTTON_COUNT_WIRED; i++) {
         digital_button_t *button = &s_buttons[i];
         bool released = gpio_get_level(button->pin) != 0;
         button_id_t event = poll_one(button, released);
         if (event != BUTTON_COUNT) {
-            ESP_LOGI("btn", "DIAG: GPIO%d -> event %d", button->pin, event);
             return event;
         }
     }
