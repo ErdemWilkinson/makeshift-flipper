@@ -142,6 +142,75 @@ static void decode_beacon(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
     }
 }
 
+// Best-effort device-kind guess from the advertisement, entirely passive.
+// Sources, in priority order:
+//   - 16-bit service UUIDs (AD types 0x02/0x03): standard assigned numbers
+//     for common profiles (HID, audio, heart rate, battery-only wearables).
+//   - Appearance (AD type 0x19): a 16-bit category the device declares.
+//   - Manufacturer company id (AD type 0xFF, first 2 bytes): a few big vendors.
+// Writes a short Turkish label to out->kind, or leaves it "" if nothing matched.
+static void classify_ble_kind(const uint8_t *data, uint8_t len,
+                              c6_bt_device_t *out)
+{
+    out->kind[0] = '\0';
+    const char *guess = NULL;
+    size_t i = 0;
+    while (i + 1 < len) {
+        uint8_t field_len = data[i];
+        if (field_len == 0 || i + 1 + field_len > len) {
+            break;
+        }
+        uint8_t ft = data[i + 1];
+        const uint8_t *p = &data[i + 2];
+        uint8_t plen = field_len - 1;
+
+        if ((ft == 0x02 || ft == 0x03)) { // 16-bit service UUID list
+            for (int u = 0; u + 1 < plen; u += 2) {
+                uint16_t uuid = (uint16_t)p[u] | ((uint16_t)p[u + 1] << 8);
+                switch (uuid) {
+                    case 0x1812: guess = "HID"; break;       // human interface (klavye/fare)
+                    case 0x180D: guess = "Kalp"; break;      // heart rate
+                    case 0x1108: case 0x110B: case 0x111E:
+                                 guess = "Kulaklik"; break;   // audio profiles
+                    case 0x1816: guess = "Bisiklet"; break;  // cycling speed/cadence
+                    case 0xFD6F: guess = "Temas"; break;     // exposure notification
+                    default: break;
+                }
+                if (guess) break;
+            }
+        } else if (ft == 0x19 && plen >= 2) { // Appearance
+            uint16_t app = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+            uint16_t cat = app >> 6; // top 10 bits = category
+            switch (cat) {
+                case 0x005: guess = "Saat"; break;      // watch
+                case 0x00F: guess = "Bantli"; break;    // band/tag
+                case 0x00D: case 0x226: guess = "Kulaklik"; break; // audio
+                case 0x00C: guess = "HID"; break;       // hid
+                case 0x011: guess = "Termo"; break;     // thermometer
+                default: break;
+            }
+        } else if (ft == 0xFF && plen >= 2) { // Manufacturer company id
+            uint16_t cid = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+            switch (cid) {
+                case 0x004C: if (!guess) guess = "Apple"; break;
+                case 0x0006: if (!guess) guess = "Microsoft"; break;
+                case 0x00E0: if (!guess) guess = "Google"; break;
+                case 0x0075: if (!guess) guess = "Samsung"; break;
+                default: break;
+            }
+        }
+        if (guess && guess[0] != 'A' && guess[0] != 'M' && guess[0] != 'G' &&
+            guess[0] != 'S') {
+            break; // a specific profile/appearance match wins; stop scanning
+        }
+        i += 1 + field_len;
+    }
+    if (guess) {
+        strncpy(out->kind, guess, C6_BT_KIND_MAX_LEN);
+        out->kind[C6_BT_KIND_MAX_LEN] = '\0';
+    }
+}
+
 // Insert-or-update one device in the deduped list. Caller holds s_lock.
 static void device_upsert(const c6_bt_device_t *dev)
 {
@@ -157,6 +226,10 @@ static void device_upsert(const c6_bt_device_t *dev)
                 s_devices[i].beacon_type = dev->beacon_type;
                 memcpy(s_devices[i].beacon_info, dev->beacon_info,
                        sizeof(dev->beacon_info));
+            }
+            // Same for the device-kind guess: keep a good label once we have it.
+            if (dev->kind[0] != '\0') {
+                memcpy(s_devices[i].kind, dev->kind, sizeof(dev->kind));
             }
             return;
         }
@@ -179,6 +252,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     extract_ble_name(disc->data, disc->length_data, dev.name, sizeof(dev.name));
     sanitize_name(dev.name);
     decode_beacon(disc->data, disc->length_data, &dev);
+    classify_ble_kind(disc->data, disc->length_data, &dev);
 
     if (s_lock != NULL && xSemaphoreTake(s_lock, 0) == pdTRUE) {
         device_upsert(&dev);

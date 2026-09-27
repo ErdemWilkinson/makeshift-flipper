@@ -564,6 +564,34 @@ static int s_monitor_ap_count;
 // of counters mid-update. Zeroed at the start of every monitor session.
 static c6_frame_stats_t s_frame_stats;
 
+// Deduplicated probe-request SSID list (networks nearby clients are looking
+// for). Updated in monitor_rx_cb under s_monitor_lock, snapshotted by
+// c6_link_monitor_probe_poll. Reset each monitor session.
+static c6_probe_ssid_t s_probe_ssids[C6_PROBE_MAX];
+static int s_probe_count;
+
+// Add/count one probe SSID. Caller holds s_monitor_lock.
+static void probe_upsert(const char *ssid)
+{
+    if (ssid[0] == '\0') {
+        return; // broadcast/wildcard probe -- no specific network named
+    }
+    for (int i = 0; i < s_probe_count; i++) {
+        if (strncmp(s_probe_ssids[i].ssid, ssid, C6_MONITOR_SSID_MAX_LEN) == 0) {
+            if (s_probe_ssids[i].count < 0xFFFF) {
+                s_probe_ssids[i].count++;
+            }
+            return;
+        }
+    }
+    if (s_probe_count < C6_PROBE_MAX) {
+        strncpy(s_probe_ssids[s_probe_count].ssid, ssid, C6_MONITOR_SSID_MAX_LEN);
+        s_probe_ssids[s_probe_count].ssid[C6_MONITOR_SSID_MAX_LEN] = '\0';
+        s_probe_ssids[s_probe_count].count = 1;
+        s_probe_count++;
+    }
+}
+
 static const char *parse_security_mode(const uint8_t *payload, int len)
 {
     if (len < 36) {
@@ -686,6 +714,29 @@ static void monitor_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         xSemaphoreGive(s_monitor_lock);
     }
 
+    // Probe requests: a client naming a network it is looking for. The SSID is
+    // the first information element right after the 24-byte MAC header (no fixed
+    // beacon fields on a probe request). Collect the named SSID passively.
+    if (type == WIFI_PKT_MGMT && subtype == FRAME_SUBTYPE_PROBE_REQUEST &&
+        len >= 24 + 2) {
+        int ie = 24;
+        uint8_t id = payload[ie];
+        uint8_t ie_len = payload[ie + 1];
+        if (id == 0x00 && ie_len <= C6_MONITOR_SSID_MAX_LEN &&
+            ie + 2 + ie_len <= len) {
+            char ssid[C6_MONITOR_SSID_MAX_LEN + 1];
+            memcpy(ssid, &payload[ie + 2], ie_len);
+            ssid[ie_len] = '\0';
+            sanitize_ssid(ssid);
+            if (s_monitor_lock != NULL &&
+                xSemaphoreTake(s_monitor_lock, 0) == pdTRUE) {
+                probe_upsert(ssid);
+                xSemaphoreGive(s_monitor_lock);
+            }
+        }
+        return;
+    }
+
     // Beyond the tally, only beacons/probe-responses feed the deduped AP list,
     // and only those carry the fixed fields + IEs the parse below reads.
     if (type != WIFI_PKT_MGMT || len < 36) {
@@ -797,10 +848,11 @@ bool c6_link_monitor_start(void)
         return false;
     }
 
-    // Clear last session's list and frame tally.
+    // Clear last session's list, frame tally, and probe SSIDs.
     if (xSemaphoreTake(s_monitor_lock, portMAX_DELAY) == pdTRUE) {
         s_monitor_ap_count = 0;
         memset(&s_frame_stats, 0, sizeof(s_frame_stats));
+        s_probe_count = 0;
         xSemaphoreGive(s_monitor_lock);
     }
 
@@ -933,4 +985,19 @@ bool c6_link_monitor_frame_stats(c6_frame_stats_t *out_stats)
     *out_stats = s_frame_stats;
     xSemaphoreGive(s_monitor_lock);
     return true;
+}
+
+int c6_link_monitor_probe_poll(c6_probe_ssid_t *out, int max_entries)
+{
+    if (out == NULL || max_entries <= 0 || !s_monitor_running ||
+        s_monitor_lock == NULL) {
+        return 0;
+    }
+    int n = 0;
+    if (xSemaphoreTake(s_monitor_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+        n = s_probe_count < max_entries ? s_probe_count : max_entries;
+        memcpy(out, s_probe_ssids, n * sizeof(c6_probe_ssid_t));
+        xSemaphoreGive(s_monitor_lock);
+    }
+    return n;
 }

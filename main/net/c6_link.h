@@ -132,6 +132,20 @@ typedef struct {
 } c6_frame_stats_t;
 bool c6_link_monitor_frame_stats(c6_frame_stats_t *out_stats);
 
+// Passive probe-request collection. While the monitor runs, nearby client
+// devices broadcast probe requests naming networks they are looking for; this
+// gathers the distinct non-empty SSIDs seen (deduplicated), with a sighting
+// count each. Strictly receive-only: it reads names devices broadcast on their
+// own and stores no device addresses. Reset on each c6_link_monitor_start().
+#define C6_PROBE_MAX 24
+typedef struct {
+    char ssid[C6_MONITOR_SSID_MAX_LEN + 1];
+    uint16_t count; // times this SSID was seen in a probe request
+} c6_probe_ssid_t;
+// Snapshots up to max_entries probe SSIDs into out; returns the count copied,
+// or 0 (also when the monitor isn't running).
+int c6_link_monitor_probe_poll(c6_probe_ssid_t *out, int max_entries);
+
 #define C6_BT_MAX_DEVICES 32
 #define C6_BT_NAME_MAX_LEN 31
 
@@ -146,6 +160,11 @@ typedef enum {
 
 #define C6_BEACON_INFO_MAX_LEN 40
 
+// Short guess at what a BLE device is, derived passively from advertised
+// service UUIDs, the appearance field, and the manufacturer-data company id.
+// A hint for the UI, not a definitive identification.
+#define C6_BT_KIND_MAX_LEN 10
+
 typedef struct {
     uint8_t addr[6];
     char name[C6_BT_NAME_MAX_LEN + 1];
@@ -156,6 +175,9 @@ typedef struct {
     // kind) and is "" when type is C6_BEACON_NONE.
     c6_beacon_type_t beacon_type;
     char beacon_info[C6_BEACON_INFO_MAX_LEN + 1];
+    // Best-effort device-kind label (e.g. "Kulaklik", "Saat", "Apple",
+    // "Beacon"), or "" if nothing recognizable was advertised.
+    char kind[C6_BT_KIND_MAX_LEN + 1];
 } c6_bt_device_t;
 
 // Passive BLE advertisement discovery. It never connects or accesses GATT
