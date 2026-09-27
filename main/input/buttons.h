@@ -20,6 +20,13 @@ typedef enum {
 // Configures the direct GPIO inputs. Call once at startup.
 void buttons_init(void);
 
+// Blocks until all wired buttons are released (or ~2 s elapse), then clears the
+// debounce/edge state so the next buttons_poll() can't report a press that was
+// really made on a previous screen. Call after any screen that consumed a press
+// to leave it, before returning to the menu -- notably after the boot notice,
+// so dismissing it doesn't fall through into the first menu item.
+void buttons_wait_all_released(void);
+
 // Polls all wired inputs and returns the first newly-pressed one (debounced),
 // or BUTTON_COUNT if none. Safe to call repeatedly from a single loop.
 button_id_t buttons_poll(void);

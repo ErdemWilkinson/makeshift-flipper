@@ -48,6 +48,11 @@ typedef struct {
     uint8_t num_blocks;
 } qr_ecc_t;
 
+// Largest codeword count across all supported versions (version 10, level M).
+// Used to size the static working buffers below at compile time; keep in sync
+// with the v10 entry in QR_ECC_M.
+#define QR_MAX_TOTAL_CODEWORDS 346
+
 // {total data+ecc codewords, ecc codewords per block, block count} level M.
 static const qr_ecc_t QR_ECC_M[QR_MAX_VERSION + 1] = {
     {0, 0, 0},        // version 0 unused
@@ -355,7 +360,12 @@ bool qr_encode(qr_code_t *out, const char *text)
     int count_bits = (ver < 10) ? 8 : 16;
 
     // --- build bit stream into a codeword buffer ---
-    uint8_t buf[QR_ECC_M[QR_MAX_VERSION].total_codewords];
+    // static, not on the stack: the main task stack is small and these QR
+    // working buffers (this plus final_cw/ecc_blocks below) total ~1KB. On the
+    // stack they contributed to a stack-overflow reboot when generating the
+    // Wi-Fi QR. qr_encode() is only ever called from the single-threaded UI, so
+    // static scratch storage is safe.
+    static uint8_t buf[QR_MAX_TOTAL_CODEWORDS];
     memset(buf, 0, sizeof(buf));
     int bitpos = 0;
     #define PUT_BIT(b) do { if (b) buf[bitpos >> 3] |= 0x80 >> (bitpos & 7); bitpos++; } while (0)
@@ -391,9 +401,9 @@ bool qr_encode(qr_code_t *out, const char *text)
     int long_count = data_cw % nb;             // blocks with one extra cw
     // In versions 1-10 level M all blocks are equal (long_count==0), but keep
     // general handling for safety.
-    uint8_t final_cw[QR_ECC_M[QR_MAX_VERSION].total_codewords];
+    static uint8_t final_cw[QR_MAX_TOTAL_CODEWORDS];
     int fpos = 0;
-    uint8_t ecc_blocks[16][32];
+    static uint8_t ecc_blocks[16][32];
     int block_data_len[16];
     int offsets[16];
     int off = 0;

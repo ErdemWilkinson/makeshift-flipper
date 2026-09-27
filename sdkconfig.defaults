@@ -16,3 +16,11 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_CONTROLLER_ENABLED=y
+
+# app_main() and every menu action run on the main task. The default 3584-byte
+# stack is too small for this UI: screens build strings and, above all, the QR
+# encoder and radar use multi-hundred-byte working buffers. Overflowing it
+# triggered a "Stack protection fault" reboot when opening BLE scan / WiFi AP+QR.
+# Large per-screen arrays are also moved to static storage in main.c, but a
+# roomier main stack is the robust fix and leaves headroom for future screens.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
