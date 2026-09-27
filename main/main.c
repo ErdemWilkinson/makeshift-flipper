@@ -1012,9 +1012,22 @@ static void action_wifi_scan_test(void)
         return;
     }
 
+    // Sort nearest-first by RSSI (higher = stronger = closer) so the closest
+    // networks are at the top. One-shot scan, so sorting once here keeps the
+    // selection index consistent for the whole screen. Insertion sort; small n.
+    for (int a = 1; a < count; a++) {
+        c6_network_t key = networks[a];
+        int b = a - 1;
+        while (b >= 0 && networks[b].rssi < key.rssi) {
+            networks[b + 1] = networks[b];
+            b--;
+        }
+        networks[b + 1] = key;
+    }
+
     // --- Scrollable network list: UP/DOWN moves, RIGHT/PRESS connects,
-    // LEFT/BACK leaves. Shows signal strength (dBm: closer to 0 = stronger).
-    // Window scrolls with `top` so `selected` is always on a drawn row. ---
+    // LEFT/BACK leaves. Shows signal strength (dBm: closer to 0 = stronger),
+    // sorted nearest-first. Window scrolls with `top`. ---
     int selected = 0;
     int top = 0;
     bool picked = false;
@@ -1388,6 +1401,17 @@ static void action_wifi_monitor(void)
     int top = 0;
     for (;;) {
         int count = c6_link_monitor_poll(aps, C6_MONITOR_MAX_APS);
+        // Sort nearest-first by RSSI (higher = closer). Live list, so sort each
+        // refresh. Insertion sort; small n. Local snapshot only.
+        for (int a = 1; a < count; a++) {
+            c6_monitor_ap_t key = aps[a];
+            int b = a - 1;
+            while (b >= 0 && aps[b].rssi < key.rssi) {
+                aps[b + 1] = aps[b];
+                b--;
+            }
+            aps[b + 1] = key;
+        }
         if (count == 0) {
             selected = 0;
             top = 0;

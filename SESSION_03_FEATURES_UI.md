@@ -78,17 +78,29 @@ NEC protokolü gönder / öğren / kütüphane. `ir_driver.c` RMT kullanır.
 düzeltildi. Bkz. SESSION_04.)
 
 ## Bluetooth
-BT Tarama — pasif BLE cihaz taraması (`radio_ble.c`, NimBLE).
+- **BT Tara** — **aktif** BLE cihaz taraması (`radio_ble.c`, NimBLE). Aktif
+  tarama scan-request yollar, cihazlar isimlerini scan-response'ta verir. Liste
+  isimli-önce, sonra yakından uzağa (RSSI) sıralı. İsimsizler MAC son-3-byte
+  ile. Her cihaza tip tahmini (`classify_ble_kind`: Kulaklik/Saat/Apple...).
+  iBeacon/Eddystone çözülür ('i'/'E' etiketi + detay).
+- **BLE Radar** — ekstra donanımsız yön+mesafe haritalama. Kalibrasyon: bir tur
+  dön (SAĞ başla / SAĞ bitir), açılar zaman↔360° ile kilitlenir. Sonra ekran
+  canlı: mesafe yumuşatılmış RSSI'den sürekli güncellenir (yaklaşınca nokta
+  merkeze), açı sabit. Yakından uzağa sıralı, UP=yeniden kalibre, SOL=çık.
+  Kaba tahmin (RSSI gürültülü, sabit dönüş varsayar).
 
 ## Security Lab (`s_security_lab_menu_items`)
-Pasif radyo araçlarının gruplandığı yer: WiFi Survey, BLE Discovery, ve bir
-"Lab Safety Guide" uyarı ekranı. Hepsi mevcut pasif fonksiyonları kullanır.
+Pasif radyo araçlarının gruplandığı yer + "Lab Safety Guide" uyarı ekranı.
 
 ## Hacking (`s_hacking_menu_items`)
-Girişte **kırmızı uyarı ekranı** çıkar (`show_hacking_intro()`):
-"== HACKING ==, yetkili kullanım, tüm araçlar RX-only, enjeksiyon yok".
-İçerik: WiFi Recon (RX), AP Monitor (RX), BLE Recon (RX) — hepsi pasif,
-mevcut tarama/monitor fonksiyonlarına kısayol. **Yeni saldırı kodu YOK.**
+Girişte **kırmızı uyarı ekranı** (`show_hacking_intro()`). İçerik (hepsi RX,
+saldırı kodu YOK):
+- **WiFi İzleme** — promiscuous AP monitor, kanal atlar. Zayıf (OPEN/WEP) ağlar
+  kırmızı '!' ile. Yakından uzağa sıralı.
+- **Kanal Haritası** — 1-13 kanal doluluğu çubuk grafik (AP sayısı + en iyi RSSI).
+- **Çerçeve İstat** — 802.11 frame-tipi sayaçları (beacon/probe/data/ctrl).
+- **Probe Yakala** — cihazların aradığı SSID'ler (`monitor_probe_poll`).
+- **BLE Keşif** — BT Tara'ya kısayol.
 
 ## UI tasarım detayları (display.c)
 
@@ -100,8 +112,10 @@ mevcut tarama/monitor fonksiyonlarına kısayol. **Yeni saldırı kodu YOK.**
   yatay (landscape) düzeltilir. Yazılar düz görünür.
 - **Renk ters çevirme:** `esp_lcd_panel_invert_color(true)` (panel gereği).
 - **Çizim API'si:** `display_clear`, `display_draw_text`,
-  `display_draw_text_color`, `display_draw_text_px`, `display_fill_rect`,
-  `display_flush` (framebuffer'ı panele basar).
+  `display_draw_text_color`, `display_draw_text_centered`, `display_draw_text_px`,
+  `display_fill_rect`, `display_flush` (framebuffer'ı panele basar). BLE Radar
+  için eklendi: `display_draw_pixel`, `display_draw_line` (Bresenham),
+  `display_draw_circle` (çember), `display_fill_circle` (dolu daire).
 
 ## QR üreticisi (ui/qrcode.c) — nasıl çalışır
 
