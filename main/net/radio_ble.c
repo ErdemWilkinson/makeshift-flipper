@@ -78,6 +78,62 @@ static void extract_ble_name(const uint8_t *data, uint8_t len,
     }
 }
 
+// Decode iBeacon / Eddystone from an advertisement's AD structures. Passive:
+// reads only the bytes the device already broadcast, sends nothing. Fills
+// out->beacon_type / out->beacon_info; leaves them at C6_BEACON_NONE / "" when
+// nothing recognized is present.
+//
+// iBeacon: an AD of type 0xFF (Manufacturer Specific Data) whose first two
+//   payload bytes are Apple's company id 0x004C (little-endian: 4C 00),
+//   followed by 0x02 0x15 and then 16-byte proximity UUID + 2-byte major +
+//   2-byte minor + 1-byte measured power. We summarize the UUID's last 4 bytes
+//   (enough to tell beacons apart on a small screen) plus major/minor.
+// Eddystone: an AD of type 0x16 (Service Data) whose first two bytes are the
+//   Eddystone UUID 0xFEAA (little-endian: AA FE); the next byte is the frame
+//   type (0x00 UID, 0x10 URL, 0x20 TLM, 0x30 EID). We report the frame kind.
+static void decode_beacon(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
+{
+    out->beacon_type = C6_BEACON_NONE;
+    out->beacon_info[0] = '\0';
+    size_t i = 0;
+    while (i + 1 < len) {
+        uint8_t field_len = data[i];
+        if (field_len == 0 || i + 1 + field_len > len) {
+            break;
+        }
+        uint8_t field_type = data[i + 1];
+        const uint8_t *p = &data[i + 2];
+        uint8_t plen = field_len - 1; // payload length after the type byte
+
+        if (field_type == 0xFF && plen >= 25 &&
+            p[0] == 0x4C && p[1] == 0x00 && p[2] == 0x02 && p[3] == 0x15) {
+            // iBeacon: UUID = p[4..19], major = p[20..21], minor = p[22..23].
+            uint16_t major = ((uint16_t)p[20] << 8) | p[21];
+            uint16_t minor = ((uint16_t)p[22] << 8) | p[23];
+            out->beacon_type = C6_BEACON_IBEACON;
+            snprintf(out->beacon_info, sizeof(out->beacon_info),
+                     "..%02X%02X%02X%02X M%u m%u",
+                     p[16], p[17], p[18], p[19], major, minor);
+            return;
+        }
+        if (field_type == 0x16 && plen >= 3 && p[0] == 0xAA && p[1] == 0xFE) {
+            const char *kind;
+            switch (p[2]) {
+                case 0x00: kind = "UID"; break;
+                case 0x10: kind = "URL"; break;
+                case 0x20: kind = "TLM"; break;
+                case 0x30: kind = "EID"; break;
+                default:   kind = "?";   break;
+            }
+            out->beacon_type = C6_BEACON_EDDYSTONE;
+            snprintf(out->beacon_info, sizeof(out->beacon_info),
+                     "Eddystone-%s", kind);
+            return;
+        }
+        i += 1 + field_len;
+    }
+}
+
 // Insert-or-update one device in the deduped list. Caller holds s_lock.
 static void device_upsert(const c6_bt_device_t *dev)
 {
@@ -86,6 +142,13 @@ static void device_upsert(const c6_bt_device_t *dev)
             s_devices[i].rssi = dev->rssi;
             if (dev->name[0] != '\0') {
                 memcpy(s_devices[i].name, dev->name, sizeof(dev->name));
+            }
+            // Keep the most recent recognized beacon frame; don't let a later
+            // advertisement without one wipe a decode we already have.
+            if (dev->beacon_type != C6_BEACON_NONE) {
+                s_devices[i].beacon_type = dev->beacon_type;
+                memcpy(s_devices[i].beacon_info, dev->beacon_info,
+                       sizeof(dev->beacon_info));
             }
             return;
         }
@@ -107,6 +170,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     dev.rssi = (int8_t)disc->rssi;
     extract_ble_name(disc->data, disc->length_data, dev.name, sizeof(dev.name));
     sanitize_name(dev.name);
+    decode_beacon(disc->data, disc->length_data, &dev);
 
     if (s_lock != NULL && xSemaphoreTake(s_lock, 0) == pdTRUE) {
         device_upsert(&dev);

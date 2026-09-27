@@ -1295,6 +1295,14 @@ static void show_bt_device_details(const c6_bt_device_t *device)
     display_draw_text(4, 0, line);
     snprintf(line, sizeof(line), "Sinyal: %d dBm", device->rssi);
     display_draw_text(6, 0, line);
+    // Decoded beacon frame, if this advertisement carried one. Passive parse of
+    // bytes the device already broadcast -- see decode_beacon() in radio_ble.c.
+    if (device->beacon_type == C6_BEACON_IBEACON) {
+        display_draw_text_color(7, 0, "iBeacon", DISPLAY_COLOR_OK);
+        display_draw_text(8, 0, device->beacon_info);
+    } else if (device->beacon_type == C6_BEACON_EDDYSTONE) {
+        display_draw_text_color(7, 0, device->beacon_info, DISPLAY_COLOR_OK);
+    }
     display_draw_text(10, 0, "Bu sürüm yalnızca BLE tarar.");
     display_draw_text(11, 0, "Eşleştirme/bağlanma yok.");
     display_draw_text(14, 0, "SOL: listeye dön");
@@ -1405,6 +1413,172 @@ static void action_wifi_monitor(void)
     menu_render(s_active_menu);
 }
 
+// Shared preamble for the passive-monitor-based screens below (channel map,
+// frame stats). Shows the AP-conflict / start-failure messages exactly like
+// action_wifi_monitor() and returns true only when the promiscuous monitor is
+// running. On any false return the caller must not touch the radio and should
+// just menu_render() back. Keeps the three monitor screens from each repeating
+// the same start/error handling.
+static bool monitor_screen_begin(const char *title)
+{
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        return false;
+    }
+    display_clear();
+    display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Başlatılıyor...");
+    display_draw_text_color(4, 0, "STA bağlantısı kesilir", DISPLAY_COLOR_DIM);
+    display_flush();
+    if (!c6_link_monitor_start()) {
+        diag_record_error("WiFi Monitor", "C6_LINK_MONITOR_START_FAILED");
+        display_clear();
+        display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "Başlatılamadı", DISPLAY_COLOR_ERROR);
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        return false;
+    }
+    return true;
+}
+
+// Kanal ısı haritası: passive 2.4GHz channel-occupancy view. Runs the same
+// promiscuous channel-hop monitor as WiFi İzleme, but instead of a device
+// list it draws one horizontal bar per channel (1-13) sized by how many
+// distinct APs are currently seen there, with the AP count and strongest RSSI
+// beside it. No transmission -- it only visualizes the beacon list the monitor
+// already builds. BACK/LEFT stops the monitor and exits.
+static void action_wifi_channel_map(void)
+{
+    if (!monitor_screen_begin("Kanal Haritası [MON]")) {
+        menu_render(s_active_menu);
+        return;
+    }
+
+    // Bar geometry: label column on the left, bar fills the rest of the row.
+    const int bar_x0 = 40;                       // px, after "K13 " label
+    const int bar_max_w = DISPLAY_WIDTH_PX - bar_x0 - 4;
+    for (;;) {
+        c6_channel_stats_t stats;
+        bool ok = c6_link_monitor_channel_stats(&stats);
+
+        display_clear();
+        display_draw_text_centered(0, "Kanal Haritası [MON]", DISPLAY_COLOR_ACCENT);
+        if (ok) {
+            // Find the busiest channel to scale the bars against (min 1 so an
+            // all-quiet screen doesn't divide by zero).
+            int max_count = 1;
+            for (int ch = 1; ch <= C6_CHANNEL_COUNT; ch++) {
+                if (stats.ap_count[ch] > max_count) {
+                    max_count = stats.ap_count[ch];
+                }
+            }
+            // 13 channels won't all fit as 16px rows under the header; pack two
+            // channels per text row by drawing at a tighter pixel pitch.
+            const int top_y = 18;
+            const int pitch = (DISPLAY_HEIGHT_PX - top_y - 4) / C6_CHANNEL_COUNT;
+            for (int ch = 1; ch <= C6_CHANNEL_COUNT; ch++) {
+                int y = top_y + (ch - 1) * pitch;
+                char lbl[8];
+                snprintf(lbl, sizeof(lbl), "K%-2d", ch);
+                display_draw_text_px(2, y, lbl, DISPLAY_COLOR_TEXT,
+                                     display_get_background());
+                int w = (stats.ap_count[ch] * bar_max_w) / max_count;
+                if (stats.ap_count[ch] > 0 && w < 2) {
+                    w = 2; // keep a nonzero channel visible
+                }
+                if (w > 0) {
+                    display_fill_rect(bar_x0, y + 2, w, pitch - 3,
+                                      DISPLAY_COLOR_ACCENT);
+                }
+                if (stats.ap_count[ch] > 0) {
+                    char amt[12];
+                    snprintf(amt, sizeof(amt), "%u/%ddBm",
+                             stats.ap_count[ch], stats.best_rssi[ch]);
+                    display_draw_text_px(bar_x0 + 2, y, amt,
+                                         DISPLAY_COLOR_ACCENT_TEXT,
+                                         DISPLAY_COLOR_ACCENT);
+                }
+            }
+        } else {
+            display_draw_text(2, 0, "Veri bekleniyor...");
+        }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "SOL: çık");
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            break;
+        }
+    }
+    c6_link_monitor_stop();
+    menu_render(s_active_menu);
+}
+
+// WiFi çerçeve istatistiği: passive 802.11 frame-type tally. Runs the monitor
+// and shows cumulative counts of beacon / probe-req / probe-resp / other-mgmt /
+// data / control frames seen across the channels the hopper visits. Receive
+// only -- it classifies frames the radio already hears and transmits nothing.
+// BACK/LEFT stops the monitor and exits.
+static void action_wifi_frame_stats(void)
+{
+    if (!monitor_screen_begin("Çerçeve İstat [MON]")) {
+        menu_render(s_active_menu);
+        return;
+    }
+
+    for (;;) {
+        c6_frame_stats_t st;
+        bool ok = c6_link_monitor_frame_stats(&st);
+
+        display_clear();
+        display_draw_text_centered(0, "Çerçeve İstat [MON]", DISPLAY_COLOR_ACCENT);
+        if (ok) {
+            char line[DISPLAY_COLS + 1];
+            snprintf(line, sizeof(line), "Toplam: %lu", (unsigned long)st.total);
+            display_draw_text_color(2, 0, line, DISPLAY_COLOR_OK);
+            snprintf(line, sizeof(line), "Beacon      : %lu",
+                     (unsigned long)st.mgmt_beacon);
+            display_draw_text(4, 0, line);
+            snprintf(line, sizeof(line), "Probe istek : %lu",
+                     (unsigned long)st.mgmt_probe_req);
+            display_draw_text(5, 0, line);
+            snprintf(line, sizeof(line), "Probe yanıt : %lu",
+                     (unsigned long)st.mgmt_probe_resp);
+            display_draw_text(6, 0, line);
+            snprintf(line, sizeof(line), "Diğer mgmt  : %lu",
+                     (unsigned long)st.mgmt_other);
+            display_draw_text(7, 0, line);
+            snprintf(line, sizeof(line), "Veri        : %lu",
+                     (unsigned long)st.data);
+            display_draw_text(8, 0, line);
+            snprintf(line, sizeof(line), "Kontrol     : %lu",
+                     (unsigned long)st.ctrl);
+            display_draw_text(9, 0, line);
+            char chn[DISPLAY_COLS + 1];
+            snprintf(chn, sizeof(chn), "Kanal: %d", c6_link_monitor_current_channel());
+            display_draw_text_color(11, 0, chn, DISPLAY_COLOR_DIM);
+        } else {
+            display_draw_text(2, 0, "Veri bekleniyor...");
+        }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "SOL: çık");
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            break;
+        }
+    }
+    c6_link_monitor_stop();
+    menu_render(s_active_menu);
+}
+
 // Passive BT Scan: same shape as action_wifi_monitor() immediately above
 // (see c6_link.h's c6_link_bt_scan_start() comment). The standalone build
 // keeps BLE discovery and promiscuous Wi-Fi monitor mutually exclusive.
@@ -1461,8 +1635,16 @@ static void action_bt_scan(void)
         for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
             int index = top + i;
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%c%.17s %ddBm",
-                     index == selected ? '>' : ' ',
+            // A single-char tag marks a decoded beacon (i=iBeacon, E=Eddystone)
+            // so beacons stand out in the list before opening details.
+            char tag = ' ';
+            if (devices[index].beacon_type == C6_BEACON_IBEACON) {
+                tag = 'i';
+            } else if (devices[index].beacon_type == C6_BEACON_EDDYSTONE) {
+                tag = 'E';
+            }
+            snprintf(line, sizeof(line), "%c%c%.15s %ddBm",
+                     index == selected ? '>' : ' ', tag,
                      devices[index].name[0] ? devices[index].name : "(adsız)",
                      devices[index].rssi);
             display_draw_text(LIST_HEADER_ROWS + i, 0, line);
@@ -1669,6 +1851,8 @@ static menu_item_t s_security_lab_menu_items[] = {
 // the existing receive-only actions; no packet transmission is performed.
 static menu_item_t s_hacking_menu_items[] = {
     {"WiFi İzleme (RX)", action_wifi_monitor, NULL},
+    {"Kanal Haritası (RX)", action_wifi_channel_map, NULL},
+    {"Çerçeve İstat (RX)", action_wifi_frame_stats, NULL},
     {"BLE Keşif (RX)", action_bt_scan, NULL},
 };
 
