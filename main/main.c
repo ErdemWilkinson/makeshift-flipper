@@ -1307,6 +1307,11 @@ static void show_bt_device_details(const c6_bt_device_t *device)
     display_draw_text(4, 0, line);
     snprintf(line, sizeof(line), "Sinyal: %d dBm", device->rssi);
     display_draw_text(6, 0, line);
+    // Best-effort device kind (passive, from advertised UUIDs/appearance/vendor).
+    if (device->kind[0]) {
+        snprintf(line, sizeof(line), "Tur: %s", device->kind);
+        display_draw_text_color(9, 0, line, DISPLAY_COLOR_OK);
+    }
     // Decoded beacon frame, if this advertisement carried one. Passive parse of
     // bytes the device already broadcast -- see decode_beacon() in radio_ble.c.
     if (device->beacon_type == C6_BEACON_IBEACON) {
@@ -1400,12 +1405,18 @@ static void action_wifi_monitor(void)
         for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
             int index = top + i;
             char line[DISPLAY_COLS + 1];
-            snprintf(line, sizeof(line), "%c%.8s %.4s k%u %d",
+            // Flag weak security: OPEN and WEP are insecure. A leading '!'
+            // plus red text marks them so an audit of your own network's
+            // surroundings spots them at a glance. Passive read of the beacon.
+            const char *sec = aps[index].sec[0] ? aps[index].sec : "?";
+            bool weak = (strcmp(sec, "OPEN") == 0) || (strcmp(sec, "WEP") == 0);
+            snprintf(line, sizeof(line), "%c%c%.7s %.4s k%u %d",
                      index == selected ? '>' : ' ',
+                     weak ? '!' : ' ',
                      aps[index].ssid[0] ? aps[index].ssid : "(gizli)",
-                     aps[index].sec[0] ? aps[index].sec : "?",
-                     aps[index].channel, aps[index].rssi);
-            display_draw_text(LIST_HEADER_ROWS + i, 0, line);
+                     sec, aps[index].channel, aps[index].rssi);
+            display_draw_text_color(LIST_HEADER_ROWS + i, 0, line,
+                                    weak ? DISPLAY_COLOR_ERROR : DISPLAY_COLOR_TEXT);
         }
         if (count == 0) {
             display_draw_text(2, 0, "Erişim noktası aranıyor...");
@@ -1589,6 +1600,67 @@ static void action_wifi_frame_stats(void)
         button_id_t event = poll_button_for_ticks(50);
         if (event == BUTTON_BACK || event == BUTTON_LEFT) {
             break;
+        }
+    }
+    c6_link_monitor_stop();
+    menu_render(s_active_menu);
+}
+
+// Probe-Request capture: while the monitor runs, nearby client devices
+// broadcast probe requests naming networks they want to join. This lists the
+// distinct SSIDs seen, with a sighting count. Strictly passive -- it reads
+// names devices broadcast on their own; it stores no device addresses and
+// sends nothing. Useful for seeing what your own devices leak, or surveying a
+// space you are authorized to assess.
+static void action_wifi_probe_capture(void)
+{
+    if (!monitor_screen_begin("Probe Yakala [MON]")) {
+        menu_render(s_active_menu);
+        return;
+    }
+
+    static c6_probe_ssid_t probes[C6_PROBE_MAX]; // static: keep off the stack
+    int selected = 0;
+    int top = 0;
+    for (;;) {
+        int count = c6_link_monitor_probe_poll(probes, C6_PROBE_MAX);
+        if (count == 0) {
+            selected = 0;
+            top = 0;
+        } else {
+            if (selected >= count) {
+                selected = count - 1;
+            }
+            list_clamp_scroll(selected, &top);
+        }
+
+        display_clear();
+        char header[DISPLAY_COLS + 1];
+        snprintf(header, sizeof(header), "Probe Yakala (%d)", count);
+        display_draw_text_centered(0, header, DISPLAY_COLOR_ACCENT);
+        for (int i = 0; i < count - top && i < LIST_VISIBLE_ROWS; i++) {
+            int index = top + i;
+            char line[DISPLAY_COLS + 1];
+            snprintf(line, sizeof(line), "%c%.22s x%u",
+                     index == selected ? '>' : ' ',
+                     probes[index].ssid, probes[index].count);
+            display_draw_text(LIST_HEADER_ROWS + i, 0, line);
+        }
+        if (count == 0) {
+            display_draw_text(2, 0, "Probe bekleniyor...");
+            display_draw_text_color(4, 0, "Cihazlar arayinca dolar",
+                                    DISPLAY_COLOR_DIM);
+        }
+        display_draw_text(DISPLAY_ROWS - 1, 0, "YUK/ASA  SOL:cik");
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            break;
+        } else if (event == BUTTON_UP && selected > 0) {
+            selected--;
+        } else if (event == BUTTON_DOWN && selected < count - 1) {
+            selected++;
         }
     }
     c6_link_monitor_stop();
@@ -2285,6 +2357,7 @@ static menu_item_t s_hacking_menu_items[] = {
     {"WiFi İzleme (RX)", action_wifi_monitor, NULL},
     {"Kanal Haritası (RX)", action_wifi_channel_map, NULL},
     {"Çerçeve İstat (RX)", action_wifi_frame_stats, NULL},
+    {"Probe Yakala (RX)", action_wifi_probe_capture, NULL},
     {"BLE Keşif (RX)", action_bt_scan, NULL},
 };
 
