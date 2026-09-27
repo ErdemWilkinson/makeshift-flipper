@@ -34,7 +34,7 @@ static const char *const s_grid[GRID_ROWS][GRID_COLS] = {
     {"X","C","V","B","N","M","!","#","$","%"},
     {"&","'","(",")","+",",","/",":",";","="},
     {">","?","[","]","{","}","~","\"","\\","`"},
-    {"^","<","*","SP","|","","","","",""},
+    {"ENT","<","*","SP","|","","","","",""},
 };
 
 // Centre/A selects a cell. On this keyboard only, short RIGHT/LEFT move the
@@ -110,7 +110,8 @@ bool text_entry_handle_button(text_entry_t *entry, button_id_t button)
                 // Unused trailing cell on the control row -- no-op.
             } else if (label[0] == 'S' && label[1] == 'P' && label[2] == '\0') {
                 append_char(entry, ' ');
-            } else if (c == '^') {
+            } else if (label[0] == 'E' && label[1] == 'N' && label[2] == 'T') {
+                // "ENT" = Enter/confirm: finish text entry (was the "^" cell).
                 return true;
             } else if (c == '<') {
                 backspace(entry);
@@ -171,7 +172,7 @@ void text_entry_render(const text_entry_t *entry, const char *title, bool mask)
     }
 
     display_draw_text(13, 0, "YUK/ASA:satir SOL/SAG:sutun");
-    display_draw_text(14, 0, "SOL uzun:cik SAG uzun:sec");
+    display_draw_text(14, 0, "BAS:sec ENT:bitir SOLuzn:cik");
 
     display_flush();
 }
