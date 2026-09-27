@@ -1639,6 +1639,28 @@ static void action_bt_scan(void)
     int top = 0;
     for (;;) {
         int count = c6_link_bt_scan_poll(devices, C6_BT_MAX_DEVICES);
+        // Sort the snapshot: named devices first, then, within each group,
+        // nearest-first by RSSI (higher = closer). So the list reads as
+        // [named, strongest..weakest] then [anonymous, strongest..weakest].
+        // Insertion sort; the device count is small (<=32). Local copy only.
+        for (int a = 1; a < count; a++) {
+            c6_bt_device_t key = devices[a];
+            bool key_named = key.name[0] != '\0';
+            int b = a - 1;
+            while (b >= 0) {
+                bool b_named = devices[b].name[0] != '\0';
+                // key should come before devices[b] if it's named and b isn't,
+                // or (same named-group) it has a stronger RSSI.
+                bool key_before = (key_named && !b_named) ||
+                                  (key_named == b_named && key.rssi > devices[b].rssi);
+                if (!key_before) {
+                    break;
+                }
+                devices[b + 1] = devices[b];
+                b--;
+            }
+            devices[b + 1] = key;
+        }
         if (count == 0) {
             selected = 0;
             top = 0;
@@ -1664,9 +1686,19 @@ static void action_bt_scan(void)
             } else if (devices[index].beacon_type == C6_BEACON_EDDYSTONE) {
                 tag = 'E';
             }
+            // Most BLE devices (and phones especially) don't broadcast a name;
+            // showing "(adsız)" for all of them makes them indistinguishable.
+            // Fall back to the last 3 MAC bytes so each device is identifiable.
+            char label[18];
+            if (devices[index].name[0]) {
+                snprintf(label, sizeof(label), "%.15s", devices[index].name);
+            } else {
+                snprintf(label, sizeof(label), "%02X:%02X:%02X",
+                         devices[index].addr[3], devices[index].addr[4],
+                         devices[index].addr[5]);
+            }
             snprintf(line, sizeof(line), "%c%c%.15s %ddBm",
-                     index == selected ? '>' : ' ', tag,
-                     devices[index].name[0] ? devices[index].name : "(adsız)",
+                     index == selected ? '>' : ' ', tag, label,
                      devices[index].rssi);
             display_draw_text(LIST_HEADER_ROWS + i, 0, line);
         }
@@ -1789,8 +1821,15 @@ static void radar_update(const c6_bt_device_t *devs, int count, int64_t now_us,
             s_radar_peak_rssi[found] = devs[i].rssi;
             s_radar_peak_us[found] = now_us;
             s_radar_live_rssi[found] = devs[i].rssi; // seed the smoothed value
-            snprintf(s_radar_name[found], sizeof(s_radar_name[found]), "%s",
-                     devs[i].name[0] ? devs[i].name : "(adsiz)");
+            if (devs[i].name[0]) {
+                snprintf(s_radar_name[found], sizeof(s_radar_name[found]), "%s",
+                         devs[i].name);
+            } else {
+                // No advertised name: identify by the last 3 MAC bytes.
+                snprintf(s_radar_name[found], sizeof(s_radar_name[found]),
+                         "%02X:%02X:%02X", devs[i].addr[3], devs[i].addr[4],
+                         devs[i].addr[5]);
+            }
         } else {
             if (track_peak && devs[i].rssi > s_radar_peak_rssi[found]) {
                 s_radar_peak_rssi[found] = devs[i].rssi;

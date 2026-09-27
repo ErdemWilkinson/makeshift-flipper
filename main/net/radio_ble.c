@@ -190,7 +190,12 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 static bool start_discovery(void)
 {
     struct ble_gap_disc_params params = {0};
-    params.passive = 1; // listen only, don't send scan-request probes
+    // Active scan: send scan requests so devices reply with a scan response,
+    // which is where most of them (headphones, watches, etc.) put their name.
+    // A passive scan only hears the initial advertisement, so names rarely
+    // appear. This is the same thing a phone does when listing BLE devices;
+    // it emits small scan-request packets rather than being purely receive-only.
+    params.passive = 0;
     params.itvl = SCAN_ITVL_MS * 1000 / 625;
     params.window = SCAN_WINDOW_MS * 1000 / 625;
     params.filter_duplicates = 0; // dedup handled in device_upsert()
