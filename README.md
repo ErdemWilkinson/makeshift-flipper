@@ -33,7 +33,7 @@ profile and conflicts are described below.
 | WiFi | Scan (sorted nearest-first), manual station connection/status, a local WPA2 access point (“WiFi Ağım”) with a Wi-Fi-join QR code | STA status does not prove Internet access or reveal the router's client count. 2.4 GHz only (the C6 has no 5 GHz radio), so 5 GHz networks/hotspots never appear. |
 | Bluetooth | Active BLE scan with a device list (named-first, then nearest-first), a best-effort device-kind guess, iBeacon/Eddystone decoding, and **BLE Radar** direction/range mapping | No pairing, manual connection or GATT access. Active scan emits scan-request packets (like a phone). Radar bearings/distances are coarse RSSI estimates, not exact meters/degrees. |
 | SecLab | Authorized-use guidance | Informational screen only. |
-| Hacking | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, and a shortcut to passive BLE discovery | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
+| Hacking | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, **WiFi Radar** direction/range mapping for nearby access points, and a shortcut to passive BLE discovery | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
 | Hatalar / Hakkında | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
 
 “WiFi Ağım (AP)” creates a local network without an Internet uplink. The C6
@@ -82,6 +82,11 @@ and see every nearby 2.4 GHz network, not just one.
   after which distances update live from smoothed RSSI as you move; targets
   are ordered nearest-first. Bearings assume a steady turn; it is a coarse
   estimate, not an exact fix.
+- **WiFi Radar (Hacking menu):** the same direction/range technique applied to
+  nearby Wi-Fi access points instead of BLE devices, built on the same
+  channel-hopping monitor as the other Hacking tools. One timed 360° turn
+  fixes each AP's bearing; live RSSI (smoothed) updates its distance as you
+  move. Same coarse-estimate caveats as BLE Radar.
 
 Camera/OCR, microphone/voice control, GPS, Sub-GHz, cellular and general
 remote-control features are not part of the current firmware. For a broader
@@ -91,29 +96,39 @@ capability and misuse-boundary discussion, see
 ## Current hardware profile
 
 The active settings are in [`main/hardware_profile.h`](main/hardware_profile.h):
-joystick UP uses GPIO6 and `BOARD_HAS_RC522` is `0`. The display is
-write-only on this profile, so SPI MISO is not claimed. An RC522 would also
-need GPIO6 for MISO; enabling it requires changing the physical UP wiring
-and then revalidating both devices. Merely connecting an RC522 will not turn
-the feature on.
+joystick UP uses GPIO16 and `BOARD_HAS_RC522` is `0`. UP was moved off GPIO6
+(2026-09-28) specifically so GPIO6 is free for RC522 MISO; the two pin
+conflicts that used to exist in this build are now resolved in firmware
+(wiring must still follow, see below). The display is write-only on this
+profile, so SPI MISO is not claimed. Merely connecting an RC522 will not turn
+the feature on — `BOARD_HAS_RC522` must also be flipped to `1` after the
+physical rewiring.
 
 | Current firmware assignment | ESP32-C6 GPIO | Source |
 | --- | ---: | --- |
 | ST7789 SCK / MOSI / CS / DC / RST / backlight | 18 / 19 / 9 / 8 / 20 / 21 | [`display.c`](main/ui/display.c) |
-| Joystick UP / DOWN / LEFT / RIGHT | 6 / 11 / 23 / 22 | [`buttons.c`](main/input/buttons.c) |
+| Joystick UP / DOWN / LEFT / RIGHT | 16 / 11 / 23 / 22 | [`buttons.c`](main/input/buttons.c) |
 | A button / B button | 10 / disconnected and disabled | [`buttons.c`](main/input/buttons.c) |
 | Joystick centre press (firmware assignment, wire unverified) | 3 | [`buttons.c`](main/input/buttons.c) |
+| Vibration motor driver output | 15 | [`vibration.c`](main/feedback/vibration.c) |
 
 Ordinary menus use UP/DOWN to move, RIGHT or A to select and LEFT to go back.
 On the text keyboard, a short LEFT/RIGHT moves horizontally, a long LEFT
 exits, a long RIGHT selects, and A selects immediately. The centre press is
 not needed for the current one-handed control scheme.
 
-**Unresolved pin conflict:** the vibration driver also configures GPIO3 as
-an output. Do not wire both a centre button and motor driver to GPIO3. The
-centre-button wire and motor hardware must be reconciled in firmware and
-wiring before either is treated as supported. A motor also needs a driver
-and flyback protection; never connect it directly to a C6 GPIO.
+**Pin conflicts resolved in firmware (2026-09-28):** two GPIOs used to be
+double-booked in source. (1) Joystick UP and RC522 MISO both wanted GPIO6 —
+UP now uses GPIO16 instead, leaving GPIO6 free for RC522 MISO alone.
+(2) The vibration driver and the joystick centre press both wanted GPIO3 —
+the motor driver now uses GPIO15 instead, leaving GPIO3 to the centre press.
+GPIO16 and GPIO15 were picked because neither is a boot-strapping pin and
+neither was claimed by anything else on this board; GPIO15 in particular
+must still not be pulled low externally at reset. **This is a firmware-side
+reassignment only — the physical wires have not been moved.** Before relying
+on RC522 or the vibration motor, wire UP to GPIO16, RC522 MISO to GPIO6, and
+the motor driver input to GPIO15, then revalidate all three (UP, RC522,
+motor) on real hardware.
 
 Other module assignments remain source-level plans, not evidence of working
 peripherals: RDM6300 receive is GPIO1 through a 5 V-to-3.3 V level shifter;

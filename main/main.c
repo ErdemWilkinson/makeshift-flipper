@@ -2196,6 +2196,288 @@ static void action_bt_radar(void)
     menu_render(s_active_menu);
 }
 
+// --- WiFi Radar (yön + mesafe haritalama, Access Point'ler için) -----------
+// Same technique as BLE Radar above, applied to the promiscuous Wi-Fi monitor's
+// AP list instead of BLE advertisements: one timed 360 turn maps elapsed time
+// to bearing, each AP's bearing locks to the moment its RSSI peaked during that
+// turn, and live RSSI (smoothed) sets the live distance from center. Coarse
+// estimate, not a metric fix -- see the BLE Radar comment for the caveats.
+
+#define WIFI_RADAR_MAX_TARGETS C6_MONITOR_MAX_APS
+
+// Kept static and parallel to the AP list, same reasoning as the BLE radar
+// arrays: large per-target tracking stays off the main task stack.
+static uint8_t  s_wradar_bssid[WIFI_RADAR_MAX_TARGETS][6];
+static int8_t   s_wradar_peak_rssi[WIFI_RADAR_MAX_TARGETS];
+static int64_t  s_wradar_peak_us[WIFI_RADAR_MAX_TARGETS];
+static int8_t   s_wradar_live_rssi[WIFI_RADAR_MAX_TARGETS];
+static int64_t  s_wradar_seen_us[WIFI_RADAR_MAX_TARGETS];
+static char     s_wradar_name[WIFI_RADAR_MAX_TARGETS][C6_MONITOR_SSID_MAX_LEN + 1];
+static int      s_wradar_target_count;
+
+#define WIFI_RADAR_STALE_US (10 * 1000000) // beacons are less frequent than BLE adverts
+
+// Nearest-first ordering by live RSSI, same insertion sort as radar_sorted_order().
+static int wifi_radar_sorted_order(int *order)
+{
+    int n = s_wradar_target_count;
+    for (int i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    for (int i = 1; i < n; i++) {
+        int key = order[i];
+        int j = i - 1;
+        while (j >= 0 && s_wradar_live_rssi[order[j]] < s_wradar_live_rssi[key]) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = key;
+    }
+    return n;
+}
+
+// Fold new monitor-poll results into the trackers. See radar_update()'s comment
+// for the track_peak/live-distance split; identical logic, keyed by BSSID.
+static void wifi_radar_update(const c6_monitor_ap_t *aps, int count, int64_t now_us,
+                              bool track_peak)
+{
+    for (int i = 0; i < count; i++) {
+        int found = -1;
+        for (int j = 0; j < s_wradar_target_count; j++) {
+            if (memcmp(s_wradar_bssid[j], aps[i].bssid, 6) == 0) {
+                found = j;
+                break;
+            }
+        }
+        if (found < 0) {
+            if (s_wradar_target_count >= WIFI_RADAR_MAX_TARGETS) {
+                continue;
+            }
+            found = s_wradar_target_count++;
+            memcpy(s_wradar_bssid[found], aps[i].bssid, 6);
+            s_wradar_peak_rssi[found] = aps[i].rssi;
+            s_wradar_peak_us[found] = now_us;
+            s_wradar_live_rssi[found] = aps[i].rssi;
+            if (aps[i].ssid[0]) {
+                snprintf(s_wradar_name[found], sizeof(s_wradar_name[found]), "%s",
+                         aps[i].ssid);
+            } else {
+                snprintf(s_wradar_name[found], sizeof(s_wradar_name[found]),
+                         "%02X:%02X:%02X", aps[i].bssid[3], aps[i].bssid[4],
+                         aps[i].bssid[5]);
+            }
+        } else {
+            if (track_peak && aps[i].rssi > s_wradar_peak_rssi[found]) {
+                s_wradar_peak_rssi[found] = aps[i].rssi;
+                s_wradar_peak_us[found] = now_us;
+                if (aps[i].ssid[0]) {
+                    snprintf(s_wradar_name[found], sizeof(s_wradar_name[found]),
+                             "%s", aps[i].ssid);
+                }
+            }
+            int old = s_wradar_live_rssi[found];
+            int sample = aps[i].rssi;
+            s_wradar_live_rssi[found] = (int8_t)(old + (sample - old) / 4);
+        }
+        s_wradar_seen_us[found] = now_us;
+    }
+}
+
+// Draw the WiFi radar. Same layout/math as radar_render(); duplicated rather
+// than parametrized because the target data (BSSID/SSID arrays) has a
+// different shape than the BLE device list.
+static void wifi_radar_render(const char *title, int64_t start_us, int64_t denom_us,
+                              int highlight, float sweep_frac)
+{
+    const int cx = DISPLAY_WIDTH_PX / 2;
+    const int cy = DISPLAY_HEIGHT_PX / 2 + 8;
+    const int r_outer = 104;
+
+    display_clear();
+    display_draw_text_centered(0, title, DISPLAY_COLOR_ACCENT);
+
+    display_draw_circle(cx, cy, r_outer, DISPLAY_COLOR_DIM);
+    display_draw_circle(cx, cy, r_outer * 2 / 3, DISPLAY_COLOR_DIM);
+    display_draw_circle(cx, cy, r_outer / 3, DISPLAY_COLOR_DIM);
+    display_draw_line(cx - r_outer, cy, cx + r_outer, cy, DISPLAY_COLOR_DIM);
+    display_draw_line(cx, cy - r_outer, cx, cy + r_outer, DISPLAY_COLOR_DIM);
+
+    if (sweep_frac >= 0.0f) {
+        float sa = sweep_frac * RADAR_TWO_PI - RADAR_HALF_PI;
+        int sx = cx + (int)(cosf(sa) * r_outer);
+        int sy = cy + (int)(sinf(sa) * r_outer);
+        display_draw_line(cx, cy, sx, sy, DISPLAY_COLOR_ACCENT);
+    }
+
+    display_fill_circle(cx, cy, 3, DISPLAY_COLOR_OK);
+
+    int order[WIFI_RADAR_MAX_TARGETS];
+    int n = wifi_radar_sorted_order(order);
+    int hi_real = (highlight >= 0 && highlight < n) ? order[highlight] : -1;
+
+    int64_t now = esp_timer_get_time();
+    for (int oi = 0; oi < n; oi++) {
+        int i = order[oi];
+        float frac_time = 0.0f;
+        if (denom_us > 0) {
+            frac_time = (float)(s_wradar_peak_us[i] - start_us) / (float)denom_us;
+            if (frac_time < 0.0f) frac_time = 0.0f;
+            if (frac_time > 1.0f) frac_time = 1.0f;
+        }
+        float ang = frac_time * RADAR_TWO_PI - RADAR_HALF_PI;
+        float dist = radar_distance_frac(s_wradar_live_rssi[i]);
+        int px = cx + (int)(cosf(ang) * dist * r_outer);
+        int py = cy + (int)(sinf(ang) * dist * r_outer);
+        bool stale = (now - s_wradar_seen_us[i]) > WIFI_RADAR_STALE_US;
+        display_color_t c;
+        if (stale) {
+            c = DISPLAY_COLOR_DIM;
+        } else if (i == hi_real) {
+            c = DISPLAY_COLOR_ACCENT;
+        } else {
+            c = DISPLAY_RGB(6, 40, 31);
+        }
+        display_fill_circle(px, py, (i == hi_real) ? 4 : 3, c);
+    }
+
+    if (n > 0 && hi_real >= 0) {
+        char line[DISPLAY_COLS + 1];
+        int deg = 0;
+        if (denom_us > 0) {
+            float f = (float)(s_wradar_peak_us[hi_real] - start_us) /
+                      (float)denom_us;
+            if (f < 0.0f) {
+                f = 0.0f;
+            }
+            if (f > 1.0f) {
+                f = 1.0f;
+            }
+            deg = (int)(f * 360.0f) % 360;
+        }
+        snprintf(line, sizeof(line), ">#%d %.10s", highlight + 1,
+                 s_wradar_name[hi_real]);
+        display_draw_text(DISPLAY_ROWS - 2, 0, line);
+        snprintf(line, sizeof(line), " ~%d derece  %d dBm", deg,
+                 s_wradar_live_rssi[hi_real]);
+        display_draw_text(DISPLAY_ROWS - 1, 0, line);
+    } else {
+        char line[DISPLAY_COLS + 1];
+        int shown = s_wradar_target_count > 99 ? 99 : s_wradar_target_count;
+        snprintf(line, sizeof(line), "%2d hedef  SAG/SOL", shown);
+        display_draw_text(DISPLAY_ROWS - 1, 0, line);
+    }
+    display_flush();
+}
+
+static void action_wifi_radar(void)
+{
+    if (!monitor_screen_begin("WiFi Radar")) {
+        menu_render(s_active_menu);
+        return;
+    }
+
+    static c6_monitor_ap_t aps[C6_MONITOR_MAX_APS]; // static: keep off stack
+
+    for (;;) {
+        // ---- Phase 1: wait for the user to start turning ----
+        display_clear();
+        display_draw_text_centered(0, "WiFi Radar", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Cihazı düz tut.");
+        display_draw_text(3, 0, "Yavaş ve SABİT hızda");
+        display_draw_text(4, 0, "kendi etrafında dön.");
+        display_draw_text(6, 0, "Dönmeye BAŞLARKEN SAĞ'a bas.");
+        display_draw_text(8, 0, "Tam tur bitince yine SAĞ.");
+        display_draw_text_color(DISPLAY_ROWS - 1, 0, "SAĞ: başla   SOL: çık",
+                                DISPLAY_COLOR_DIM);
+        display_flush();
+
+        bool exit_screen = false;
+        for (;;) {
+            button_id_t e = poll_button_for_ticks(50);
+            if (e == BUTTON_BACK || e == BUTTON_LEFT) {
+                exit_screen = true;
+                break;
+            }
+            if (e == BUTTON_RIGHT || e == BUTTON_PRESS) {
+                break;
+            }
+        }
+        if (exit_screen) {
+            break;
+        }
+
+        // ---- Phase 2: collect peaks while the user turns ----
+        s_wradar_target_count = 0;
+        int64_t start_us = esp_timer_get_time();
+        bool finished = false;
+        for (;;) {
+            int64_t now = esp_timer_get_time();
+            int count = c6_link_monitor_poll(aps, C6_MONITOR_MAX_APS);
+            wifi_radar_update(aps, count, now, true /* calibrate bearings */);
+
+            int64_t elapsed = now - start_us;
+            int elapsed_s = (int)(elapsed / 1000000);
+            wifi_radar_render("WiFi Radar [DON]", start_us, elapsed,
+                              -1, 1.0f);
+            char line[DISPLAY_COLS + 1];
+            snprintf(line, sizeof(line), "Don... %ds  %d hedef",
+                     elapsed_s, s_wradar_target_count > 99 ? 99
+                                : s_wradar_target_count);
+            display_draw_text(1, 0, line);
+            display_draw_text_color(DISPLAY_ROWS - 1, 0,
+                                    "Tur bitince SAG   SOL:iptal",
+                                    DISPLAY_COLOR_DIM);
+            display_flush();
+
+            button_id_t e = poll_button_for_ticks(50);
+            if (e == BUTTON_RIGHT || e == BUTTON_PRESS) {
+                finished = true;
+                break;
+            }
+            if (e == BUTTON_BACK || e == BUTTON_LEFT) {
+                finished = false;
+                break;
+            }
+        }
+
+        if (!finished) {
+            continue;
+        }
+
+        int64_t turn_us = esp_timer_get_time() - start_us;
+
+        // ---- Phase 3: LIVE radar ----
+        int highlight = s_wradar_target_count > 0 ? 0 : -1;
+        bool recalibrate = false;
+        for (;;) {
+            int64_t now = esp_timer_get_time();
+            int count = c6_link_monitor_poll(aps, C6_MONITOR_MAX_APS);
+            wifi_radar_update(aps, count, now, false /* keep bearings fixed */);
+
+            wifi_radar_render("WiFi Radar", start_us, turn_us, highlight, -1.0f);
+
+            button_id_t e = poll_button_for_ticks(50);
+            if (e == BUTTON_BACK || e == BUTTON_LEFT) {
+                break;
+            }
+            if ((e == BUTTON_RIGHT || e == BUTTON_PRESS) &&
+                s_wradar_target_count > 0) {
+                highlight = (highlight + 1) % s_wradar_target_count;
+            }
+            if (e == BUTTON_UP) {
+                recalibrate = true;
+                break;
+            }
+        }
+        if (!recalibrate) {
+            break;
+        }
+    }
+
+    c6_link_monitor_stop();
+    menu_render(s_active_menu);
+}
+
 static void action_about(void)
 {
     display_clear();
@@ -2382,6 +2664,7 @@ static menu_item_t s_hacking_menu_items[] = {
     {"Kanal Haritası (RX)", action_wifi_channel_map, NULL},
     {"Çerçeve İstat (RX)", action_wifi_frame_stats, NULL},
     {"Probe Yakala (RX)", action_wifi_probe_capture, NULL},
+    {"WiFi Radar (RX)", action_wifi_radar, NULL},
     {"BLE Keşif (RX)", action_bt_scan, NULL},
 };
 
