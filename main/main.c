@@ -2478,6 +2478,45 @@ static void action_wifi_radar(void)
     menu_render(s_active_menu);
 }
 
+// Temporary hardware debug screen: counts raw button events as
+// buttons_poll() reports them, so a suspected phantom/double-trigger can be
+// confirmed or ruled out independent of any menu-navigation logic. Counts
+// persist across UP/DOWN/LEFT/RIGHT/PRESS; LEFT (long-press equivalent via
+// BUTTON_BACK) exits. Remove once the RC522-wiring debugging session is
+// done -- this is not a permanent feature.
+static void action_button_counter(void)
+{
+    int counts[BUTTON_COUNT] = {0};
+    for (;;) {
+        display_clear();
+        display_draw_text_centered(0, "Buton Sayaç [DEBUG]", DISPLAY_COLOR_ACCENT);
+        char line[DISPLAY_COLS + 1];
+        snprintf(line, sizeof(line), "UP:    %d", counts[BUTTON_UP]);
+        display_draw_text(2, 0, line);
+        snprintf(line, sizeof(line), "DOWN:  %d", counts[BUTTON_DOWN]);
+        display_draw_text(3, 0, line);
+        snprintf(line, sizeof(line), "LEFT:  %d", counts[BUTTON_LEFT]);
+        display_draw_text(4, 0, line);
+        snprintf(line, sizeof(line), "RIGHT: %d", counts[BUTTON_RIGHT]);
+        display_draw_text(5, 0, line);
+        snprintf(line, sizeof(line), "PRESS: %d", counts[BUTTON_PRESS]);
+        display_draw_text(6, 0, line);
+        snprintf(line, sizeof(line), "BACK:  %d", counts[BUTTON_BACK]);
+        display_draw_text(7, 0, line);
+        display_draw_text_color(DISPLAY_ROWS - 1, 0, "Uzun SOL: çık",
+                                DISPLAY_COLOR_DIM);
+        display_flush();
+
+        button_id_t event = poll_button_for_ticks(50);
+        if (event == BUTTON_BACK) {
+            break;
+        }
+        if (event != BUTTON_COUNT) {
+            counts[event]++;
+        }
+    }
+}
+
 static void action_about(void)
 {
     display_clear();
@@ -2681,6 +2720,7 @@ static menu_item_t s_main_menu_items[] = {
     {"Hacking", NULL, NULL},
     {"Hatalar",    action_error_history, NULL},
     {"Hakkında",   action_about, NULL},
+    {"Buton Sayaç [DEBUG]", action_button_counter, NULL},
 };
 
 static menu_t s_main_menu;
