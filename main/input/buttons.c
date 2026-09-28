@@ -19,10 +19,8 @@
 // Navigation contract (main.c): RIGHT/PRESS/A = enter/confirm, LEFT = back,
 // UP/DOWN = move. On the keyboard, short LEFT moves the cursor and long LEFT
 // exits. The centre switch is assigned to GPIO3 in firmware, but its wire
-// has not been verified on this carrier. GPIO16 is the current UP lead
-// (BOARD_UP_GPIO in hardware_profile.h) -- moved off GPIO6 so that pin is
-// free for RC522 MISO if that reader is ever wired in; RC522 itself stays
-// disabled for this screen-only hardware profile.
+// has not been verified on this carrier. UP is BOARD_UP_GPIO (GPIO6) in
+// hardware_profile.h; never GPIO12/13, the native USB D-/D+ pins.
 // Moved off the strapping/boot-sensitive pins (old DOWN=IO0, PRESS=IO5):
 // holding those low at reset could push the C6 into the wrong boot mode and
 // leave the panel blank. DOWN moved to GPIO11, freed by disconnecting B; this

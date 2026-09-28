@@ -1,5 +1,10 @@
 # RC522 <-> ESP32-C6 Kablolama Haritası
 
+> **GÜNCEL DEĞİL (2026-09-28):** Joystick UP GPIO13'te sahte basışlar
+> ürettiği için (GPIO13 = dahili USB D+) GPIO6'ya geri alındı. Bu yüzden
+> aşağıdaki tablodaki "MISO -> IO6" artık geçerli değil; RC522 takılmadan
+> önce MISO için yeni bir pin seçilmeli. GPIO12/13'e hiçbir şey bağlama.
+
 > Lehimlemeye başlamadan önce referans için. Bu dosya sadece dokümantasyondur,
 > hiçbir kod veya ayar değiştirmez. Tarih: 2026-09-28.
 
