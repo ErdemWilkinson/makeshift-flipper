@@ -246,14 +246,40 @@ void menu_render(const menu_t *menu)
         }
         label[n] = '\0';
 
+        menu_icon_fn icon = menu->items[idx].icon;
+        // With an icon: cursor char, then a 16px icon cell, then the label.
+        // Shift the label right by one cell (8px) so it clears the icon; the
+        // cursor '>' still sits at the far left. Without an icon: unchanged.
+        int text_x = x;
+        int icon_x = -1;
+        if (icon) {
+            icon_x = x + 8;       // just right of the cursor column
+            text_x = x + 8 + 16;  // past the icon cell
+        }
+
+        display_color_t row_fg;
+        display_color_t row_bg;
         if (is_selected && menu->anim_offset_px == 0) {
             if (menu->fill_selection) {
                 display_fill_rect(0, y, DISPLAY_WIDTH_PX, ROW_HEIGHT_PX, menu->accent_color);
             }
-            display_draw_text_px(x, y, label, menu->selected_text_color,
-                                 menu->fill_selection ? menu->accent_color : display_get_background());
+            row_fg = menu->selected_text_color;
+            row_bg = menu->fill_selection ? menu->accent_color : display_get_background();
         } else {
-            display_draw_text_px(x, y, label, menu->text_color, display_get_background());
+            row_fg = menu->text_color;
+            row_bg = display_get_background();
+        }
+
+        if (icon) {
+            // Draw only the cursor char at the far left, then the icon, then
+            // the label (which still carries its own leading cursor/space from
+            // above -- skip that first char so it isn't drawn twice).
+            char cursor[2] = { label[0], '\0' };
+            display_draw_text_px(x, y, cursor, row_fg, row_bg);
+            icon(icon_x, y + 2, row_fg); // 2px vertical nudge to centre in the row
+            display_draw_text_px(text_x, y, label + 1, row_fg, row_bg);
+        } else {
+            display_draw_text_px(text_x, y, label, row_fg, row_bg);
         }
     }
 

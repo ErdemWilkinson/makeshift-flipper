@@ -1,13 +1,13 @@
 #pragma once
 
-// Joystick UP is on GPIO6. Do NOT move it to GPIO12/13: those are the C6's
-// native USB D-/D+ lines. Configuring GPIO13 as a button input disabled the
-// native USB port and the pin produced phantom UP presses (4-5 per press).
-// RC522 MISO also wants GPIO6, so with UP here RC522 must use another MISO
-// pin before BOARD_HAS_RC522 can be enabled.
+// Pin plan for the Waveshare ESP32-C6-DEV-KIT-NX (full map: WIRING_MAP_RC522.md).
+// Never wire GPIO12/13 (native USB D-/D+) or GPIO16/17 (UART0 to the CH343).
+// Strapping pins (4, 5, 15) only carry inputs whose source idles high or
+// high-Z, so no module can pull a strap pin low at reset.
 #define BOARD_UP_GPIO 6
+#define BOARD_RC522_MISO_GPIO 5
 #define BOARD_HAS_RC522 0
 
-#if BOARD_HAS_RC522 && BOARD_UP_GPIO == 6
-#error "GPIO6 cannot serve both joystick UP and RC522 SPI MISO"
+#if BOARD_RC522_MISO_GPIO == BOARD_UP_GPIO
+#error "RC522 MISO and joystick UP cannot share a GPIO"
 #endif

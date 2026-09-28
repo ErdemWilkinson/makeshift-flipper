@@ -10,14 +10,10 @@
 #include "esp_private/uart_share_hw_ctrl.h"
 
 // RDM6300 only transmits. Its 5V TX crosses the level shifter before this
-// 3.3V input; no ESP32 TX pin is wired.
-//
-// GPIO1 (Pico GP28) is the hardware plan's confirmed general-purpose spare
-// (C6_STANDALONE_HARDWARE_PLAN.md's "Karar kapisi" section: GPIO1 is the
-// real spare; GPIO15/GP7 is a strapping pin and stays unused for anything
-// external). Wire the physical RDM6300 TX line to GP28.
+// 3.3V input; no ESP32 TX pin is wired. GPIO15 is a strapping pin, which is
+// fine here: UART idles high and the level shifter's LV side is pulled up.
 #define UART_PORT UART_NUM_1
-#define UART_RX_GPIO 1 // Pico GP28
+#define UART_RX_GPIO 15
 #define UART_TX_GPIO UART_PIN_NO_CHANGE
 
 #define FRAME_LEN 14

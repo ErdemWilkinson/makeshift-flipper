@@ -47,12 +47,12 @@ static int g_leaf_calls = 0;
 static void leaf_action(void) { g_leaf_calls++; }
 
 static menu_item_t s_root_items[] = {
-    {"Category", NULL, NULL},
-    {"Leaf", leaf_action, NULL},
+    {"Category", NULL, NULL, NULL},
+    {"Leaf", leaf_action, NULL, NULL},
 };
 static menu_item_t s_child_items[] = {
-    {"Child A", leaf_action, NULL},
-    {"Child B", leaf_action, NULL},
+    {"Child A", leaf_action, NULL, NULL},
+    {"Child B", leaf_action, NULL, NULL},
 };
 static menu_t s_root;
 static menu_t s_child;

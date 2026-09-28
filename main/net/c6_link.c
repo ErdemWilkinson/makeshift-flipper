@@ -547,6 +547,7 @@ static uint8_t s_channel_fail_streak[MONITOR_CHANNEL_COUNT + 1]; // index by cha
 static bool s_channel_quarantined[MONITOR_CHANNEL_COUNT + 1];
 
 static int s_monitor_channel = 1;
+static volatile uint16_t s_hop_mask; // 0 = hop all channels
 static TimerHandle_t s_hop_timer;
 static SemaphoreHandle_t s_monitor_lock; // guards the AP list below
 
@@ -660,6 +661,7 @@ static void monitor_upsert(const c6_monitor_ap_t *ap)
         if (memcmp(s_monitor_aps[i].bssid, ap->bssid, 6) == 0) {
             s_monitor_aps[i].rssi = ap->rssi;
             s_monitor_aps[i].channel = ap->channel;
+            s_monitor_aps[i].seen_seq++;
             if (ap->ssid[0] != '\0') {
                 memcpy(s_monitor_aps[i].ssid, ap->ssid, sizeof(ap->ssid));
             }
@@ -670,7 +672,9 @@ static void monitor_upsert(const c6_monitor_ap_t *ap)
         }
     }
     if (s_monitor_ap_count < C6_MONITOR_MAX_APS) {
-        s_monitor_aps[s_monitor_ap_count++] = *ap;
+        s_monitor_aps[s_monitor_ap_count] = *ap;
+        s_monitor_aps[s_monitor_ap_count].seen_seq = 1;
+        s_monitor_ap_count++;
     }
 }
 
@@ -787,9 +791,11 @@ static void hop_timer_cb(TimerHandle_t t)
     // whatever candidate the loop lands on last -- see below).
     int candidate = s_monitor_channel;
     int next_channel = candidate;
+    uint16_t mask = s_hop_mask;
     for (int tries = 0; tries < MONITOR_CHANNEL_COUNT; tries++) {
         candidate = (candidate % MONITOR_CHANNEL_COUNT) + 1;
-        if (!s_channel_quarantined[candidate]) {
+        bool wanted = (mask == 0) || (mask & (1u << candidate));
+        if (wanted && !s_channel_quarantined[candidate]) {
             next_channel = candidate;
             break;
         }
@@ -861,6 +867,7 @@ bool c6_link_monitor_start(void)
     // country/regdomain change), so don't carry the penalty forward.
     memset(s_channel_fail_streak, 0, sizeof(s_channel_fail_streak));
     memset(s_channel_quarantined, 0, sizeof(s_channel_quarantined));
+    s_hop_mask = 0;
 
     // Promiscuous mode and a connected STA fight over the channel; drop any
     // active connection first (no auto-reconnect, same as the old design).
@@ -938,6 +945,11 @@ int c6_link_monitor_poll(c6_monitor_ap_t *out_aps, int max_aps)
         xSemaphoreGive(s_monitor_lock);
     }
     return n;
+}
+
+void c6_link_monitor_set_hop_mask(uint16_t mask)
+{
+    s_hop_mask = mask & 0x3FFE; // channels 1..13 only
 }
 
 bool c6_link_monitor_channel_stats(c6_channel_stats_t *out_stats)

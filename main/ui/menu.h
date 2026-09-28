@@ -11,10 +11,15 @@ struct menu_s;
 // a submenu; a menu_item_t should only set one of the two.
 typedef void (*menu_action_fn)(void);
 
+// Optional per-item icon painter. Draws a small glyph into a 16x16 cell whose
+// top-left is (x, y). NULL = no icon (label starts at the left as before).
+typedef void (*menu_icon_fn)(int x, int y, display_color_t color);
+
 typedef struct {
     const char *label;
     menu_action_fn on_select;   // NULL if this item enters a submenu instead (or is a placeholder)
     struct menu_s *submenu;     // NULL for a leaf item (on_select fires instead)
+    menu_icon_fn icon;          // NULL for no icon
 } menu_item_t;
 
 typedef struct menu_s {

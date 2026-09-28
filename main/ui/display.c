@@ -22,7 +22,7 @@
 // MCU_ARCHITECTURE_DECISION.md and RC522_SHARED_SPI_HOST in rc522.c.
 #define LCD_SCK_GPIO  18 // Pico GP10; shared with RC522
 #define LCD_MOSI_GPIO 19 // Pico GP11; shared with RC522
-#define LCD_SHARED_MISO_GPIO 6 // Pico GP4; RC522 only
+#define LCD_SHARED_MISO_GPIO BOARD_RC522_MISO_GPIO // RC522 only
 #define LCD_CS_GPIO   9  // Pico GP9
 #define LCD_DC_GPIO   8  // Pico GP8 (also feeds the onboard RGB LED input)
 #define LCD_RST_GPIO  20 // Pico GP12
@@ -52,8 +52,6 @@ void display_init(void)
         gpio_config(&bl_cfg);
         gpio_set_level(LCD_BL_GPIO, 1); // backlight on
     }
-    // GPIO6 is joystick UP on the current screen-only build. RC522 builds
-    // require this MISO line and a different physical UP connection.
     spi_bus_config_t bus_cfg = {
         .sclk_io_num = LCD_SCK_GPIO,
         .mosi_io_num = LCD_MOSI_GPIO,

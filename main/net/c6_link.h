@@ -90,6 +90,7 @@ typedef struct {
     uint8_t channel;
     char sec[8];
     char vendor[C6_VENDOR_MAX_LEN + 1];
+    uint16_t seen_seq; // bumped on every received beacon; a change = fresh rssi
 } c6_monitor_ap_t;
 
 // Passive beacon/probe-response monitor. It disconnects STA, channel-hops
@@ -98,6 +99,11 @@ typedef struct {
 bool c6_link_monitor_start(void);
 bool c6_link_monitor_stop(void);
 int c6_link_monitor_poll(c6_monitor_ap_t *out_aps, int max_aps);
+
+// Restricts channel hopping to the channels set in `mask` (bit N = channel N,
+// 1..13), so APs of interest are revisited more often. 0 hops all channels.
+// Reset to 0 by c6_link_monitor_start().
+void c6_link_monitor_set_hop_mask(uint16_t mask);
 
 // Per-channel occupancy derived from the live monitor AP list: how many
 // distinct APs are currently seen on each 2.4GHz channel, and the strongest
@@ -178,6 +184,7 @@ typedef struct {
     // Best-effort device-kind label (e.g. "Kulaklik", "Saat", "Apple",
     // "Beacon"), or "" if nothing recognizable was advertised.
     char kind[C6_BT_KIND_MAX_LEN + 1];
+    uint16_t seen_seq; // bumped on every received advertisement; a change = fresh rssi
 } c6_bt_device_t;
 
 // Passive BLE advertisement discovery. It never connects or accesses GATT

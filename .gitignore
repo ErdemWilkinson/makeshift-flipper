@@ -24,3 +24,14 @@ ocr/
 asr/
 voice/
 archive/
+
+# Local-only workspace cruft: editor assistant caches, ad-hoc debug logs, a
+# spare ASCII build tree, captured probe logs (personal data), and a stray
+# old UI experiment. None of these belong in the firmware repo.
+.continue/
+.continueignore
+.clangd
+debug.log
+build-c6-current/
+tools/probe_logs/
+ui/

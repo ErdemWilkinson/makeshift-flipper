@@ -217,6 +217,7 @@ static void device_upsert(const c6_bt_device_t *dev)
     for (int i = 0; i < s_device_count; i++) {
         if (memcmp(s_devices[i].addr, dev->addr, 6) == 0) {
             s_devices[i].rssi = dev->rssi;
+            s_devices[i].seen_seq++;
             if (dev->name[0] != '\0') {
                 memcpy(s_devices[i].name, dev->name, sizeof(dev->name));
             }
@@ -235,7 +236,9 @@ static void device_upsert(const c6_bt_device_t *dev)
         }
     }
     if (s_device_count < C6_BT_MAX_DEVICES) {
-        s_devices[s_device_count++] = *dev;
+        s_devices[s_device_count] = *dev;
+        s_devices[s_device_count].seen_seq = 1;
+        s_device_count++;
     }
 }
 
