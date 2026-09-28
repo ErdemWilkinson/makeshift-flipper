@@ -10,16 +10,9 @@
 #include "driver/rmt_encoder.h"
 #include "esp_log.h"
 
-// GPIO14 and GPIO17 do NOT exist as header pins on the actual board
-// (Waveshare ESP32-C6-DEV-KIT-NX; confirmed from the board photo -- its
-// header only breaks out IO0-IO13, IO15, IO18-IO23 plus TXD/RXD). The
-// original IR_RX_GPIO/IR_TX_GPIO values here were never wirable. GPIO4 and
-// GPIO0 are the only header pins left unclaimed by any other module; both
-// are boot-strapping pins, so avoid holding either low externally at reset
-// (same caveat that once blanked the screen when DOWN/PRESS lived on
-// IO0/IO5 -- see SESSION_04). A VS1838B's OUT idles high via its own
-// pull-up, so GPIO4 as IR_RX should not interfere with strapping at reset;
-// GPIO0 as IR_TX only drives the LED after boot, not during reset sampling.
+// The old GPIO14/GPIO17 are unusable on the ESP32-C6-DEV-KIT-NX: GPIO14 has
+// no header pin and GPIO17 is UART0 RXD (wired to the CH343). GPIO4 is a
+// strapping pin; a VS1838B output idles high, so it should not disturb boot.
 #define IR_RX_GPIO 4  // VS1838B OUT
 #define IR_TX_GPIO 0  // IR LED driver input
 
