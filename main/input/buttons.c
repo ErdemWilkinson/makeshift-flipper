@@ -59,8 +59,14 @@ typedef struct {
 
 // RIGHT precedes UP/DOWN so an intentional "enter" wins if two inputs change
 // in the same polling interval.
+//
+// GPIO_PRESS (GPIO3) is intentionally NOT in this list: its wire is unverified
+// on this carrier, and with nothing driving it the pin floats enough to emit
+// spurious PRESS events even with the internal pull-up -- this showed up as the
+// radar highlight cycling on its own. The A button already provides confirm, so
+// the centre press is not needed. Re-add this row once the GPIO3 wire is
+// confirmed and the phantom-press behavior is gone.
 static digital_button_t s_buttons[] = {
-    { GPIO_PRESS, BUTTON_PRESS, true, 0 },
     { GPIO_A,     BUTTON_PRESS, true, 0 },
     { GPIO_RIGHT, BUTTON_RIGHT, true, 0 },
     { GPIO_LEFT,  BUTTON_BACK,  true, 0 },

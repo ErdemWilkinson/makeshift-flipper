@@ -1,86 +1,69 @@
-# RC522 <-> ESP32-C6 Kablolama Haritası
+# Kablolama Haritası — ESP32-C6-DEV-KIT-NX
 
-> **GÜNCEL DEĞİL (2026-09-28):** Joystick UP GPIO13'te sahte basışlar
-> ürettiği için (GPIO13 = dahili USB D+) GPIO6'ya geri alındı. Bu yüzden
-> aşağıdaki tablodaki "MISO -> IO6" artık geçerli değil; RC522 takılmadan
-> önce MISO için yeni bir pin seçilmeli. GPIO12/13'e hiçbir şey bağlama.
+> Lehim yaparken kullanılacak referans. Firmware'deki pin tanımlarıyla
+> birebir aynıdır (kaynak: `main/hardware_profile.h`, `display.c`,
+> `buttons.c`, `rc522.c`, `rdm6300.c`, `ir_driver.c`, `vibration.c`).
+> Tarih: 2026-09-28.
 
-> Lehimlemeye başlamadan önce referans için. Bu dosya sadece dokümantasyondur,
-> hiçbir kod veya ayar değiştirmez. Tarih: 2026-09-28.
+## Asla kablo bağlama
 
-## Önce: dokunma, olduğu gibi kalsın
+| Pin | Neden |
+|---|---|
+| IO12, IO13 | Kartın dahili USB'si (D−/D+). IO13'e UP bağlanınca 1 basış 5 sayıldı ve USB portu kapandı. |
+| TXD, RXD (GPIO16/17) | CH343 USB-seri çipine giden konsol hattı. |
 
-Ekranın (ST7789, Pico-LCD-1.3) C6'ya giden kabloları **değiştirilmeyecek**:
+## Zaten bağlı olanlar (dokunma)
 
-| Ekran fonksiyonu | C6 GPIO |
-|---|---:|
-| SCK | IO18 |
-| MOSI | IO19 |
-| CS | IO9 |
-| DC | IO8 |
-| RST | IO20 |
-| Backlight (BL) | IO21 |
+| Parça | Sinyal | C6 pini |
+|---|---|---|
+| Ekran | SCK / MOSI | IO18 / IO19 |
+| Ekran | CS / DC / RST / BL | IO9 / IO8 / IO20 / IO21 |
+| Joystick | UP / DOWN / LEFT / RIGHT | IO6 / IO11 / IO23 / IO22 |
+| Buton | A | IO10 |
+| Joystick | Orta basış (kablosu doğrulanmadı) | IO3 |
 
-Bunlara hiç dokunma. RC522'nin SCK ve MOSI hatları aşağıda bu ikisine
-**paralel** eklenecek (aynı elektriksel noktaya ikinci bir kablo).
+## Takılacak modüller
 
-## RC522 -> C6 tam bağlantı tablosu
+| Modül | Modül pini | C6 pini | Not |
+|---|---|---|---|
+| RC522 | SCK | IO18 | Ekranın SCK'siyle **ortak hat** |
+| RC522 | MOSI | IO19 | Ekranın MOSI'siyle **ortak hat** |
+| RC522 | MISO | **IO5** | Sadece RC522 |
+| RC522 | SDA (CS) | **IO7** | Sadece RC522 |
+| RC522 | RST | **IO2** | Sadece RC522 |
+| RC522 | 3.3V / GND | 3V3 / GND | **5V değil.** Ekranın 3.3V/GND noktası da olur |
+| RDM6300 | TX | **IO15** | **Mutlaka** 5V→3.3V level shifter üzerinden. Modül 5V ile beslenir |
+| IR alıcı (VS1838B) | OUT | **IO4** | 3.3V ile besle |
+| IR verici | LED sürücü girişi | **IO0** | Transistör/sürücü üzerinden, LED'i doğrudan pine bağlama |
+| Titreşim motoru | Sürücü girişi | **IO1** | Sürücü + motora ters diyot şart, motoru doğrudan pine bağlama |
 
-| RC522 pini | C6 GPIO | Paylaşımlı mı? | Not |
-|---|---:|---|---|
-| SCK  | **IO18** | Evet (ekranla) | Ekranın SCK kablosuna paralel bağlanacak |
-| MOSI | **IO19** | Evet (ekranla) | Ekranın MOSI kablosuna paralel bağlanacak |
-| MISO | **IO6**  | Hayır | C6'da tamamen boş, sadece RC522'ye ait |
-| SDA / CS | **IO7** | Hayır | C6'da tamamen boş, sadece RC522'ye ait |
-| RST  | **IO2**  | Hayır | C6'da tamamen boş, sadece RC522'ye ait |
-| 3.3V | **3V3**  | Hayır (ayrı nokta kullanılabilir) | **Kesinlikle 5V değil** |
-| GND  | **GND**  | Hayır (ayrı nokta kullanılabilir) | Board'da birden fazla GND noktası varsa herhangi biri olur |
+3.3V ve GND güç hatlarıdır. Birden fazla modül aynı noktadan beslenebilir.
 
-Toplam 7 tel: 2 tanesi paylaşımlı (SCK, MOSI), 5 tanesi RC522'ye özel tek kablo
-(MISO, CS/SDA, RST, 3.3V, GND).
+## Ortak hatlar (SCK, MOSI) nasıl bağlanır
 
-## Paylaşımlı iki hat (SCK, MOSI) için lehimleme yöntemi
+C6'nın tek SPI hattı ekranla RC522 arasında paylaşılıyor. Bir header
+pinine iki jumper güvenle oturmaz, o yüzden:
 
-C6'nın IO18/IO19 pinlerine zaten ekranın kablosu lehimli/takılı. Aynı pine
-ikinci bir jumper ucu güvenle oturmayabilir, bu yüzden **breadboard yoksa**
-şu yöntem izlenecek:
+- **Breadboard varsa:** Ekranın IO18 kablosunu ve RC522 SCK kablosunu aynı
+  breadboard satırına tak. MOSI (IO19) için de aynısını yap.
+- **Breadboard yoksa:** RC522 SCK telini ekranın SCK teline lehimle, tek uçla
+  IO18'e bağla. MOSI için de aynısını yap.
 
-1. RC522'nin SCK teli ile ekranın SCK teli (C6 IO18 ucundaki serbest kısım)
-   birbirine **bükülüp kalaylanarak lehimlenir** -- iki tel tek bir birleşim
-   noktası olur.
-2. Bu birleşim noktasından tek bir uç C6'nın IO18 pinine lehimlenir/takılır.
-3. Aynı işlem MOSI için tekrarlanır: RC522 MOSI teli + ekran MOSI teli
-   birleştirilip tek uçla C6 IO19'a bağlanır.
+## Pinler neden böyle dağıtıldı
 
-Breadboard varsa daha kolay: ekranın IO18 kablosunu ve RC522'nin SCK kablosunu
-aynı breadboard satırına tak (satırdaki tüm delikler elektriksel olarak
-birbirine bağlıdır) -- lehim gerekmez. Aynısını MOSI için tekrarla.
+- Kartta boş kalan pinler tam 7 tane (IO0, 1, 2, 4, 5, 7, 15) ve 7 sinyal
+  gerekiyor.
+- IO4, IO5 ve IO15 strap (açılış ayarı) pinleri. Bunlara sadece boşta
+  yüksek kalan girişler verildi (RC522 MISO, IR alıcı, RDM6300). Böylece
+  reset anında hiçbir modül bu pinleri düşük çekmez.
+- Çıkışlar (RC522 CS/RST, IR verici, motor) strap olmayan IO0, IO1, IO2 ve
+  IO7'ye verildi. Sürücü girişlerinde genelde pull-down olduğu için bunlar
+  strap pinlerinde sorun çıkarabilirdi.
 
-## Diğer beş hat (MISO, CS, RST, 3.3V, GND)
+## Takıldıktan sonra
 
-Bunlar C6'da tamamen boş pinler, tek bir jumper kablosuyla doğrudan
-bağlanır. Paylaşım yok, lehim/breadboard karmaşası yok.
-
-## Bağlama bittikten sonra yapılacak (yazılım tarafı)
-
-Kablo tamamlanıp RC522'nin çalıştığı doğrulanana kadar bu adım
-**yapılmayacak**. Hazır olunca [`main/hardware_profile.h`](main/hardware_profile.h)
-içindeki şu satır:
-
-```c
-#define BOARD_HAS_RC522 0
-```
-
-`1` yapılıp firmware yeniden derlenip flashlanacak. Bu satır değişmeden RC522
-kodu firmware'de tamamen pasif kalır -- kablo bitmiş olsa bile cihaz onu
-kullanmaz.
-
-## Neden bu pinler seçildi (arka plan)
-
-- Joystick UP daha önce IO6'daydı, RC522 MISO da IO6 istiyordu -- çakışma.
-  UP, IO13'e taşındı (bu oturumda), IO6 tamamen RC522 MISO'ya ayrıldı.
-- IO18/IO19 (SCK/MOSI) zaten C6'da tek SPI bus'ı (SPI2), ekran da onu
-  kullanıyor -- C6'da ikinci bir genel amaçlı SPI host yok, bu yüzden RC522
-  ekranla aynı hattı paylaşmak zorunda. Bu tasarım gereği, hata değil.
-- IO7 (CS) ve IO2 (RST) RC522'nin kendi ayrı sinyalleri, hiçbir şeyle
-  paylaşılmıyor, hep boştular.
+- **RC522:** `main/hardware_profile.h` içinde `BOARD_HAS_RC522` değeri `1`
+  yapılıp flashlanmalı. RFID menüsünde kart okutulunca UID görünmeli.
+  "Hatalar" menüsünde `RC522_SCAN_ERROR` varsa bağlantılardan biri eksik.
+- **RDM6300, IR, motor:** Kod her açılışta bu pinleri zaten ayarlıyor, ek
+  bir ayar gerekmez.

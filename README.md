@@ -105,41 +105,35 @@ USB-serial chip), so they are not free for peripherals.
 - **GPIO12/GPIO13** are the C6's native USB D-/D+ lines. Using GPIO13 for
   joystick UP disabled the native USB port and produced 4-5 phantom UP
   presses per real press. A longer debounce did not help.
-- **GPIO4, GPIO5, GPIO8, GPIO9 and GPIO15** are strapping pins. A device
-  that holds one low at reset can change the boot mode.
+- **GPIO4, GPIO5, GPIO8, GPIO9 and GPIO15** are strapping pins. Only
+  inputs whose source idles high or high-Z are placed on the free ones, so
+  no module can pull a strap pin low at reset.
 
-The active settings are in [`main/hardware_profile.h`](main/hardware_profile.h):
-joystick UP uses GPIO6 and `BOARD_HAS_RC522` is `0`. The display is
-write-only, so SPI MISO is not claimed. RC522 MISO also wants GPIO6, so
-enabling RC522 first requires choosing another MISO pin. Connecting an
-RC522 does not enable it on its own; `BOARD_HAS_RC522` must also be set to
-`1`.
+The active settings are in [`main/hardware_profile.h`](main/hardware_profile.h).
+After the LCD and controls, exactly seven header pins are free (0, 1, 2, 4,
+5, 7, 15), and the planned modules need seven signals. The soldering
+reference is [WIRING_MAP_RC522.md](WIRING_MAP_RC522.md).
 
-| Current firmware assignment | ESP32-C6 GPIO | Source |
+| Firmware assignment | ESP32-C6 GPIO | Wired? |
 | --- | ---: | --- |
-| ST7789 SCK / MOSI / CS / DC / RST / backlight | 18 / 19 / 9 / 8 / 20 / 21 | [`display.c`](main/ui/display.c) |
-| Joystick UP / DOWN / LEFT / RIGHT | 6 / 11 / 23 / 22 | [`buttons.c`](main/input/buttons.c) |
-| A button / B button | 10 / disconnected and disabled | [`buttons.c`](main/input/buttons.c) |
-| Joystick centre press (firmware assignment, wire unverified) | 3 | [`buttons.c`](main/input/buttons.c) |
-| Vibration motor driver output | 15 | [`vibration.c`](main/feedback/vibration.c) |
-| IR receiver (VS1838B) / IR LED driver | 4 / 0 | [`ir_driver.c`](main/ir/ir_driver.c) |
+| ST7789 SCK / MOSI / CS / DC / RST / backlight | 18 / 19 / 9 / 8 / 20 / 21 | Yes |
+| Joystick UP / DOWN / LEFT / RIGHT | 6 / 11 / 23 / 22 | Yes |
+| A button / B button | 10 / disabled | Yes / no |
+| Joystick centre press | 3 | Wire unverified |
+| RC522 SCK / MOSI (shared with LCD) | 18 / 19 | No |
+| RC522 MISO / CS / RST | 5 / 7 / 2 | No |
+| RDM6300 TX (through a 5 V-to-3.3 V level shifter) | 15 | No |
+| IR receiver (VS1838B) / IR LED driver | 4 / 0 | No |
+| Vibration motor driver | 1 | No |
 
 Ordinary menus use UP/DOWN to move, RIGHT or A to select and LEFT to go back.
 On the text keyboard, a short LEFT/RIGHT moves horizontally, a long LEFT
 exits, a long RIGHT selects, and A selects immediately. The centre press is
 not needed for the current one-handed control scheme.
 
-The vibration motor driver now uses GPIO15 instead of GPIO3, so GPIO3 is
-left to the centre press. IR moved to GPIO4 (RX) and GPIO0 (TX) because the
-old GPIO14/GPIO17 are unusable on this board. GPIO15 and GPIO4 are
-strapping pins, so a motor driver or IR receiver on them must not pull them
-low at reset. The motor, IR and RC522 are not wired and remain unverified on
-real hardware.
-
-Other module assignments remain source-level plans, not evidence of working
-peripherals: RDM6300 receive is GPIO1 through a 5 V-to-3.3 V level shifter;
-RC522 would share LCD SPI SCK/MOSI with separate CS GPIO7 and reset GPIO2
-(MISO pin to be chosen, since GPIO6 is UP). Do not power an RC522 from 5 V. The old TCA9554 button map in
+`BOARD_HAS_RC522` is `0` until the reader is wired. Connecting it does not
+enable it on its own. Do not power an RC522 from 5 V. RC522, RDM6300, IR and
+the motor are unverified on real hardware. The old TCA9554 button map in
 [C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) is historical
 and **does not describe the current direct-GPIO build**. Use the source and
 [HARDWARE_TEST_MATRIX.md](HARDWARE_TEST_MATRIX.md) before changing wires.
