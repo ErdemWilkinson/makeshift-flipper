@@ -15,7 +15,7 @@ MT_TEST(keyboard_left_short_moves_and_long_exits)
         g_fake_gpio_level[i] = 1;
     }
     buttons_init();
-    MT_CHECK((g_configured_gpio_mask & (1ULL << 6)) != 0);
+    MT_CHECK((g_configured_gpio_mask & (1ULL << BOARD_UP_GPIO)) != 0);
     MT_CHECK((g_configured_gpio_mask & (1ULL << 11)) != 0);
 
     g_fake_time_us = 100000;
@@ -33,10 +33,11 @@ MT_TEST(keyboard_left_short_moves_and_long_exits)
     g_fake_time_us = 300000;
     g_fake_gpio_level[23] = 0;
     MT_CHECK_EQ_INT(buttons_poll_keyboard(), BUTTON_COUNT);
-    g_fake_time_us = 950000;
+    // KEYBOARD_LEFT_HOLD_US is 1500000; hold past it to trigger the exit.
+    g_fake_time_us = 300000 + KEYBOARD_LEFT_HOLD_US + 50000;
     MT_CHECK_EQ_INT(buttons_poll_keyboard(), BUTTON_BACK);
     MT_CHECK_EQ_INT(buttons_poll_keyboard(), BUTTON_COUNT);
-    g_fake_time_us = 1000000;
+    g_fake_time_us += 50000;
     g_fake_gpio_level[23] = 1;
     MT_CHECK_EQ_INT(buttons_poll_keyboard(), BUTTON_COUNT);
 }

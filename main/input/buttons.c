@@ -46,6 +46,11 @@ static bool s_keyboard_right_pending;
 static int64_t s_keyboard_right_started_us;
 static bool s_keyboard_left_pending;
 static int64_t s_keyboard_left_started_us;
+// Set once a hold has already fired PRESS/BACK, so the still-held key isn't
+// re-armed as a fresh press-then-release (which used to read as a spurious
+// short RIGHT/LEFT the instant the user finally released it after a hold).
+static bool s_keyboard_right_consumed;
+static bool s_keyboard_left_consumed;
 
 typedef struct {
     gpio_num_t pin;
@@ -146,6 +151,8 @@ void buttons_keyboard_reset(void)
 {
     s_keyboard_right_pending = false;
     s_keyboard_left_pending = false;
+    s_keyboard_right_consumed = false;
+    s_keyboard_left_consumed = false;
 }
 
 // Keyboard input, rewritten to track raw pin levels directly instead of
@@ -173,13 +180,17 @@ button_id_t buttons_poll_keyboard(void)
     bool left_down  = (gpio_get_level(GPIO_LEFT) == 0);
 
     // --- RIGHT press/hold ---
-    if (right_down && !s_keyboard_right_pending) {
+    if (!right_down) {
+        s_keyboard_right_consumed = false; // released: arm for the next press
+    }
+    if (right_down && !s_keyboard_right_pending && !s_keyboard_right_consumed) {
         s_keyboard_right_pending = true;
         s_keyboard_right_started_us = now;
     } else if (right_down && s_keyboard_right_pending) {
         if (now - s_keyboard_right_started_us >= KEYBOARD_RIGHT_HOLD_US) {
-            s_keyboard_right_pending = false; // consumed as a hold
-            return BUTTON_PRESS;              // long RIGHT = confirm
+            s_keyboard_right_pending = false;  // consumed as a hold
+            s_keyboard_right_consumed = true;  // ignore until the key is released
+            return BUTTON_PRESS;               // long RIGHT = confirm
         }
     } else if (!right_down && s_keyboard_right_pending) {
         s_keyboard_right_pending = false;
@@ -187,12 +198,16 @@ button_id_t buttons_poll_keyboard(void)
     }
 
     // --- LEFT press/hold ---
-    if (left_down && !s_keyboard_left_pending) {
+    if (!left_down) {
+        s_keyboard_left_consumed = false; // released: arm for the next press
+    }
+    if (left_down && !s_keyboard_left_pending && !s_keyboard_left_consumed) {
         s_keyboard_left_pending = true;
         s_keyboard_left_started_us = now;
     } else if (left_down && s_keyboard_left_pending) {
         if (now - s_keyboard_left_started_us >= KEYBOARD_LEFT_HOLD_US) {
             s_keyboard_left_pending = false;  // consumed as a hold
+            s_keyboard_left_consumed = true;  // ignore until the key is released
             return BUTTON_BACK;               // long LEFT = exit
         }
     } else if (!left_down && s_keyboard_left_pending) {
