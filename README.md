@@ -95,8 +95,15 @@ capability and misuse-boundary discussion, see
 
 ## Current hardware profile
 
+The board is a Waveshare **ESP32-C6-DEV-KIT-NX**, whose header only breaks
+out GND/TXD/RXD/3V3/RST/5V plus IO0-IO13, IO15 and IO18-IO23 — **GPIO14,
+GPIO16 and GPIO17 have no physical header pin on this board** and cannot be
+wired to anything, despite appearing in some historical planning docs and an
+earlier, uncorrected revision of this section. Confirmed from the board
+photo; treat any reference to GPIO14/16/17 elsewhere as stale.
+
 The active settings are in [`main/hardware_profile.h`](main/hardware_profile.h):
-joystick UP uses GPIO16 and `BOARD_HAS_RC522` is `0`. UP was moved off GPIO6
+joystick UP uses GPIO13 and `BOARD_HAS_RC522` is `0`. UP was moved off GPIO6
 (2026-09-28) specifically so GPIO6 is free for RC522 MISO; the two pin
 conflicts that used to exist in this build are now resolved in firmware
 (wiring must still follow, see below). The display is write-only on this
@@ -107,10 +114,11 @@ physical rewiring.
 | Current firmware assignment | ESP32-C6 GPIO | Source |
 | --- | ---: | --- |
 | ST7789 SCK / MOSI / CS / DC / RST / backlight | 18 / 19 / 9 / 8 / 20 / 21 | [`display.c`](main/ui/display.c) |
-| Joystick UP / DOWN / LEFT / RIGHT | 16 / 11 / 23 / 22 | [`buttons.c`](main/input/buttons.c) |
+| Joystick UP / DOWN / LEFT / RIGHT | 13 / 11 / 23 / 22 | [`buttons.c`](main/input/buttons.c) |
 | A button / B button | 10 / disconnected and disabled | [`buttons.c`](main/input/buttons.c) |
 | Joystick centre press (firmware assignment, wire unverified) | 3 | [`buttons.c`](main/input/buttons.c) |
 | Vibration motor driver output | 15 | [`vibration.c`](main/feedback/vibration.c) |
+| IR receiver (VS1838B) / IR LED driver | 4 / 0 | [`ir_driver.c`](main/ir/ir_driver.c) |
 
 Ordinary menus use UP/DOWN to move, RIGHT or A to select and LEFT to go back.
 On the text keyboard, a short LEFT/RIGHT moves horizontally, a long LEFT
@@ -119,22 +127,29 @@ not needed for the current one-handed control scheme.
 
 **Pin conflicts resolved in firmware (2026-09-28):** two GPIOs used to be
 double-booked in source. (1) Joystick UP and RC522 MISO both wanted GPIO6 —
-UP now uses GPIO16 instead, leaving GPIO6 free for RC522 MISO alone.
+UP now uses GPIO13 instead, leaving GPIO6 free for RC522 MISO alone.
 (2) The vibration driver and the joystick centre press both wanted GPIO3 —
 the motor driver now uses GPIO15 instead, leaving GPIO3 to the centre press.
-GPIO16 and GPIO15 were picked because neither is a boot-strapping pin and
-neither was claimed by anything else on this board; GPIO15 in particular
-must still not be pulled low externally at reset. **This is a firmware-side
+An earlier pass at this fix put UP on GPIO16, which turned out not to exist
+on this board's header at all (see above); GPIO13 is the corrected choice —
+unclaimed elsewhere and not a boot-strapping pin. GPIO15 for the motor is
+similarly unclaimed and not a strap pin, but must not be pulled low
+externally at reset. IR was also moved off GPIO14/GPIO17, which likewise
+don't exist on this header, onto GPIO4 (RX) and GPIO0 (TX) — the only
+remaining unclaimed pins, both boot-strapping (same caveat as GPIO0/GPIO5
+once causing a blank screen when DOWN/PRESS lived there, see
+SESSION_04_STATUS_NEXT.md); a VS1838B's output idles high via its own
+pull-up so this should not interfere with reset strapping in practice, but
+it is unverified on real hardware. **All of this is a firmware-side
 reassignment only — the physical wires have not been moved.** Before relying
-on RC522 or the vibration motor, wire UP to GPIO16, RC522 MISO to GPIO6, and
-the motor driver input to GPIO15, then revalidate all three (UP, RC522,
-motor) on real hardware.
+on RC522, the vibration motor or IR, wire UP to GPIO13, RC522 MISO to GPIO6,
+the motor driver input to GPIO15, and the IR receiver/LED-driver to
+GPIO4/GPIO0, then revalidate each on real hardware.
 
 Other module assignments remain source-level plans, not evidence of working
 peripherals: RDM6300 receive is GPIO1 through a 5 V-to-3.3 V level shifter;
-IR receive/transmit are GPIO14/GPIO17; RC522 would share LCD SPI SCK/MOSI
-with separate CS GPIO7, reset GPIO2 and MISO GPIO6. Do not power an RC522
-from 5 V. The old TCA9554 button map in
+RC522 would share LCD SPI SCK/MOSI with separate CS GPIO7, reset GPIO2 and
+MISO GPIO6. Do not power an RC522 from 5 V. The old TCA9554 button map in
 [C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) is historical
 and **does not describe the current direct-GPIO build**. Use the source and
 [HARDWARE_TEST_MATRIX.md](HARDWARE_TEST_MATRIX.md) before changing wires.
