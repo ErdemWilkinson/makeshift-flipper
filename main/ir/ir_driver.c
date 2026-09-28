@@ -10,9 +10,18 @@
 #include "driver/rmt_encoder.h"
 #include "esp_log.h"
 
-// Free C6-Pico header pins in the fixed standalone wiring plan.
-#define IR_RX_GPIO 14 // Pico GP6; VS1838B OUT
-#define IR_TX_GPIO 17 // Pico GP1; IR LED driver input (avoids GPIO15 strap)
+// GPIO14 and GPIO17 do NOT exist as header pins on the actual board
+// (Waveshare ESP32-C6-DEV-KIT-NX; confirmed from the board photo -- its
+// header only breaks out IO0-IO13, IO15, IO18-IO23 plus TXD/RXD). The
+// original IR_RX_GPIO/IR_TX_GPIO values here were never wirable. GPIO4 and
+// GPIO0 are the only header pins left unclaimed by any other module; both
+// are boot-strapping pins, so avoid holding either low externally at reset
+// (same caveat that once blanked the screen when DOWN/PRESS lived on
+// IO0/IO5 -- see SESSION_04). A VS1838B's OUT idles high via its own
+// pull-up, so GPIO4 as IR_RX should not interfere with strapping at reset;
+// GPIO0 as IR_TX only drives the LED after boot, not during reset sampling.
+#define IR_RX_GPIO 4  // VS1838B OUT
+#define IR_TX_GPIO 0  // IR LED driver input
 
 #define RMT_RESOLUTION_HZ 1000000 // 1 tick = 1us, matches ir_nec.h's *_us fields
 
