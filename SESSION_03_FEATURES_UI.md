@@ -100,6 +100,11 @@ saldırı kodu YOK):
 - **Kanal Haritası** — 1-13 kanal doluluğu çubuk grafik (AP sayısı + en iyi RSSI).
 - **Çerçeve İstat** — 802.11 frame-tipi sayaçları (beacon/probe/data/ctrl).
 - **Probe Yakala** — cihazların aradığı SSID'ler (`monitor_probe_poll`).
+- **WiFi Radar** — BLE Radar ile aynı teknik (bir tur dön → açı kalibrasyonu,
+  canlı RSSI → mesafe), bu sefer BLE cihazları yerine `c6_link_monitor_poll`
+  ile görülen Wi-Fi erişim noktaları için. `action_wifi_radar`,
+  `wifi_radar_update`, `wifi_radar_render` (main.c). Yakından uzağa sıralı,
+  UP=yeniden kalibre, SOL=çık.
 - **BLE Keşif** — BT Tara'ya kısayol.
 
 ## UI tasarım detayları (display.c)
