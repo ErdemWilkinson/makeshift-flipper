@@ -21,6 +21,7 @@
 #include "rfid/rdm6300.h"
 #include "rfid/rfid_library.h"
 #include "feedback/vibration.h"
+#include "feedback/battery.h"
 #include "ui/display.h"
 #include "ui/menu.h"
 #include "ui/text_entry.h"
@@ -2144,6 +2145,23 @@ static void radar_render(const char *title, int highlight, float sweep_frac,
         display_draw_line(cx, cy, sx, sy, DISPLAY_COLOR_ACCENT);
     }
 
+    // Sonar-style "ping": a ring expands out from the centre and fades,
+    // looping continuously -- the same expanding-circle look as the boot
+    // splash, but tied to wall-clock time so it animates smoothly across
+    // repeated radar_render() calls instead of a fixed frame count.
+    {
+        const int64_t period_us = 2200000; // one full expand-and-fade cycle
+        int64_t phase = esp_timer_get_time() % period_us;
+        float frac = (float)phase / (float)period_us; // 0..1
+        int ring_r = (int)(frac * r_outer);
+        if (ring_r > 2) {
+            display_color_t ring_col = (frac < 0.4f) ? DISPLAY_COLOR_OK
+                                      : (frac < 0.75f) ? DISPLAY_RGB(4, 24, 18)
+                                                        : DISPLAY_COLOR_DIM;
+            display_draw_circle(cx, cy, ring_r, ring_col);
+        }
+    }
+
     display_fill_circle(cx, cy, 3, DISPLAY_COLOR_OK); // you are here
 
     // For the position map, find the farthest triangulated target so the whole
@@ -2606,6 +2624,11 @@ static void action_error_history(void)
 // to its parent (menu_link_submenu() below) or exits the active screen;
 // RIGHT enters/selects and UP/DOWN move through items.
 
+// Forward declaration: the icon painters are defined further down (near the
+// other menu-drawing helpers), but the main menu's "Bluetooth" item below
+// references icon_bt before that point.
+static void icon_bt(int x, int y, display_color_t col);
+
 static menu_item_t s_rfid_menu_items[] = {
     {"125kHz Oku",   action_rfid_125khz, NULL, NULL},
     {"13.56MHz Oku", action_nfc_1356mhz, NULL, NULL},
@@ -2641,8 +2664,8 @@ static menu_item_t s_security_lab_menu_items[] = {
     {"Güvenli Kullanım", action_security_lab_guide, NULL, NULL},
 };
 
-// Passive observation shortcuts for authorized lab equipment. These reuse
-// the existing receive-only actions; no packet transmission is performed.
+// Note: This menu now contains active packet transmission alongside
+// the existing receive-only actions.
 static menu_item_t s_hacking_menu_items[] = {
     {"WiFi İzleme (RX)", action_wifi_monitor, NULL, NULL},
     {"Kanal Haritası (RX)", action_wifi_channel_map, NULL, NULL},
@@ -2651,6 +2674,7 @@ static menu_item_t s_hacking_menu_items[] = {
     {"WiFi Radar (RX)", action_wifi_radar, NULL, NULL},
     {"BLE Keşif (RX)", action_bt_scan, NULL, NULL},
 };
+
 
 // --- Main-menu icons (16x16 cell, drawn with basic primitives) -------------
 // Each paints into the cell at (x,y) using `col`. Kept simple and monochrome
@@ -2752,6 +2776,57 @@ static void icon_about(int x, int y, display_color_t col)
     display_draw_line(x + 7, y + 5, x + 7, y + 9, col);
 }
 
+// A small battery glyph: a 20x9 body with a cap nub, filled from the left in
+// proportion to `percent` (0..100). Drawn with its top-left at (x, y). When
+// the fuel gauge has no reading (divider unwired), pass percent < 0 to draw an
+// empty outline instead of a misleading fill.
+static void draw_battery_glyph(int x, int y, int percent, display_color_t col)
+{
+    const int bw = 20, bh = 9;
+    // Outline.
+    display_draw_line(x, y, x + bw, y, col);
+    display_draw_line(x, y + bh, x + bw, y + bh, col);
+    display_draw_line(x, y, x, y + bh, col);
+    display_draw_line(x + bw, y, x + bw, y + bh, col);
+    // Positive-terminal cap on the right.
+    display_fill_rect(x + bw + 1, y + 2, 2, bh - 3, col);
+
+    if (percent < 0) {
+        return; // unknown: empty outline only
+    }
+    if (percent > 100) percent = 100;
+    int inner_w = bw - 4;
+    int fill = (inner_w * percent) / 100;
+    if (fill > 0) {
+        display_fill_rect(x + 2, y + 2, fill, bh - 3, col);
+    }
+}
+
+// Draws the battery badge (glyph + "NN%") right-aligned so its right edge sits
+// at x_right, vertically at y. Reads the fuel gauge itself. Colour shifts to
+// the error red below 15%. Safe to call from any full-screen redraw.
+static void draw_status_battery(int x_right, int y, display_color_t fg)
+{
+    battery_reading_t bat = battery_read();
+    char txt[8];
+    display_color_t col = fg;
+    if (bat.valid) {
+        if (bat.percent <= 15) {
+            col = DISPLAY_COLOR_ERROR;
+        }
+        snprintf(txt, sizeof(txt), "%d%%", bat.percent);
+    } else {
+        snprintf(txt, sizeof(txt), "--");
+    }
+    int text_px = (int)strlen(txt) * 8;
+    int glyph_w = 23; // body + cap
+    int total = glyph_w + 3 + text_px;
+    int x = x_right - total;
+    if (x < 0) x = 0;
+    draw_battery_glyph(x, y, bat.valid ? bat.percent : -1, col);
+    display_draw_text_px(x + glyph_w + 3, y - 3, txt, col, display_get_background());
+}
+
 // Indices [0..5] below must stay in sync with the menu_link_submenu()
 // calls in app_main() -- reordering these items without updating those
 // calls (or their hardcoded indices) makes the moved category silently
@@ -2796,6 +2871,17 @@ static void render_menu_themed(const menu_t *menu)
     }
     display_set_background(bg);
     menu_render(menu);
+    // Overlay the battery badge in the banner's right corner. menu_render()
+    // has already flushed; draw on top and flush again (menus are static, so
+    // the extra flush is cheap). The banner text is centered, leaving the
+    // right corner free. Use the banner's own foreground so it reads on the
+    // accent-filled bar.
+    if (menu->banner) {
+        display_color_t badge_fg = menu->fill_selection ? DISPLAY_COLOR_ACCENT_TEXT
+                                                        : menu->selected_text_color;
+        draw_status_battery(DISPLAY_WIDTH_PX - 2, 4, badge_fg);
+        display_flush();
+    }
 }
 
 static void render_scan_screen(const char *title)
@@ -2868,6 +2954,7 @@ void app_main(void)
     }
     rdm6300_init();
     vibration_init();
+    battery_init();
     c6_link_init();
 
     menu_init(&s_main_menu, s_main_menu_items,
