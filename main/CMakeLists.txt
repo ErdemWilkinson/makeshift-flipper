@@ -15,6 +15,7 @@ idf_component_register(
         "rfid/rdm6300.c"
         "rfid/rfid_library.c"
         "feedback/vibration.c"
+        "feedback/battery.c"
         "diag/diag.c"
         # C6-standalone on-chip radio: net/c6_link.c calls
         # esp_wifi_* directly (init/scan/connect/monitor), net/radio_ble.c
@@ -25,6 +26,8 @@ idf_component_register(
         # protocol and stay out.
         "net/c6_link.c"
         "net/radio_ble.c"
+        # net/wifi_injection.c: dosya diskte duruyor ama derlemeye dahil değil
+        # (menüye bağlı değil, çağrılmıyor). Derleme listesinden çıkarıldı.
     INCLUDE_DIRS
         "."
         "ui"
@@ -41,6 +44,7 @@ idf_component_register(
         esp_driver_rmt
         esp_driver_spi
         esp_hw_support
+        esp_adc
         esp_lcd
         esp_timer
         log

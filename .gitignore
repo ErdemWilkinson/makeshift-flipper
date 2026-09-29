@@ -35,3 +35,12 @@ debug.log
 build-c6-current/
 tools/probe_logs/
 ui/
+
+# Active Wi-Fi packet injection (deauth) source is kept local only and out of
+# the public repository: the project README states the device performs no
+# deauthentication/injection, so this code must not ship in the repo. The files
+# stay on disk but are not compiled (removed from main/CMakeLists.txt).
+main/net/wifi_injection.c
+main/net/wifi_injection.h
+main/net/net_test.c
+main/net/net_test.h
