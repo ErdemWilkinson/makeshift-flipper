@@ -27,20 +27,21 @@ profile and conflicts are described below.
 
 ## What the current firmware exposes
 
-The main menu has eight sections: **RFID / NFC**, **Kızılötesi** (IR),
-**WiFi**, **Bluetooth**, **SecLab**, **Hacking**, **Hatalar** (errors) and
-**Hakkında** (about). Each menu item's exact label is in
-[`main/main.c`](main/main.c).
+The device UI is in Turkish; the tables below give each menu and item an
+English translation. The main menu has eight sections: **RFID / NFC**,
+**Kızılötesi** (Infrared), **WiFi**, **Bluetooth**, **SecLab**, **Hacking**,
+**Hatalar** (Errors) and **Hakkında** (About). Each menu item's exact on-screen
+label is in [`main/main.c`](main/main.c).
 
-| Menu | Items | Current software behavior | Validation boundary |
+| Menu | Items (label — meaning) | Current software behavior | Validation boundary |
 | --- | --- | --- | --- |
-| RFID / NFC | 125kHz Oku · 13.56MHz Oku · 13.56MHz Kopyala · 125kHz Kaydet · 13.56MHz Kaydet · RFID Kütüphanesi | 125 kHz RDM6300 reading and saved-tag library; 13.56 MHz RC522 read/save/limited MIFARE Classic clone workflow in source | External readers not validated. RC522 initialization is disabled in the current screen-only profile. Do not expect its menu actions to work. |
-| Kızılötesi | IR Gönderim Testi · IR Öğren · IR Kütüphanesi · IR Yön Bul (Yok) | NEC send, receive/learn and saved-code library | IR receiver and LED driver need physical testing. “IR Yön Bul (Yok)” explicitly reports unavailable. |
-| WiFi | WiFi Tara/Bağlan · WiFi Durum · WiFi Ağım (AP) | Scan (sorted nearest-first), manual station connection/status, a local WPA2 access point (“WiFi Ağım”) with a Wi-Fi-join QR code | STA status does not prove Internet access or reveal the router's client count. 2.4 GHz only (the C6 has no 5 GHz radio), so 5 GHz networks/hotspots never appear. |
-| Bluetooth | BT Tara · BLE Radar | Active BLE scan with a device list (named-first, then nearest-first), a best-effort device-kind guess, iBeacon/Eddystone decoding, a privacy view (address type + manufacturer/company-ID), and **BLE Radar** direction/range mapping | No pairing, manual connection or GATT access. Active scan emits scan-request packets (like a phone). Radar bearings/distances are coarse RSSI estimates, not exact meters/degrees. |
-| SecLab | Güvenli Kullanım | Authorized-use guidance | Informational screen only. |
-| Hacking | WiFi İzleme · Kanal Haritası · Çerçeve İstat · Probe Yakala · WiFi Radar · BLE Keşif · Birleşik Radar | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, **WiFi Radar** for nearby access points, a shortcut to passive BLE discovery, and **Birleşik Radar** (a combined BLE + Wi-Fi-probe walk-around radar) | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
-| Hatalar / Hakkında | — | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
+| RFID / NFC | 125kHz Oku (read) · 13.56MHz Oku (read) · 13.56MHz Kopyala (clone) · 125kHz Kaydet (save) · 13.56MHz Kaydet (save) · RFID Kütüphanesi (library) | 125 kHz RDM6300 reading and saved-tag library; 13.56 MHz RC522 read/save/limited MIFARE Classic clone workflow in source | External readers not validated. RC522 initialization is disabled in the current screen-only profile. Do not expect its menu actions to work. |
+| Kızılötesi (Infrared) | IR Gönderim Testi (send test) · IR Öğren (learn) · IR Kütüphanesi (library) · IR Yön Bul (Yok) (direction-find — unavailable) | NEC send, receive/learn and saved-code library | IR receiver and LED driver need physical testing. “IR Yön Bul (Yok)” explicitly reports itself unavailable. |
+| WiFi | WiFi Tara/Bağlan (scan/connect) · WiFi Durum (status) · WiFi Ağım (my AP) | Scan (sorted nearest-first), manual station connection/status, a local WPA2 access point (“WiFi Ağım” = *my network*) with a Wi-Fi-join QR code | STA status does not prove Internet access or reveal the router's client count. 2.4 GHz only (the C6 has no 5 GHz radio), so 5 GHz networks/hotspots never appear. |
+| Bluetooth | BT Tara (scan) · BLE Radar | Active BLE scan with a device list (named-first, then nearest-first), a best-effort device-kind guess, iBeacon/Eddystone decoding, a privacy view (address type + manufacturer/company-ID), and **BLE Radar** direction/range mapping | No pairing, manual connection or GATT access. Active scan emits scan-request packets (like a phone). Radar bearings/distances are coarse RSSI estimates, not exact meters/degrees. |
+| SecLab | Güvenli Kullanım (safe use) | Authorized-use guidance | Informational screen only. |
+| Hacking | WiFi İzleme (monitor) · Kanal Haritası (channel map) · Çerçeve İstat (frame stats) · Probe Yakala (probe capture) · WiFi Radar · BLE Keşif (discovery) · Birleşik Radar (combined radar) | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, **WiFi Radar** for nearby access points, a shortcut to passive BLE discovery, and **Birleşik Radar** (a combined BLE + Wi-Fi-probe walk-around radar) | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
+| Hatalar / Hakkında (Errors / About) | — | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
 
 Across every screen a small **battery gauge** is drawn in the status banner
 (percent + a battery glyph), read from an ADC fuel-gauge input; it shows `--`
@@ -51,7 +52,7 @@ expanding-ring animation with an optional audio “ping” whose rate tracks
 signal strength. The battery ADC, the buzzer/motor and their wiring are **not**
 validated on assembled hardware.
 
-“WiFi Ağım (AP)” creates a local network without an Internet uplink. The C6
+“WiFi Ağım” (*my network*, the local AP) creates a network without an Internet uplink. The C6
 shows its SSID, a newly generated 12-character WPA2 password, local IP and
 the number of associated clients (maximum four). The default AP network
 interface provides DHCP. RIGHT/A starts or stops it; LEFT leaves the screen
@@ -83,12 +84,12 @@ which emits small scan-request packets, exactly as a phone does when listing
 nearby devices). All Wi-Fi tools here use the same channel-hopping monitor
 and see every nearby 2.4 GHz network, not just one.
 
-- **Kanal Haritası (Channel map):** per-channel (1–13) occupancy bar chart —
+- **Channel map (Kanal Haritası):** per-channel (1–13) occupancy bar chart —
   how many APs are on each channel and the strongest signal — for picking a
   clear channel for your own router.
-- **Çerçeve İstat (Frame stats):** running tally of 802.11 frame types
+- **Frame stats (Çerçeve İstat):** running tally of 802.11 frame types
   (beacon / probe / data / control) seen, as an activity/traffic overview.
-- **Probe Yakala (Probe capture):** distinct SSIDs that nearby client
+- **Probe capture (Probe Yakala):** distinct SSIDs that nearby client
   devices ask for in probe requests, with a sighting count. Useful for
   seeing what network names your own devices leak. No device addresses are
   stored.
@@ -102,7 +103,7 @@ and see every nearby 2.4 GHz network, not just one.
   channel-hopping monitor as the other Hacking tools. One timed 360° turn
   fixes each AP's bearing; live RSSI (smoothed) updates its distance as you
   move. Same coarse-estimate caveats as BLE Radar.
-- **Birleşik Radar (Combined radar):** plots BLE devices *and* the Wi-Fi
+- **Combined radar (Birleşik Radar):** plots BLE devices *and* the Wi-Fi
   devices sending probe requests on one screen at once, time-slicing the single
   radio between the two (the C6 cannot listen on both simultaneously). It is a
   "hot/cold" **walk-around** finder: each blip's distance from the centre
