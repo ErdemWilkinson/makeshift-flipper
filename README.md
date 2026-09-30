@@ -5,13 +5,14 @@ are explicitly authorized to test. One C6 runs the display, controls and
 on-chip Wi-Fi/BLE; there is no ESP32-P4 companion or inter-MCU UART link.
 
 > **Working prototype, not a finished multi-tool.** The display/control
-> firmware runs on real ESP32-C6 hardware: display, buttons, menus, the
-> on-chip Wi-Fi and BLE features (scan, AP, monitor, channel map, frame
-> stats, probe capture, BLE scan/radar) have been built, flashed and used on
-> the device. The RFID readers, IR hardware, vibration motor and battery
-> system have **not** been validated as an assembled device. A menu item or
-> compiled driver is not proof that its external module is connected or
-> working. See [hardware checks](HARDWARE_TEST_MATRIX.md).
+> firmware runs on real ESP32-C6 hardware: display, buttons, menus, the boot
+> splash and the on-chip Wi-Fi and BLE features (scan, AP, monitor, channel
+> map, frame stats, probe capture, BLE scan/radar, and the combined BLE+probe
+> radar) have been built, flashed and used on the device. The RFID readers, IR
+> hardware, vibration/buzzer motor and battery gauge have **not** been
+> validated as an assembled device. A menu item or compiled driver is not proof
+> that its external module is connected or working. See
+> [hardware checks](HARDWARE_TEST_MATRIX.md).
 
 > **Authorization matters.** Use the radio, RFID and IR functions only on
 > devices and networks you own or have explicit permission to test. The
@@ -26,15 +27,29 @@ profile and conflicts are described below.
 
 ## What the current firmware exposes
 
-| Menu | Current software behavior | Validation boundary |
-| --- | --- | --- |
-| RFID / NFC | 125 kHz RDM6300 reading and saved-tag library; 13.56 MHz RC522 read/save/limited MIFARE Classic clone workflow in source | External readers not validated. RC522 initialization is disabled in the current screen-only profile. Do not expect its menu actions to work. |
-| Kızılötesi | NEC send, receive/learn and saved-code library | IR receiver and LED driver need physical testing. “IR Yön Bul (Yok)” explicitly reports unavailable. |
-| WiFi | Scan (sorted nearest-first), manual station connection/status, a local WPA2 access point (“WiFi Ağım”) with a Wi-Fi-join QR code | STA status does not prove Internet access or reveal the router's client count. 2.4 GHz only (the C6 has no 5 GHz radio), so 5 GHz networks/hotspots never appear. |
-| Bluetooth | Active BLE scan with a device list (named-first, then nearest-first), a best-effort device-kind guess, iBeacon/Eddystone decoding, and **BLE Radar** direction/range mapping | No pairing, manual connection or GATT access. Active scan emits scan-request packets (like a phone). Radar bearings/distances are coarse RSSI estimates, not exact meters/degrees. |
-| SecLab | Authorized-use guidance | Informational screen only. |
-| Hacking | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, **WiFi Radar** direction/range mapping for nearby access points, and a shortcut to passive BLE discovery | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
-| Hatalar / Hakkında | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
+The main menu has eight sections: **RFID / NFC**, **Kızılötesi** (IR),
+**WiFi**, **Bluetooth**, **SecLab**, **Hacking**, **Hatalar** (errors) and
+**Hakkında** (about). Each menu item's exact label is in
+[`main/main.c`](main/main.c).
+
+| Menu | Items | Current software behavior | Validation boundary |
+| --- | --- | --- | --- |
+| RFID / NFC | 125kHz Oku · 13.56MHz Oku · 13.56MHz Kopyala · 125kHz Kaydet · 13.56MHz Kaydet · RFID Kütüphanesi | 125 kHz RDM6300 reading and saved-tag library; 13.56 MHz RC522 read/save/limited MIFARE Classic clone workflow in source | External readers not validated. RC522 initialization is disabled in the current screen-only profile. Do not expect its menu actions to work. |
+| Kızılötesi | IR Gönderim Testi · IR Öğren · IR Kütüphanesi · IR Yön Bul (Yok) | NEC send, receive/learn and saved-code library | IR receiver and LED driver need physical testing. “IR Yön Bul (Yok)” explicitly reports unavailable. |
+| WiFi | WiFi Tara/Bağlan · WiFi Durum · WiFi Ağım (AP) | Scan (sorted nearest-first), manual station connection/status, a local WPA2 access point (“WiFi Ağım”) with a Wi-Fi-join QR code | STA status does not prove Internet access or reveal the router's client count. 2.4 GHz only (the C6 has no 5 GHz radio), so 5 GHz networks/hotspots never appear. |
+| Bluetooth | BT Tara · BLE Radar | Active BLE scan with a device list (named-first, then nearest-first), a best-effort device-kind guess, iBeacon/Eddystone decoding, a privacy view (address type + manufacturer/company-ID), and **BLE Radar** direction/range mapping | No pairing, manual connection or GATT access. Active scan emits scan-request packets (like a phone). Radar bearings/distances are coarse RSSI estimates, not exact meters/degrees. |
+| SecLab | Güvenli Kullanım | Authorized-use guidance | Informational screen only. |
+| Hacking | WiFi İzleme · Kanal Haritası · Çerçeve İstat · Probe Yakala · WiFi Radar · BLE Keşif · Birleşik Radar | Receive-only Wi-Fi monitor, channel-occupancy map, 802.11 frame-type stats, probe-request capture, **WiFi Radar** for nearby access points, a shortcut to passive BLE discovery, and **Birleşik Radar** (a combined BLE + Wi-Fi-probe walk-around radar) | Black background/red lettering. No deauthentication, injection, handshake capture, DoS or Bluetooth disconnection. Weak (OPEN/WEP) APs are flagged in the monitor list. |
+| Hatalar / Hakkında | — | Local error history and device information | No network log upload. About retains the “ErdemFlip” label; the main menu title is “Makeshift Flipper”. |
+
+Across every screen a small **battery gauge** is drawn in the status banner
+(percent + a battery glyph), read from an ADC fuel-gauge input; it shows `--`
+when no valid battery reading is present (e.g. the sense pin is floating), so a
+missing gauge is not an error. Confirmed actions give short **haptic/buzzer
+feedback** through the GPIO1 driver, and the radar screens add a sonar-style
+expanding-ring animation with an optional audio “ping” whose rate tracks
+signal strength. The battery ADC, the buzzer/motor and their wiring are **not**
+validated on assembled hardware.
 
 “WiFi Ağım (AP)” creates a local network without an Internet uplink. The C6
 shows its SSID, a newly generated 12-character WPA2 password, local IP and
@@ -87,6 +102,21 @@ and see every nearby 2.4 GHz network, not just one.
   channel-hopping monitor as the other Hacking tools. One timed 360° turn
   fixes each AP's bearing; live RSSI (smoothed) updates its distance as you
   move. Same coarse-estimate caveats as BLE Radar.
+- **Birleşik Radar (Combined radar):** plots BLE devices *and* the Wi-Fi
+  devices sending probe requests on one screen at once, time-slicing the single
+  radio between the two (the C6 cannot listen on both simultaneously). It is a
+  "hot/cold" **walk-around** finder: each blip's distance from the centre
+  follows its smoothed RSSI, so as you walk a target slides in as you approach
+  and out as you retreat; the selected target shows a closer/farther trend and
+  a metal-detector-style beep that speeds up the nearer you get. When a BLE
+  device and a probing device are close in *both* signal and on-screen
+  position, they are correlated (nearest match, not the first within a window),
+  drawn with a connecting line and a small "match" ripple — a guess that the
+  same physical device is doing both. Pressing **A** opens a full detail page
+  for the selected target (MAC, name/asked-for SSID, signal, and the
+  correlated device's probes). Correlation is a heuristic; MAC randomization on
+  modern phones means many devices never correlate. The on-screen angle is a
+  stable per-device spread for readability, **not** a compass bearing.
 
 Camera/OCR, microphone/voice control, GPS, Sub-GHz, cellular and general
 remote-control features are not part of the current firmware. For a broader
@@ -119,17 +149,20 @@ reference is [WIRING_MAP_RC522.md](WIRING_MAP_RC522.md).
 | ST7789 SCK / MOSI / CS / DC / RST / backlight | 18 / 19 / 9 / 8 / 20 / 21 | Yes |
 | Joystick UP / DOWN / LEFT / RIGHT | 6 / 11 / 23 / 22 | Yes |
 | A button / B button | 10 / disabled | Yes / no |
-| Joystick centre press | 3 | Wire unverified |
+| Battery sense (ADC1_CH3, via a 2:1 divider) | 3 | Sense wiring unverified |
 | RC522 SCK / MOSI (shared with LCD) | 18 / 19 | No |
 | RC522 MISO / CS / RST | 5 / 7 / 2 | No |
 | RDM6300 TX (through a 5 V-to-3.3 V level shifter) | 15 | No |
 | IR receiver (VS1838B) / IR LED driver | 4 / 0 | No |
-| Vibration motor driver | 1 | No |
+| Buzzer / vibration driver | 1 | Buzzer bench-tested |
 
 Ordinary menus use UP/DOWN to move, RIGHT or A to select and LEFT to go back.
 On the text keyboard, a short LEFT/RIGHT moves horizontally, a long LEFT
-exits, a long RIGHT selects, and A selects immediately. The centre press is
-not needed for the current one-handed control scheme.
+exits, a long RIGHT selects, and A selects immediately. On the combined radar,
+RIGHT selects the next target, a short LEFT the previous one, a long LEFT
+exits, and A opens the selected target's detail page. GPIO3 (the old centre
+press) is now used for the battery ADC, so the current control scheme is
+one-handed without a centre button.
 
 `BOARD_HAS_RC522` is `0` until the reader is wired. Connecting it does not
 enable it on its own. Do not power an RC522 from 5 V. RC522, RDM6300, IR and
