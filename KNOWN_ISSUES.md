@@ -8,14 +8,20 @@ codebase in parallel, so findings from both were merged here.
 with a code change (✅), knowingly accepted as a low-severity risk with
 reasoning (🟡/✅ "accepted risk"), or verified and confirmed not to be an
 actual conflict/risk (✅ verified). Nothing was closed silently — the
-reasoning behind every accepted risk is recorded under that item. One
-caveat applies broadly: **the P4 main firmware has been built, flashed,
-and booted once on real hardware (Round 13), but that was against the
-now-replaced SSD1306 OLED, so the current ST7789 LCD code (Round 15) is
-still unverified on physical hardware; the C6 companion firmware remains
-entirely unflashed.** Even items marked "fixed" that touch display/UI
-code are pending confirmation on the next real flash attempt (see the
-General section).
+reasoning behind every accepted risk is recorded under that item.
+
+> **Read Round 29 first for the current hardware picture.** This file is a
+> chronological review log spanning a retired two-chip (ESP32-P4 + ESP32-C6,
+> UART-linked) design *and* the current single-MCU **ESP32-C6 standalone**
+> build. Early rounds that name a P4, a `c6-firmware/` companion, an SSD1306
+> OLED, a TCA9554 button expander, or Ask AI / Debug AI describe code that
+> no longer exists. The current board is the Waveshare **ESP32-C6-DEV-KIT-NX**
+> with a direct-GPIO Pico-LCD-1.3 and an on-chip radio; it has been flashed
+> and booted on real C6 silicon (Round 28), though most external peripherals
+> (LCD colours, RC522, RDM6300, IR, buzzer, battery) are still bench-/wire-
+> unverified. Where an older round's pin map or architecture note conflicts
+> with the source in `main/` or with `README.md`, the source wins — see
+> **Round 29** for the specific corrections.
 
 ## main/net/c6_link.c (P4↔C6 UART protocol)
 
@@ -1410,23 +1416,75 @@ the full hardware assembly per `C6_STANDALONE_HARDWARE_PLAN.md`.
 
 - ✅ **CONFIRMED WORKING on bare hardware (no external peripherals attached):** with both issues above fixed, the device now boots to completion without crashing or reset-looping: NVS init, display init (`"ST7789 LCD initialized"` -- SPI transaction succeeded even with no LCD attached, i.e. no bus fault), IR driver init, RC522 init (SPI transaction succeeded with no RC522 attached), Wi-Fi STA bring-up (`"Wi-Fi STA ready (on-chip radio)"`), and BLE stack bring-up (`"BLE scan stack initialized"`) all completed and the main loop was reached and stayed stable for the observed duration. This is the first real evidence the on-chip Wi-Fi/BLE stack actually initializes on real ESP32-C6 silicon, not just in the build. It does **not** confirm Wi-Fi scan/connect/monitor or BLE scan actually see real traffic (no antenna environment test performed here) or that any SPI/I2C/UART peripheral's protocol-level behavior is correct (no real device was on the other end to respond).
 
-- 🟡 **CONFIRMED — TCA9554 (BUTTON EXPANDER) I2C TRANSACTIONS FAIL AS EXPECTED WHEN NOT PHYSICALLY PRESENT:** With no TCA9554/Pico-LCD-1.3 attached, `buttons_init()`'s I2C transaction fails with "unexpected nack detected" / `ESP_ERR_INVALID_STATE`, logged once at boot and then retried roughly once per second from `buttons_poll()`'s recovery path (see `buttons.c`'s `EXPANDER_RETRY_US`) -- exactly the designed graceful-degradation behavior (UP/PRESS/RIGHT still available), not a new bug. Included here only as confirmation that the existing error-handling code path was actually exercised on real hardware and behaved as designed, continuously retrying without crashing or flooding logs uncontrollably.
+- 🟡 **CONFIRMED — TCA9554 (BUTTON EXPANDER) I2C TRANSACTIONS FAIL AS EXPECTED WHEN NOT PHYSICALLY PRESENT:** With no TCA9554/Pico-LCD-1.3 attached, `buttons_init()`'s I2C transaction fails with "unexpected nack detected" / `ESP_ERR_INVALID_STATE`, logged once at boot and then retried roughly once per second from `buttons_poll()`'s recovery path (see `buttons.c`'s `EXPANDER_RETRY_US`) -- exactly the designed graceful-degradation behavior (UP/PRESS/RIGHT still available), not a new bug. Included here only as confirmation that the existing error-handling code path was actually exercised on real hardware and behaved as designed, continuously retrying without crashing or flooding logs uncontrollably. **(Superseded by Round 29: the current build has no TCA9554 path at all -- `buttons.c` is direct-GPIO. This entry describes an earlier expander-based `buttons.c` that no longer exists.)**
+
+## Round 29 (2026-09-30): documentation-vs-code reconciliation
+
+A scan for open issues found no unresolved *code* defect -- every prior
+round's item is already ✅ fixed, 🟡 accepted, or ❌ false alarm, and the
+current tree builds clean (esp32c6) with host tests passing. What it did
+find is that several **Round 27/28 hardware claims in this very file had
+gone stale**: the code was revised afterwards (the switch to the Waveshare
+**ESP32-C6-DEV-KIT-NX** with a direct-GPIO Pico-LCD-1.3, plus the battery
+gauge) without updating these notes. Left uncorrected, someone wiring the
+device from Round 27/28 would use the wrong pins. Corrected here against the
+actual source in `main/` (which, together with `README.md`, is authoritative
+over these older notes):
+
+- ✅ **CORRECTED — NO TCA9554 BUTTON EXPANDER EXISTS ANY MORE:** Round 27/28
+  described buttons behind a TCA9554 I2C expander on GPIO22/23. The current
+  `main/input/buttons.c` states plainly *"there is no TCA9554 I2C expander
+  on it, so the old expander path was removed"* and reads every control as a
+  **direct active-low GPIO**: UP=GPIO6, DOWN=GPIO11, LEFT/BACK=GPIO23,
+  RIGHT=GPIO22, A=GPIO10, centre PRESS=GPIO3 (present in `buttons_init()`'s
+  pin mask but intentionally excluded from the poll list -- its wire is
+  unverified and it floats). There is no I2C button traffic, so the Round 28
+  "expander NACK retry" behavior no longer applies to this build.
+- ✅ **CORRECTED — MOTOR/BUZZER IS GPIO1, NOT GPIO3:** `main/feedback/vibration.c`
+  defines `VIBRATION_GPIO GPIO_NUM_1`. The GPIO1 driver is what the buzzer
+  (bench-tested) and the radar audio "ping" use. Round 27's "motor GPIO3" is
+  wrong.
+- ✅ **CORRECTED — GPIO3 IS NOW THE BATTERY ADC:** `main/feedback/battery.c`
+  reads the battery on `ADC_CHANNEL_3` (= GPIO3) through a 2:1 divider, and
+  sets the pin to `GPIO_FLOATING` at init so the old pull-up can't fake a
+  reading. GPIO3 is therefore shared in intent with the (unpolled) centre
+  press; the battery ADC is its actual current use. The battery gauge itself
+  is new since Round 28 and was undocumented in this file.
+- ✅ **CORRECTED — IR PINS ARE RX=GPIO4 / TX=GPIO0:** `main/ir/ir_driver.c`
+  uses `IR_RX_GPIO 4` and `IR_TX_GPIO 0`, with a comment that the old
+  GPIO14/GPIO17 are unusable on the DEV-KIT-NX (GPIO14 has no header pin,
+  GPIO17 is UART0 RXD to the CH343). Round 27's "IR GPIO14/17" is the retired
+  plan.
+- ✅ **CORRECTED — RDM6300 RX IS GPIO15 ON THIS BOARD:** `main/rfid/rdm6300.c`
+  uses `UART_RX_GPIO 15` (UART1 RX; a strapping pin, fine here because the
+  line idles high). Round 28's GPIO1 move was on the *other* board
+  (ESP32-C6-Pico); the current DEV-KIT-NX build is GPIO15, matching the
+  README pin table. RC522 MISO is GPIO5 (`BOARD_RC522_MISO_GPIO`,
+  `BOARD_HAS_RC522 0` until wired).
+- 🟡 **NOTED, RECURRING BUG CLASS — `-Werror=format-truncation`:** several
+  rounds (12, 15) fixed `snprintf`-into-`char[DISPLAY_COLS+1]` truncation
+  warnings, and new ones keep appearing whenever a screen's footer text
+  grows (most recently in the combined-radar footers). This is not an open
+  defect right now (the tree builds clean), but it is a standing trap: the
+  safe pattern in this codebase is to pre-format any `%d`/`%s` whose worst
+  case GCC can't bound into a small fixed buffer (e.g. `char nbuf[4]`) and
+  splice that in, rather than relying on runtime clamps GCC can't see. Keep
+  this in mind when editing any radar/list footer.
 
 ## General
 
-- Both firmwares build clean (see Round 12). The **P4 main firmware** has
-  been flashed and booted on real hardware (see Round 13: RC522 init,
-  RDM6300 UART init, and P4-to-C6 UART initialization all observed) --
-  but that was against the old SSD1306 OLED, before the Round 15 ST7789
-  LCD swap, so the new display code itself is still unverified on
-  physical hardware (see Round 15's hardware-test caveats). The
-  **standalone C6 firmware** has now been flashed and booted on real
-  ESP32-C6 hardware (Round 28) with no external peripherals attached --
-  boot completes cleanly, Wi-Fi/BLE bring-up succeeds -- but every
-  external peripheral (LCD, RC522, RDM6300, button expander, IR) still
-  needs its own real-hardware test per `HARDWARE_TEST_MATRIX.md` once
-  physically wired up. RDM6300's UART1 function-clock hang (Round 28's
-  second finding) is now fixed; its RX is on GPIO1 (Pico GP28).
+- The current **standalone ESP32-C6 firmware** builds clean (esp32c6) and
+  host tests pass. It has been flashed and booted on real ESP32-C6 silicon
+  (Round 28) -- boot completes cleanly and on-chip Wi-Fi/BLE bring-up
+  succeeds. The current board is the Waveshare **ESP32-C6-DEV-KIT-NX** with a
+  direct-GPIO Pico-LCD-1.3 (no button expander -- see Round 29). Every
+  external peripheral (LCD colours/orientation, RC522, RDM6300, IR, buzzer,
+  battery ADC) still needs its own real-hardware test per
+  `HARDWARE_TEST_MATRIX.md` once physically wired up. Current pin map lives in
+  `main/hardware_profile.h` and the per-driver source; for the corrected
+  summary see Round 29. (The earlier two-chip **P4 main firmware** history --
+  Round 13's P4/SSD1306 bring-up etc. -- describes the retired design and is
+  kept only as a record.)
 - Error reporting mostly goes through `ESP_LOGW`/`ESP_LOGE` only — with
   the device's own display as the primary output, a user who isn't on a
   serial connection won't see these errors at all.
