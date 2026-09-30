@@ -1,12 +1,4 @@
-// Stage 2 BLE scan (C6-standalone). Fills the c6_link_bt_scan_* half of
-// c6_link.h using NimBLE directly, mirroring the old c6-firmware/bt_scan.c
-// but with the UART push-task replaced by an in-RAM, address-deduplicated
-// list that c6_link_bt_scan_poll() snapshots -- exactly what main.c's BT
-// screen already expects.
-//
-// Kept in its own translation unit so the NimBLE host headers don't have to
-// be pulled into c6_link.c (which owns the esp_wifi side).
-
+// Stage 2 BLE scan (C6-standalone) - passive advertisement discovery
 #include "c6_link.h"
 
 #include <string.h>
@@ -16,6 +8,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
+#include "esp_random.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -30,18 +23,17 @@ static volatile bool s_running;
 static bool s_host_synced;
 static bool s_nimble_ready;
 static uint8_t s_own_addr_type;
-static SemaphoreHandle_t s_lock; // guards the device list below
+static SemaphoreHandle_t s_lock;
 
 static c6_bt_device_t s_devices[C6_BT_MAX_DEVICES];
 static int s_device_count;
 
-// Defined in c6_link.c. This profile does not run local AP or promiscuous
-// Wi-Fi channel hopping alongside BLE discovery.
 bool c6_wifi_monitor_is_running(void);
 bool c6_link_ap_is_running(void);
 
-// BLE names are arbitrary bytes; replace control bytes so they render
-// safely on-screen. There is no longer a comma-delimited UART protocol.
+// Fonksiyon prototipi (Olay döngüsü için ileri bildirim)
+static int gap_event_cb(struct ble_gap_event *event, void *arg);
+
 static void sanitize_name(char *s)
 {
     for (; *s != '\0'; s++) {
@@ -52,10 +44,7 @@ static void sanitize_name(char *s)
     }
 }
 
-// Pull the (complete or shortened) local name out of an advertisement's
-// AD structures. Ported from the old c6-firmware extract_ble_name().
-static void extract_ble_name(const uint8_t *data, uint8_t len,
-                             char *out_name, size_t out_cap)
+static void extract_ble_name(const uint8_t *data, uint8_t len, char *out_name, size_t out_cap)
 {
     out_name[0] = '\0';
     size_t i = 0;
@@ -65,7 +54,7 @@ static void extract_ble_name(const uint8_t *data, uint8_t len,
             break;
         }
         uint8_t field_type = data[i + 1];
-        if (field_type == 0x09 || field_type == 0x08) { // complete / short name
+        if (field_type == 0x09 || field_type == 0x08) {
             size_t name_len = field_len - 1;
             if (name_len >= out_cap) {
                 name_len = out_cap - 1;
@@ -78,31 +67,14 @@ static void extract_ble_name(const uint8_t *data, uint8_t len,
     }
 }
 
-// Decode iBeacon / Eddystone from an advertisement's AD structures. Passive:
-// reads only the bytes the device already broadcast, sends nothing. Fills
-// out->beacon_type / out->beacon_info; leaves them at C6_BEACON_NONE / "" when
-// nothing recognized is present.
-//
-// iBeacon: an AD of type 0xFF (Manufacturer Specific Data) whose first two
-//   payload bytes are Apple's company id 0x004C (little-endian: 4C 00),
-//   followed by 0x02 0x15 and then 16-byte proximity UUID + 2-byte major +
-//   2-byte minor + 1-byte measured power. We summarize the UUID's last 4 bytes
-//   (enough to tell beacons apart on a small screen) plus major/minor.
-// Eddystone: an AD of type 0x16 (Service Data) whose first two bytes are the
-//   Eddystone UUID 0xFEAA (little-endian: AA FE); the next byte is the frame
-//   type (0x00 UID, 0x10 URL, 0x20 TLM, 0x30 EID). We report the frame kind.
 static void decode_beacon(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
 {
     out->beacon_type = C6_BEACON_NONE;
     out->beacon_info[0] = '\0';
-    // Some GAP disc events carry no advertisement payload (data == NULL) or a
-    // zero length; walking those would dereference a null/empty buffer.
     if (data == NULL || len < 2) {
         return;
     }
     size_t i = 0;
-    // i + 2 <= len guarantees data[i] (field_len) and data[i+1] (field_type)
-    // are both in range before we read them.
     while (i + 2 <= len) {
         uint8_t field_len = data[i];
         if (field_len == 0 || (size_t)(i + 1 + field_len) > len) {
@@ -110,12 +82,10 @@ static void decode_beacon(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
         }
         uint8_t field_type = data[i + 1];
         const uint8_t *p = &data[i + 2];
-        uint8_t plen = field_len - 1; // payload length after the type byte
+        uint8_t plen = field_len - 1;
 
         if (field_type == 0xFF && plen >= 24 &&
             p[0] == 0x4C && p[1] == 0x00 && p[2] == 0x02 && p[3] == 0x15) {
-            // iBeacon: UUID = p[4..19], major = p[20..21], minor = p[22..23].
-            // Highest index read is 23, so plen >= 24 is the exact requirement.
             uint16_t major = ((uint16_t)p[20] << 8) | p[21];
             uint16_t minor = ((uint16_t)p[22] << 8) | p[23];
             out->beacon_type = C6_BEACON_IBEACON;
@@ -134,23 +104,14 @@ static void decode_beacon(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
                 default:   kind = "?";   break;
             }
             out->beacon_type = C6_BEACON_EDDYSTONE;
-            snprintf(out->beacon_info, sizeof(out->beacon_info),
-                     "Eddystone-%s", kind);
+            snprintf(out->beacon_info, sizeof(out->beacon_info), "Eddystone-%s", kind);
             return;
         }
         i += 1 + field_len;
     }
 }
 
-// Best-effort device-kind guess from the advertisement, entirely passive.
-// Sources, in priority order:
-//   - 16-bit service UUIDs (AD types 0x02/0x03): standard assigned numbers
-//     for common profiles (HID, audio, heart rate, battery-only wearables).
-//   - Appearance (AD type 0x19): a 16-bit category the device declares.
-//   - Manufacturer company id (AD type 0xFF, first 2 bytes): a few big vendors.
-// Writes a short Turkish label to out->kind, or leaves it "" if nothing matched.
-static void classify_ble_kind(const uint8_t *data, uint8_t len,
-                              c6_bt_device_t *out)
+static void classify_ble_kind(const uint8_t *data, uint8_t len, c6_bt_device_t *out)
 {
     out->kind[0] = '\0';
     const char *guess = NULL;
@@ -164,44 +125,30 @@ static void classify_ble_kind(const uint8_t *data, uint8_t len,
         const uint8_t *p = &data[i + 2];
         uint8_t plen = field_len - 1;
 
-        if ((ft == 0x02 || ft == 0x03)) { // 16-bit service UUID list
+        if ((ft == 0x02 || ft == 0x03)) {
             for (int u = 0; u + 1 < plen; u += 2) {
                 uint16_t uuid = (uint16_t)p[u] | ((uint16_t)p[u + 1] << 8);
                 switch (uuid) {
-                    case 0x1812: guess = "HID"; break;       // human interface (klavye/fare)
-                    case 0x180D: guess = "Kalp"; break;      // heart rate
-                    case 0x1108: case 0x110B: case 0x111E:
-                                 guess = "Kulaklik"; break;   // audio profiles
-                    case 0x1816: guess = "Bisiklet"; break;  // cycling speed/cadence
-                    case 0xFD6F: guess = "Temas"; break;     // exposure notification
+                    case 0x1812: guess = "HID"; break;
+                    case 0x180D: guess = "Kalp"; break;
+                    case 0x1108: case 0x110B: case 0x111E: guess = "Kulaklik"; break;
+                    case 0x1816: guess = "Bisiklet"; break;
+                    case 0xFD6F: guess = "Temas"; break;
                     default: break;
                 }
                 if (guess) break;
             }
-        } else if (ft == 0x19 && plen >= 2) { // Appearance
+        } else if (ft == 0x19 && plen >= 2) {
             uint16_t app = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-            uint16_t cat = app >> 6; // top 10 bits = category
+            uint16_t cat = app >> 6;
             switch (cat) {
-                case 0x005: guess = "Saat"; break;      // watch
-                case 0x00F: guess = "Bantli"; break;    // band/tag
-                case 0x00D: case 0x226: guess = "Kulaklik"; break; // audio
-                case 0x00C: guess = "HID"; break;       // hid
-                case 0x011: guess = "Termo"; break;     // thermometer
+                case 0x005: guess = "Saat"; break;
+                case 0x00F: guess = "Bantli"; break;
+                case 0x00D: case 0x226: guess = "Kulaklik"; break;
+                case 0x00C: guess = "HID"; break;
+                case 0x011: guess = "Termo"; break;
                 default: break;
             }
-        } else if (ft == 0xFF && plen >= 2) { // Manufacturer company id
-            uint16_t cid = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-            switch (cid) {
-                case 0x004C: if (!guess) guess = "Apple"; break;
-                case 0x0006: if (!guess) guess = "Microsoft"; break;
-                case 0x00E0: if (!guess) guess = "Google"; break;
-                case 0x0075: if (!guess) guess = "Samsung"; break;
-                default: break;
-            }
-        }
-        if (guess && guess[0] != 'A' && guess[0] != 'M' && guess[0] != 'G' &&
-            guess[0] != 'S') {
-            break; // a specific profile/appearance match wins; stop scanning
         }
         i += 1 + field_len;
     }
@@ -211,24 +158,50 @@ static void classify_ble_kind(const uint8_t *data, uint8_t len,
     }
 }
 
-// Insert-or-update one device in the deduped list. Caller holds s_lock.
+// Walk the AD structures and return the manufacturer "company id" from the
+// first Manufacturer Specific Data field (AD type 0xFF): its first two payload
+// bytes are the company id, little-endian. Returns 0xFFFF if none is present.
+// Purely passive parsing of bytes the device already broadcast.
+static uint16_t extract_company_id(const uint8_t *data, uint8_t len)
+{
+    if (data == NULL || len < 2) {
+        return 0xFFFF;
+    }
+    size_t i = 0;
+    while (i + 2 <= len) {
+        uint8_t field_len = data[i];
+        if (field_len == 0 || (size_t)(i + 1 + field_len) > len) {
+            break;
+        }
+        uint8_t field_type = data[i + 1];
+        if (field_type == 0xFF && field_len >= 3) {
+            // payload starts at i+2; first two bytes = company id (LE)
+            return (uint16_t)data[i + 2] | ((uint16_t)data[i + 3] << 8);
+        }
+        i += 1 + field_len;
+    }
+    return 0xFFFF;
+}
+
 static void device_upsert(const c6_bt_device_t *dev)
 {
     for (int i = 0; i < s_device_count; i++) {
         if (memcmp(s_devices[i].addr, dev->addr, 6) == 0) {
             s_devices[i].rssi = dev->rssi;
             s_devices[i].seen_seq++;
+            s_devices[i].addr_type = dev->addr_type;
+            // Keep a known company id; don't let a later packet without
+            // manufacturer data (0xFFFF) wipe one we already decoded.
+            if (dev->company_id != 0xFFFF) {
+                s_devices[i].company_id = dev->company_id;
+            }
             if (dev->name[0] != '\0') {
                 memcpy(s_devices[i].name, dev->name, sizeof(dev->name));
             }
-            // Keep the most recent recognized beacon frame; don't let a later
-            // advertisement without one wipe a decode we already have.
             if (dev->beacon_type != C6_BEACON_NONE) {
                 s_devices[i].beacon_type = dev->beacon_type;
-                memcpy(s_devices[i].beacon_info, dev->beacon_info,
-                       sizeof(dev->beacon_info));
+                memcpy(s_devices[i].beacon_info, dev->beacon_info, sizeof(dev->beacon_info));
             }
-            // Same for the device-kind guess: keep a good label once we have it.
             if (dev->kind[0] != '\0') {
                 memcpy(s_devices[i].kind, dev->kind, sizeof(dev->kind));
             }
@@ -245,6 +218,7 @@ static void device_upsert(const c6_bt_device_t *dev)
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
+
     if (event->type != BLE_GAP_EVENT_DISC || !s_running) {
         return 0;
     }
@@ -252,10 +226,12 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     c6_bt_device_t dev = {0};
     memcpy(dev.addr, disc->addr.val, 6);
     dev.rssi = (int8_t)disc->rssi;
+    dev.addr_type = disc->addr.type; // 0/1 public/static, 2/3 random (privacy)
     extract_ble_name(disc->data, disc->length_data, dev.name, sizeof(dev.name));
     sanitize_name(dev.name);
     decode_beacon(disc->data, disc->length_data, &dev);
     classify_ble_kind(disc->data, disc->length_data, &dev);
+    dev.company_id = extract_company_id(disc->data, disc->length_data);
 
     if (s_lock != NULL && xSemaphoreTake(s_lock, 0) == pdTRUE) {
         device_upsert(&dev);
@@ -267,71 +243,51 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 static bool start_discovery(void)
 {
     struct ble_gap_disc_params params = {0};
-    // Active scan: send scan requests so devices reply with a scan response,
-    // which is where most of them (headphones, watches, etc.) put their name.
-    // A passive scan only hears the initial advertisement, so names rarely
-    // appear. This is the same thing a phone does when listing BLE devices;
-    // it emits small scan-request packets rather than being purely receive-only.
     params.passive = 0;
     params.itvl = SCAN_ITVL_MS * 1000 / 625;
     params.window = SCAN_WINDOW_MS * 1000 / 625;
-    params.filter_duplicates = 0; // dedup handled in device_upsert()
-    int rc = ble_gap_disc(s_own_addr_type, BLE_HS_FOREVER, &params,
-                          gap_event_cb, NULL);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "ble_gap_disc failed: rc=%d", rc);
-        return false;
-    }
-    return true;
+    params.filter_duplicates = 0;
+    
+    int rc = ble_gap_disc(s_own_addr_type, BLE_HS_FOREVER, &params, gap_event_cb, NULL);
+    return (rc == 0);
 }
 
 static void on_sync(void)
 {
-    int rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
-    if (rc != 0) {
+    if (ble_hs_id_infer_auto(0, &s_own_addr_type) != 0) {
         s_nimble_ready = false;
         s_running = false;
-        ESP_LOGE(TAG, "BLE identity address unavailable: rc=%d", rc);
         return;
     }
     s_host_synced = true;
-    if (s_running && !start_discovery()) {
-        s_running = false;
+    if (s_running) {
+        start_discovery();
     }
 }
 
 static void nimble_host_task(void *param)
 {
     (void)param;
-    nimble_port_run(); // returns only on nimble_port_stop()
+    nimble_port_run();
     nimble_port_freertos_deinit();
 }
 
-// Brings up the NimBLE stack. Call once at startup (c6_link_init() calls
-// this after Wi-Fi is up -- see the note there).
 void c6_bt_init(void)
 {
     if (s_lock == NULL) {
         s_lock = xSemaphoreCreateMutex();
     }
-    if (s_lock == NULL) {
-        ESP_LOGE(TAG, "BLE lock alloc failed; BT scan disabled");
-        return;
-    }
     if (nimble_port_init() != ESP_OK) {
-        ESP_LOGE(TAG, "nimble_port_init failed");
         return;
     }
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(nimble_host_task);
     s_nimble_ready = true;
-    ESP_LOGI(TAG, "BLE scan stack initialized");
 }
 
 bool c6_link_bt_scan_start(void)
 {
-    if (!s_nimble_ready || c6_wifi_monitor_is_running() ||
-        c6_link_ap_is_running()) {
+    if (!s_nimble_ready || c6_wifi_monitor_is_running() || c6_link_ap_is_running()) {
         return false;
     }
     if (s_running) {
@@ -342,11 +298,9 @@ bool c6_link_bt_scan_start(void)
         xSemaphoreGive(s_lock);
     }
     s_running = true;
-    if (s_host_synced && !start_discovery()) {
-        s_running = false;
-        return false;
+    if (s_host_synced) {
+        start_discovery();
     }
-    // else: on_sync() will start discovery once the host finishes syncing.
     return true;
 }
 

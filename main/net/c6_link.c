@@ -593,6 +593,45 @@ static void probe_upsert(const char *ssid)
     }
 }
 
+// Per-device probe list, keyed by source MAC, for the combined radar. Updated
+// in monitor_rx_cb under s_monitor_lock, snapshotted by
+// c6_link_monitor_probe_dev_poll. Reset each monitor session.
+static c6_probe_dev_t s_probe_devs[C6_PROBE_DEV_MAX];
+static int s_probe_dev_count;
+
+// Add/update one probing device by MAC + RSSI (+ the SSID it named, if any).
+// Caller holds s_monitor_lock.
+static void probe_dev_upsert(const uint8_t mac[6], int8_t rssi, const char *ssid)
+{
+    for (int i = 0; i < s_probe_dev_count; i++) {
+        if (memcmp(s_probe_devs[i].mac, mac, 6) == 0) {
+            s_probe_devs[i].rssi = rssi;
+            s_probe_devs[i].seen_seq++;
+            if (s_probe_devs[i].count < 0xFFFF) {
+                s_probe_devs[i].count++;
+            }
+            if (ssid[0] != '\0') {
+                strncpy(s_probe_devs[i].last_ssid, ssid, C6_MONITOR_SSID_MAX_LEN);
+                s_probe_devs[i].last_ssid[C6_MONITOR_SSID_MAX_LEN] = '\0';
+            }
+            return;
+        }
+    }
+    if (s_probe_dev_count < C6_PROBE_DEV_MAX) {
+        c6_probe_dev_t *d = &s_probe_devs[s_probe_dev_count];
+        memcpy(d->mac, mac, 6);
+        d->rssi = rssi;
+        d->count = 1;
+        d->seen_seq = 1;
+        d->last_ssid[0] = '\0';
+        if (ssid[0] != '\0') {
+            strncpy(d->last_ssid, ssid, C6_MONITOR_SSID_MAX_LEN);
+            d->last_ssid[C6_MONITOR_SSID_MAX_LEN] = '\0';
+        }
+        s_probe_dev_count++;
+    }
+}
+
 static const char *parse_security_mode(const uint8_t *payload, int len)
 {
     if (len < 36) {
@@ -732,9 +771,17 @@ static void monitor_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
             memcpy(ssid, &payload[ie + 2], ie_len);
             ssid[ie_len] = '\0';
             sanitize_ssid(ssid);
+            // Source MAC (SA) sits at bytes 10..15 of the 802.11 MAC header on
+            // a probe request; RSSI comes from the receive control block. Both
+            // are already in the frame the radio received -- reading them adds
+            // no transmission. Feeds the per-device probe list for the radar.
+            uint8_t src_mac[6];
+            memcpy(src_mac, &payload[10], 6);
+            int8_t probe_rssi = pkt->rx_ctrl.rssi;
             if (s_monitor_lock != NULL &&
                 xSemaphoreTake(s_monitor_lock, 0) == pdTRUE) {
                 probe_upsert(ssid);
+                probe_dev_upsert(src_mac, probe_rssi, ssid);
                 xSemaphoreGive(s_monitor_lock);
             }
         }
@@ -859,6 +906,7 @@ bool c6_link_monitor_start(void)
         s_monitor_ap_count = 0;
         memset(&s_frame_stats, 0, sizeof(s_frame_stats));
         s_probe_count = 0;
+        s_probe_dev_count = 0;
         xSemaphoreGive(s_monitor_lock);
     }
 
@@ -1009,6 +1057,21 @@ int c6_link_monitor_probe_poll(c6_probe_ssid_t *out, int max_entries)
     if (xSemaphoreTake(s_monitor_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
         n = s_probe_count < max_entries ? s_probe_count : max_entries;
         memcpy(out, s_probe_ssids, n * sizeof(c6_probe_ssid_t));
+        xSemaphoreGive(s_monitor_lock);
+    }
+    return n;
+}
+
+int c6_link_monitor_probe_dev_poll(c6_probe_dev_t *out, int max_entries)
+{
+    if (out == NULL || max_entries <= 0 || !s_monitor_running ||
+        s_monitor_lock == NULL) {
+        return 0;
+    }
+    int n = 0;
+    if (xSemaphoreTake(s_monitor_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+        n = s_probe_dev_count < max_entries ? s_probe_dev_count : max_entries;
+        memcpy(out, s_probe_devs, n * sizeof(c6_probe_dev_t));
         xSemaphoreGive(s_monitor_lock);
     }
     return n;

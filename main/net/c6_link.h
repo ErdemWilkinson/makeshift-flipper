@@ -152,6 +152,24 @@ typedef struct {
 // or 0 (also when the monitor isn't running).
 int c6_link_monitor_probe_poll(c6_probe_ssid_t *out, int max_entries);
 
+// Per-device probe view (for the combined radar): unlike the SSID-only list
+// above, this keys on the *source MAC* of each probe request and keeps its
+// RSSI, so the radar can place probing devices by direction/strength and
+// correlate them with BLE devices at the same spot. Deduplicated by MAC.
+// Still strictly receive-only -- it reads the source address and signal that
+// every probe request already carries over the air; it transmits nothing.
+#define C6_PROBE_DEV_MAX 24
+typedef struct {
+    uint8_t mac[6];
+    int8_t rssi;                          // latest RSSI for this device
+    char last_ssid[C6_MONITOR_SSID_MAX_LEN + 1]; // most recent network it asked for ("" if wildcard)
+    uint16_t count;                       // probe requests seen from this MAC
+    uint16_t seen_seq;                    // bumped each sighting; a change = fresh RSSI
+} c6_probe_dev_t;
+// Snapshots up to max_entries probing devices into out; returns the count
+// copied, or 0 (also when the monitor isn't running).
+int c6_link_monitor_probe_dev_poll(c6_probe_dev_t *out, int max_entries);
+
 #define C6_BT_MAX_DEVICES 32
 #define C6_BT_NAME_MAX_LEN 31
 
@@ -185,6 +203,16 @@ typedef struct {
     // "Beacon"), or "" if nothing recognizable was advertised.
     char kind[C6_BT_KIND_MAX_LEN + 1];
     uint16_t seen_seq; // bumped on every received advertisement; a change = fresh rssi
+    // --- Analyzer fields (pentest/privacy view) ---
+    // BLE address type as reported by the controller: 0/1 = public/static
+    // (potentially trackable across time), 2/3 = resolvable/non-resolvable
+    // random (privacy-preserving, rotates). Passive: read from the header the
+    // device already broadcasts.
+    uint8_t addr_type;
+    // Manufacturer "company id" from AD type 0xFF (little-endian first two
+    // bytes), 0xFFFF if the advertisement carried no manufacturer-specific
+    // data. Identifies the vendor (0x004C Apple, 0x0075 Samsung, ...).
+    uint16_t company_id;
 } c6_bt_device_t;
 
 // Passive BLE advertisement discovery. It never connects or accesses GATT

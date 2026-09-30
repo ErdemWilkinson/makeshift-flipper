@@ -37,3 +37,13 @@ button_id_t buttons_poll(void);
 // Call reset when entering the keyboard; other screens keep using buttons_poll().
 void buttons_keyboard_reset(void);
 button_id_t buttons_poll_keyboard(void);
+
+// Standalone LEFT tap-vs-hold tracker for the radar screens, where buttons_poll()
+// alone can't distinguish a quick LEFT tap from a hold. Call reset when entering
+// the screen, then call the event function every loop:
+//   returns 0 = nothing, 1 = LEFT tapped (e.g. move to previous target),
+//           2 = LEFT held long enough to mean "exit".
+// Self-contained: does not disturb buttons_poll()'s state, so RIGHT/UP/DOWN can
+// still be read from buttons_poll() in the same loop.
+void buttons_radar_left_reset(void);
+int  buttons_radar_left_event(void);
