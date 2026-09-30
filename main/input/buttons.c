@@ -159,6 +159,47 @@ void buttons_keyboard_reset(void)
     s_keyboard_left_consumed = false;
 }
 
+// --- Standalone LEFT short/long tracker (for the radar screens) ---
+// Screens that use buttons_poll() only get a single BUTTON_BACK from the LEFT
+// stick, with no way to tell a tap from a hold. This times the raw LEFT pin so
+// a caller can treat a quick tap as "go back one" and a deliberate hold as
+// "exit", the same tap-vs-hold feel the keyboard has. Fully self-contained: it
+// does not disturb buttons_poll()'s own edge state.
+#define RADAR_LEFT_HOLD_US 550000  // >= this held = long (exit)
+static bool    s_radar_left_pending;
+static int64_t s_radar_left_started_us;
+static bool    s_radar_left_consumed;
+
+void buttons_radar_left_reset(void)
+{
+    s_radar_left_pending = false;
+    s_radar_left_consumed = false;
+}
+
+int buttons_radar_left_event(void)
+{
+    int64_t now = esp_timer_get_time();
+    bool down = (gpio_get_level(GPIO_LEFT) == 0);
+
+    if (!down) {
+        s_radar_left_consumed = false; // released: re-arm for the next press
+    }
+    if (down && !s_radar_left_pending && !s_radar_left_consumed) {
+        s_radar_left_pending = true;
+        s_radar_left_started_us = now;
+    } else if (down && s_radar_left_pending) {
+        if (now - s_radar_left_started_us >= RADAR_LEFT_HOLD_US) {
+            s_radar_left_pending = false;
+            s_radar_left_consumed = true; // ignore until released
+            return 2;                     // long LEFT = exit
+        }
+    } else if (!down && s_radar_left_pending) {
+        s_radar_left_pending = false;
+        return 1;                         // released before hold = tap (prev)
+    }
+    return 0;
+}
+
 // Keyboard input, rewritten to track raw pin levels directly instead of
 // layering hold-detection on top of buttons_poll()'s edge/debounce events,
 // which proved fragile (LEFT taps were never reported, only the long-hold exit

@@ -1351,6 +1351,27 @@ static void show_wifi_ap_details(const c6_monitor_ap_t *ap)
     }
 }
 
+// Map a BLE manufacturer "company id" to a short vendor name. These are the
+// official Bluetooth SIG assigned numbers for the most common vendors; the full
+// list has thousands. 0xFFFF means the advertisement had no manufacturer data.
+static const char *ble_company_name(uint16_t cid)
+{
+    switch (cid) {
+        case 0x004C: return "Apple";
+        case 0x0075: return "Samsung";
+        case 0x00E0: return "Google";
+        case 0x0006: return "Microsoft";
+        case 0x0059: return "Nordic";
+        case 0x0157: return "Huawei";
+        case 0x038F: return "Xiaomi";
+        case 0x0499: return "Ruuvi";
+        case 0x0001: return "Ericsson";
+        case 0x000F: return "Broadcom";
+        case 0xFFFF: return NULL; // no manufacturer data present
+        default:     return NULL; // unknown vendor -> show raw id instead
+    }
+}
+
 static void show_bt_device_details(const c6_bt_device_t *device)
 {
     display_clear();
@@ -1361,8 +1382,30 @@ static void show_bt_device_details(const c6_bt_device_t *device)
              device->addr[0], device->addr[1], device->addr[2],
              device->addr[3], device->addr[4], device->addr[5]);
     display_draw_text(4, 0, line);
+
+    // Analyzer line 1 -- address type = trackability. A public/static address
+    // (type 0/1) stays the same over time, so the device can be tracked across
+    // sightings; a random address (type 2/3) rotates for privacy.
+    if (device->addr_type <= 1) {
+        display_draw_text_color(5, 0, "Adres: SABIT (izlenebilir)",
+                                DISPLAY_COLOR_ERROR);
+    } else {
+        display_draw_text_color(5, 0, "Adres: rastgele (korumali)",
+                                DISPLAY_COLOR_OK);
+    }
+
     snprintf(line, sizeof(line), "Sinyal: %d dBm", device->rssi);
     display_draw_text(6, 0, line);
+
+    // Analyzer line 2 -- manufacturer, from the advertisement's company id.
+    const char *vendor = ble_company_name(device->company_id);
+    if (vendor) {
+        snprintf(line, sizeof(line), "Uretici: %s", vendor);
+        display_draw_text(12, 0, line);
+    } else if (device->company_id != 0xFFFF) {
+        snprintf(line, sizeof(line), "Uretici ID: 0x%04X", device->company_id);
+        display_draw_text(12, 0, line);
+    }
     // Best-effort device kind (passive, from advertised UUIDs/appearance/vendor).
     if (device->kind[0]) {
         snprintf(line, sizeof(line), "Tur: %s", device->kind);
@@ -2361,10 +2404,29 @@ static void radar_multiphase(const char *title, radar_poll_fn poll)
         int highlight = s_radar_target_count > 0 ? 0 : -1;
         bool want_fix2 = false;
         bool exit_all = false;
+        int64_t last_beep_us = 0; // sonar-style audio ping timer
         for (;;) {
             int64_t now = esp_timer_get_time();
             int count = poll();
             radar_update(s_radar_poll_buf, count, now, false, 0.0f, 0);
+
+            // Sonar-style audio ping on the active buzzer: the closer the
+            // highlighted target (stronger RSSI), the shorter the gap between
+            // beeps -- like a metal detector. Silent when nothing is tracked.
+            if (highlight >= 0 && highlight < s_radar_target_count) {
+                int rssi = s_radar_live_rssi[highlight]; // ~ -30 (near) .. -95 (far)
+                // Map RSSI to a beep interval: near -> ~120ms, far -> ~1200ms.
+                int strength = rssi + 95;            // 0 (far) .. ~65 (near)
+                if (strength < 0) strength = 0;
+                if (strength > 65) strength = 65;
+                int interval_ms = 1200 - strength * 16; // 1200 down to ~160
+                if (interval_ms < 120) interval_ms = 120;
+                if ((now - last_beep_us) >= (int64_t)interval_ms * 1000) {
+                    vibration_pulse(25); // short chirp; active buzzer on GPIO1
+                    last_beep_us = now;
+                }
+            }
+
             radar_render(title, highlight, -1.0f, s_radar_has_fix2);
             display_draw_text_color(1, 0,
                                     s_radar_has_fix2 ? "Konum haritasi  UP:tekrar" :
@@ -2478,6 +2540,511 @@ static void action_wifi_radar(void)
     radar_multiphase("WiFi Radar", radar_poll_wifi);
     c6_link_monitor_stop();
     menu_render(s_active_menu);
+}
+
+// --- Birleşik Radar (BLE + Probe, eşleştirmeli) ----------------------------
+// A cross-protocol radar. The C6 has one radio, so it CANNOT listen to Wi-Fi
+// and BLE at the same time -- instead it time-slices: a few seconds of Wi-Fi
+// monitor (collecting probe-request devices by MAC+RSSI) alternating with a few
+// seconds of BLE scan. Both feed one unified target list. Probe devices draw
+// red, BLE devices draw teal. When a probe device and a BLE device sit at a
+// very similar RSSI, they are flagged as a likely-same physical device, letting
+// you tie a BLE MAC to the networks that device is probing for.
+//
+// This is a WALK-AROUND ("hot/cold") radar: blips are placed by RSSI distance
+// (closer to the centre = stronger = you are nearer that device) at a stable
+// per-MAC angle. There is no compass, so the angle is NOT a real bearing -- to
+// find a device you WALK and watch its blip: it slides toward the centre as you
+// get closer and out as you move away, and the selected target shows a
+// YAKLASIYOR/UZAKLASIYOR trend plus a metal-detector-style beep that speeds up
+// as you close in. Correlation is RSSI-only so it is a *guess* ("~" prefix), and
+// MAC randomization on modern phones means many devices never correlate. Purely
+// passive: it only reads what devices already broadcast.
+
+#define COMBO_MAX 40
+#define COMBO_PHASE_MS 4000  // seconds per radio before switching
+
+typedef struct {
+    bool used;
+    bool is_ble;          // true = BLE device, false = probe (Wi-Fi) device
+    uint8_t mac[6];
+    int8_t rssi;          // raw last RSSI
+    int8_t live_rssi;     // smoothed RSSI -> smoothed distance (no jitter/jumps)
+    int8_t peak_rssi;     // best (closest) RSSI ever seen for this device
+    int8_t trend;         // >0 getting closer, <0 moving away, 0 steady/unknown
+    char label[C6_BT_NAME_MAX_LEN + 1]; // BLE name, or probe's last SSID
+    float base_angle;     // stable pseudo-angle from MAC hash (radians)
+    float angle;          // smoothed angle actually drawn (eases toward base)
+    uint16_t last_seq;    // dedup: only react to a genuinely fresh sighting
+    int corr;             // index of correlated target of the other type, or -1
+    int64_t seen_us;      // last time this target got a fresh reading
+} combo_target_t;
+
+static combo_target_t s_combo[COMBO_MAX];
+static int s_combo_count;
+
+// Correlation ripple: a small expanding circle drawn at the midpoint of a pair
+// the instant they first correlate, so a fresh match visibly "pings".
+static int64_t s_combo_ripple_us;   // when the ripple started (0 = none)
+static int     s_combo_ripple_x, s_combo_ripple_y;
+#define COMBO_RIPPLE_MS 600
+
+// A stable angle per device so a blip doesn't jump around every frame. Derived
+// from the MAC so the same device always lands in the same direction. This is
+// NOT a real bearing (no compass) -- it just spreads blips readably around the
+// ring; distance (RSSI) is the meaningful axis.
+static float combo_angle_for_mac(const uint8_t mac[6])
+{
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 6; i++) { h ^= mac[i]; h *= 16777619u; }
+    return (float)(h % 3600) / 3600.0f * RADAR_TWO_PI;
+}
+
+static int combo_find(const uint8_t mac[6], bool is_ble)
+{
+    for (int i = 0; i < s_combo_count; i++) {
+        if (s_combo[i].used && s_combo[i].is_ble == is_ble &&
+            memcmp(s_combo[i].mac, mac, 6) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Fold one reading into a combo target. `seq` is the radio's per-device sighting
+// counter, so we only react to a genuinely fresh sighting (not every poll). On a
+// fresh reading we smooth the distance and update the closer/farther trend --
+// that is what drives the hot/cold walk-around behaviour.
+static void combo_upsert(const uint8_t mac[6], bool is_ble, int8_t rssi,
+                         const char *label, uint16_t seq)
+{
+    int idx = combo_find(mac, is_ble);
+    if (idx < 0) {
+        if (s_combo_count >= COMBO_MAX) return;
+        idx = s_combo_count++;
+        s_combo[idx].used = true;
+        s_combo[idx].is_ble = is_ble;
+        memcpy(s_combo[idx].mac, mac, 6);
+        s_combo[idx].base_angle = combo_angle_for_mac(mac);
+        s_combo[idx].angle = s_combo[idx].base_angle;
+        s_combo[idx].corr = -1;
+        s_combo[idx].label[0] = '\0';
+        s_combo[idx].live_rssi = rssi; // seed the smoothed value
+        s_combo[idx].peak_rssi = rssi;
+        s_combo[idx].trend = 0;
+        s_combo[idx].last_seq = 0;
+    }
+    combo_target_t *t = &s_combo[idx];
+    t->rssi = rssi;
+    t->seen_us = esp_timer_get_time();
+    if (rssi > t->peak_rssi) t->peak_rssi = rssi;
+    if (label && label[0]) {
+        snprintf(t->label, sizeof(t->label), "%.*s",
+                 (int)sizeof(t->label) - 1, label);
+    }
+
+    // Only move the smoothed distance and trend on a fresh sighting, so a device
+    // polled fast but advertising slowly doesn't drift on stale repeats.
+    bool fresh = (seq != t->last_seq);
+    t->last_seq = seq;
+    if (fresh) {
+        int old = t->live_rssi;
+        // Compare the new reading to the smoothed value to call closer/farther.
+        // A small deadband avoids flapping on noise.
+        if (rssi > old + 2)      t->trend = 1;   // stronger => getting closer
+        else if (rssi < old - 2) t->trend = -1;  // weaker   => moving away
+        // else keep the previous trend (steady)
+        // Smooth the drawn RSSI so the blip glides in/out instead of snapping.
+        t->live_rssi = (int8_t)(old + (rssi - old) / 3);
+    }
+}
+
+// Ease every target's drawn angle toward its stable hash angle. There is no
+// compass, so the angle is just a readable, fixed spread around the ring;
+// easing only keeps a newly-seeded blip from popping into place.
+static void combo_ease_angles(void)
+{
+    for (int i = 0; i < s_combo_count; i++) {
+        if (!s_combo[i].used) continue;
+        float d = s_combo[i].base_angle - s_combo[i].angle;
+        while (d >  3.14159265f) d -= RADAR_TWO_PI;
+        while (d < -3.14159265f) d += RADAR_TWO_PI;
+        s_combo[i].angle += d * 0.25f;
+    }
+}
+
+// Correlate BLE<->probe by *both* signal and position proximity. For each BLE
+// target we score every free probe by |dRSSI| plus the angular gap between
+// their drawn positions, and take the single best (nearest) probe -- not the
+// first within a fixed window. This is what makes it lock onto the device that
+// is genuinely at the same spot instead of picking one at random.
+#define COMBO_CORR_DB   8      // max RSSI gap to even consider a pair (dB)
+#define COMBO_CORR_ANG  0.9f   // max angular gap to consider (radians, ~50 deg)
+
+static void combo_correlate(void)
+{
+    // Remember existing pairs so we can detect a *new* match (for the ripple).
+    int prev_corr[COMBO_MAX];
+    for (int i = 0; i < s_combo_count; i++) prev_corr[i] = s_combo[i].corr;
+    for (int i = 0; i < s_combo_count; i++) s_combo[i].corr = -1;
+
+    for (int i = 0; i < s_combo_count; i++) {
+        if (!s_combo[i].used || !s_combo[i].is_ble) continue;
+        int best = -1;
+        float best_score = 1e9f;
+        for (int j = 0; j < s_combo_count; j++) {
+            if (!s_combo[j].used || s_combo[j].is_ble) continue; // want a probe
+            if (s_combo[j].corr != -1) continue;                 // already taken
+            int drssi = s_combo[i].live_rssi - s_combo[j].live_rssi;
+            if (drssi < 0) drssi = -drssi;
+            if (drssi > COMBO_CORR_DB) continue;
+            float da = s_combo[i].angle - s_combo[j].angle;
+            while (da >  3.14159265f) da -= RADAR_TWO_PI;
+            while (da < -3.14159265f) da += RADAR_TWO_PI;
+            if (da < 0) da = -da;
+            if (da > COMBO_CORR_ANG) continue;
+            // Combined closeness: dB gap + angle gap scaled into dB-ish units.
+            float score = (float)drssi + da * 10.0f;
+            if (score < best_score) { best_score = score; best = j; }
+        }
+        if (best >= 0) {
+            s_combo[i].corr = best;
+            s_combo[best].corr = i;
+            // Newly formed pair? kick off a ripple at their midpoint.
+            if (prev_corr[i] != best) {
+                const int cx = DISPLAY_WIDTH_PX / 2;
+                const int cy = DISPLAY_HEIGHT_PX / 2 + 8;
+                const int r_outer = 104;
+                float ai = radar_screen_angle(s_combo[i].angle);
+                float di = radar_distance_frac(s_combo[i].live_rssi);
+                float aj = radar_screen_angle(s_combo[best].angle);
+                float dj = radar_distance_frac(s_combo[best].live_rssi);
+                int ix = cx + (int)(cosf(ai) * di * r_outer);
+                int iy = cy + (int)(sinf(ai) * di * r_outer);
+                int jx = cx + (int)(cosf(aj) * dj * r_outer);
+                int jy = cy + (int)(sinf(aj) * dj * r_outer);
+                s_combo_ripple_x = (ix + jx) / 2;
+                s_combo_ripple_y = (iy + jy) / 2;
+                s_combo_ripple_us = esp_timer_get_time();
+                vibration_pulse(20); // tiny chirp on a fresh match
+            }
+        }
+    }
+}
+
+static void combo_render(int highlight, const char *phase)
+{
+    const int cx = DISPLAY_WIDTH_PX / 2;
+    const int cy = DISPLAY_HEIGHT_PX / 2 + 8;
+    const int r_outer = 104;
+
+    display_clear();
+    display_draw_text_centered(0, "Birlesik Radar", DISPLAY_COLOR_ACCENT);
+    display_draw_text_color(1, 0, phase, DISPLAY_COLOR_DIM);
+
+    display_draw_circle(cx, cy, r_outer, DISPLAY_COLOR_DIM);
+    display_draw_circle(cx, cy, r_outer * 2 / 3, DISPLAY_COLOR_DIM);
+    display_draw_circle(cx, cy, r_outer / 3, DISPLAY_COLOR_DIM);
+    display_draw_line(cx - r_outer, cy, cx + r_outer, cy, DISPLAY_COLOR_DIM);
+    display_draw_line(cx, cy - r_outer, cx, cy + r_outer, DISPLAY_COLOR_DIM);
+
+    // Sonar-style "ping": a ring expands out from the centre and fades, looping
+    // continuously -- same look as the BLE/WiFi radar, tied to wall-clock time.
+    {
+        const int64_t period_us = 2200000;
+        int64_t phase_us = esp_timer_get_time() % period_us;
+        float frac = (float)phase_us / (float)period_us; // 0..1
+        int ring_r = (int)(frac * r_outer);
+        if (ring_r > 2) {
+            display_color_t ring_col = (frac < 0.4f) ? DISPLAY_COLOR_OK
+                                      : (frac < 0.75f) ? DISPLAY_RGB(4, 24, 18)
+                                                        : DISPLAY_COLOR_DIM;
+            display_draw_circle(cx, cy, ring_r, ring_col);
+        }
+    }
+
+    display_fill_circle(cx, cy, 3, DISPLAY_COLOR_OK); // you are here
+
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < s_combo_count; i++) {
+        if (!s_combo[i].used) continue;
+        float ang = radar_screen_angle(s_combo[i].angle);
+        float dist = radar_distance_frac(s_combo[i].live_rssi);
+        int px = cx + (int)(cosf(ang) * dist * r_outer);
+        int py = cy + (int)(sinf(ang) * dist * r_outer);
+        bool stale = (now - s_combo[i].seen_us) > RADAR_STALE_US;
+        display_color_t c;
+        if (stale) {
+            c = DISPLAY_COLOR_DIM;                        // faded: not heard lately
+        } else if (i == highlight) {
+            c = DISPLAY_COLOR_ACCENT;                     // selected
+        } else {
+            c = s_combo[i].is_ble ? DISPLAY_RGB(6, 40, 31) // teal BLE
+                                  : DISPLAY_COLOR_ERROR;   // red probe
+        }
+        int rad = (i == highlight) ? 5 : 3;
+        display_fill_circle(px, py, rad, c);
+        // A correlated pair gets a connecting line so you can see the link.
+        if (s_combo[i].corr >= 0 && i < s_combo[i].corr) {
+            int j = s_combo[i].corr;
+            float aj = radar_screen_angle(s_combo[j].angle);
+            float dj = radar_distance_frac(s_combo[j].live_rssi);
+            int jx = cx + (int)(cosf(aj) * dj * r_outer);
+            int jy = cy + (int)(sinf(aj) * dj * r_outer);
+            display_draw_line(px, py, jx, jy, DISPLAY_COLOR_OK);
+        }
+    }
+
+    // Match ripple: a short expanding circle at the last pair's midpoint.
+    if (s_combo_ripple_us > 0) {
+        int64_t age = now - s_combo_ripple_us;
+        if (age < (int64_t)COMBO_RIPPLE_MS * 1000) {
+            float f = (float)age / ((float)COMBO_RIPPLE_MS * 1000.0f); // 0..1
+            int rr = (int)(f * 22.0f) + 2;
+            display_color_t rc = (f < 0.5f) ? DISPLAY_COLOR_OK : DISPLAY_COLOR_DIM;
+            display_draw_circle(s_combo_ripple_x, s_combo_ripple_y, rr, rc);
+        } else {
+            s_combo_ripple_us = 0;
+        }
+    }
+
+    // Footer: details of the highlighted target.
+    char line[DISPLAY_COLS + 1];
+    if (highlight >= 0 && highlight < s_combo_count && s_combo[highlight].used) {
+        combo_target_t *t = &s_combo[highlight];
+        // Trend marker: ">" getting closer, "<" moving away, "=" steady.
+        char tr = (t->trend > 0) ? '>' : (t->trend < 0) ? '<' : '=';
+        snprintf(line, sizeof(line), "%s%.12s %ddBm%c",
+                 t->is_ble ? "BLE " : "PRB ",
+                 t->label[0] ? t->label : "(?)", t->live_rssi, tr);
+        display_color_t tc = (t->trend > 0) ? DISPLAY_COLOR_OK
+                           : (t->trend < 0) ? DISPLAY_COLOR_ERROR
+                                            : DISPLAY_COLOR_TEXT;
+        display_draw_text_color(DISPLAY_ROWS - 2, 0, line, tc);
+        if (t->corr >= 0) {
+            combo_target_t *o = &s_combo[t->corr];
+            // Show the tie: BLE MAC <-> the network the same spot is probing.
+            if (t->is_ble) {
+                snprintf(line, sizeof(line), "~ayni? probe: %.14s",
+                         o->label[0] ? o->label : "(gizli)");
+            } else {
+                snprintf(line, sizeof(line), "~ayni? BLE %02X:%02X:%02X",
+                         o->mac[0], o->mac[1], o->mac[2]);
+            }
+            display_draw_text_color(DISPLAY_ROWS - 1, 0, line, DISPLAY_COLOR_OK);
+        } else {
+            display_draw_text(DISPLAY_ROWS - 1, 0, "SAG:sec SOL:cik");
+        }
+    } else {
+        char nbuf[4];
+        int nshow = s_combo_count; if (nshow < 0) nshow = 0; if (nshow > 99) nshow = 99;
+        snprintf(nbuf, sizeof(nbuf), "%d", nshow);
+        snprintf(line, sizeof(line), "%s hdf SAG:sec SOL:cik", nbuf);
+        display_draw_text(DISPLAY_ROWS - 1, 0, line);
+    }
+    display_flush();
+}
+
+// Full-detail page for one combo target: everything known about it plus, for a
+// BLE device, the probe(s) heard at the same spot (its correlated Wi-Fi twin),
+// or for a probe device, the BLE twin. A = open, any key = back.
+static void combo_detail(int idx)
+{
+    if (idx < 0 || idx >= s_combo_count || !s_combo[idx].used) return;
+    combo_target_t *t = &s_combo[idx];
+
+    display_clear();
+    display_draw_text_centered(0, t->is_ble ? "BLE Cihaz" : "Probe Cihaz",
+                               DISPLAY_COLOR_ACCENT);
+
+    char line[DISPLAY_COLS + 1];
+    int row = 2;
+    // MAC (probe source MAC or BLE address)
+    snprintf(line, sizeof(line), "MAC %02X:%02X:%02X:%02X:%02X:%02X",
+             t->mac[0], t->mac[1], t->mac[2], t->mac[3], t->mac[4], t->mac[5]);
+    display_draw_text(row++, 0, line);
+    // Label: BLE name, or the network the probe last asked for
+    if (t->is_ble) {
+        snprintf(line, sizeof(line), "Ad: %.16s", t->label[0] ? t->label : "(yok)");
+    } else {
+        snprintf(line, sizeof(line), "Aradigi: %.12s",
+                 t->label[0] ? t->label : "(joker/gizli)");
+    }
+    display_draw_text(row++, 0, line);
+    // Signal: live + peak, and a rough distance bucket
+    snprintf(line, sizeof(line), "Sinyal: %ddBm (en iyi %d)",
+             t->live_rssi, t->peak_rssi);
+    display_draw_text(row++, 0, line);
+    const char *prox = (t->live_rssi >= -55) ? "cok yakin"
+                      : (t->live_rssi >= -70) ? "yakin"
+                      : (t->live_rssi >= -82) ? "orta" : "uzak";
+    // Walk trend: are you getting closer or moving away right now?
+    const char *tr = (t->trend > 0) ? "YAKLASIYOR"
+                   : (t->trend < 0) ? "UZAKLASIYOR" : "sabit";
+    snprintf(line, sizeof(line), "Uzaklik: %s", prox);
+    display_draw_text(row++, 0, line);
+    snprintf(line, sizeof(line), "Hareket: %s", tr);
+    display_draw_text_color(row++, 0, line,
+                            (t->trend > 0) ? DISPLAY_COLOR_OK
+                          : (t->trend < 0) ? DISPLAY_COLOR_ERROR
+                                           : DISPLAY_COLOR_DIM);
+
+    row++;
+    // The correlated twin + its probes/BLE info.
+    if (t->corr >= 0 && t->corr < s_combo_count) {
+        combo_target_t *o = &s_combo[t->corr];
+        display_draw_text_color(row++, 0, "-- Ayni noktadaki --",
+                                DISPLAY_COLOR_OK);
+        if (t->is_ble) {
+            // This BLE device's probe twin: show the network(s) it emits.
+            display_draw_text(row++, 0, "Yaydigi probe(lar):");
+            snprintf(line, sizeof(line), " > %.18s",
+                     o->label[0] ? o->label : "(joker/gizli)");
+            display_draw_text(row++, 0, line);
+            snprintf(line, sizeof(line), " MAC %02X:%02X:%02X %ddBm",
+                     o->mac[0], o->mac[1], o->mac[2], o->live_rssi);
+            display_draw_text(row++, 0, line);
+        } else {
+            // This probe device's BLE twin.
+            display_draw_text(row++, 0, "Ayni yerde BLE:");
+            snprintf(line, sizeof(line), " > %.18s",
+                     o->label[0] ? o->label : "(adsiz)");
+            display_draw_text(row++, 0, line);
+            snprintf(line, sizeof(line), " %02X:%02X:%02X:%02X:%02X:%02X",
+                     o->mac[0], o->mac[1], o->mac[2], o->mac[3], o->mac[4], o->mac[5]);
+            display_draw_text(row++, 0, line);
+        }
+    } else {
+        display_draw_text_color(row++, 0, "Eslesen cihaz yok",
+                                DISPLAY_COLOR_DIM);
+        if (t->is_ble) {
+            display_draw_text_color(row++, 0, "(WiFi fazinda probe",
+                                    DISPLAY_COLOR_DIM);
+            display_draw_text_color(row++, 0, " bekleyince eslesebilir)",
+                                    DISPLAY_COLOR_DIM);
+        }
+    }
+
+    display_draw_text_color(DISPLAY_ROWS - 1, 0, "Geri: bir tusa bas",
+                            DISPLAY_COLOR_DIM);
+    display_flush();
+    wait_for_any_key();
+}
+
+static void action_combo_radar(void)
+{
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "Birlesik Radar", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
+
+    display_clear();
+    display_draw_text_centered(0, "Birlesik Radar", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "WiFi + BLE donusumlu");
+    display_draw_text_color(4, 0, "Kirmizi=probe Mavi=BLE", DISPLAY_COLOR_DIM);
+    display_draw_text_color(5, 0, "Yakin sinyaller eslesir", DISPLAY_COLOR_DIM);
+    display_draw_text(7, 0, "Cihazi bul: ETRAFTA YURU");
+    display_draw_text_color(8, 0, "yaklasinca blip merkeze", DISPLAY_COLOR_DIM);
+    display_draw_text_color(9, 0, "gelir, bip hizlanir.", DISPLAY_COLOR_DIM);
+    display_draw_text(DISPLAY_ROWS - 1, 0, "Basla:SAG A:detay Cik:SOL");
+    display_flush();
+    for (;;) {
+        button_id_t e = poll_button_for_ticks(50);
+        if (e == BUTTON_RIGHT || e == BUTTON_PRESS) break;
+        if (e == BUTTON_BACK || e == BUTTON_LEFT) { menu_render(s_active_menu); return; }
+    }
+
+    s_combo_count = 0;
+    memset(s_combo, 0, sizeof(s_combo));
+    s_combo_ripple_us = 0;
+    int highlight = -1;
+
+    // ===================== LIVE WALK-AROUND RADAR =====================
+    // Hot/cold search: alternate WiFi and BLE, place blips by (smoothed) RSSI
+    // distance, and keep a closer/farther trend per device. Walk around: the
+    // selected target's blip slides toward the centre as you approach, and a
+    // metal-detector beep speeds up the closer you get.
+    // Controls: RIGHT = next target, LEFT tap = previous, LEFT hold = exit,
+    // A = full detail page for the selected target.
+    buttons_radar_left_reset();
+    bool wifi_phase = true;
+    int64_t last_beep_us = 0;
+
+    for (;;) {
+        bool started = wifi_phase ? c6_link_monitor_start()
+                                  : c6_link_bt_scan_start();
+        int64_t phase_end = esp_timer_get_time() + (int64_t)COMBO_PHASE_MS * 1000;
+
+        while (esp_timer_get_time() < phase_end) {
+            if (started && wifi_phase) {
+                static c6_probe_dev_t pd[C6_PROBE_DEV_MAX];
+                int n = c6_link_monitor_probe_dev_poll(pd, C6_PROBE_DEV_MAX);
+                for (int i = 0; i < n; i++) {
+                    combo_upsert(pd[i].mac, false, pd[i].rssi, pd[i].last_ssid,
+                                 pd[i].seen_seq);
+                }
+            } else if (started && !wifi_phase) {
+                static c6_bt_device_t bd[C6_BT_MAX_DEVICES];
+                int n = c6_link_bt_scan_poll(bd, C6_BT_MAX_DEVICES);
+                for (int i = 0; i < n; i++) {
+                    combo_upsert(bd[i].addr, true, bd[i].rssi, bd[i].name,
+                                 bd[i].seen_seq);
+                }
+            }
+            combo_ease_angles(); // glide blips toward their spots each frame
+            combo_correlate();
+            const char *phase = wifi_phase ? "Faz: WiFi probe dinle"
+                                           : "Faz: BLE dinle";
+            combo_render(highlight, phase);
+
+            // Metal-detector beep for the SELECTED target: the closer it is, the
+            // shorter the gap between chirps (300ms up close .. 1500ms far off).
+            if (highlight >= 0 && highlight < s_combo_count &&
+                s_combo[highlight].used) {
+                float f = radar_distance_frac(s_combo[highlight].live_rssi); // 0 near..1 far
+                int interval_ms = 300 + (int)(f * 1200.0f);
+                int64_t nowu = esp_timer_get_time();
+                if (nowu - last_beep_us >= (int64_t)interval_ms * 1000) {
+                    last_beep_us = nowu;
+                    vibration_pulse(15);
+                }
+            }
+
+            // LEFT tap/hold, tracked independently of the debounced poll.
+            int lev = buttons_radar_left_event();
+            if (lev == 2) { // long LEFT = exit
+                if (wifi_phase) c6_link_monitor_stop(); else c6_link_bt_scan_stop();
+                menu_render(s_active_menu);
+                return;
+            }
+            if (lev == 1 && s_combo_count > 0) { // short LEFT = previous
+                highlight = (highlight <= 0) ? s_combo_count - 1 : highlight - 1;
+            }
+
+            button_id_t e = poll_button_for_ticks(3);
+            if (e == BUTTON_RIGHT && s_combo_count > 0) {
+                highlight = (highlight + 1) % s_combo_count;
+            } else if (e == BUTTON_PRESS && highlight >= 0) {
+                // A = full detail. Stop the radio while we're on the static page,
+                // then resume this phase's radio afterwards.
+                if (wifi_phase) c6_link_monitor_stop(); else c6_link_bt_scan_stop();
+                combo_detail(highlight);
+                buttons_radar_left_reset();
+                started = wifi_phase ? c6_link_monitor_start()
+                                     : c6_link_bt_scan_start();
+            }
+        }
+
+        // ---- Stop this radio before switching (single-radio constraint) ----
+        if (wifi_phase) c6_link_monitor_stop(); else c6_link_bt_scan_stop();
+        wifi_phase = !wifi_phase;
+    }
 }
 
 static void action_about(void)
@@ -2673,6 +3240,7 @@ static menu_item_t s_hacking_menu_items[] = {
     {"Probe Yakala (RX)", action_wifi_probe_capture, NULL, NULL},
     {"WiFi Radar (RX)", action_wifi_radar, NULL, NULL},
     {"BLE Keşif (RX)", action_bt_scan, NULL, NULL},
+    {"Birlesik Radar (RX)", action_combo_radar, NULL, NULL},
 };
 
 

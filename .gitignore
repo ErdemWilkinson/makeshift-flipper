@@ -34,7 +34,9 @@ archive/
 debug.log
 build-c6-current/
 tools/probe_logs/
-ui/
+# Stray root-level ui/ experiment only -- the real UI lives in main/ui/ and
+# must stay tracked, so anchor this to the repo root (leading slash).
+/ui/
 
 # Active Wi-Fi packet injection (deauth) source is kept local only and out of
 # the public repository: the project README states the device performs no
