@@ -192,5 +192,5 @@ Alışveriş dosyandaki zincire uy — özellikle:
 - Şarj ederken **cihaz kapalı** olsun (temel TP4056 aynı anda ikisini yapamaz).
 - Karta USB takmadan (flash) önce güç **anahtarını kapat**.
 
-Detaylı güç zinciri: [`../ERDEM_SATIN_ALINACAKLAR.md`](../ERDEM_SATIN_ALINACAKLAR.md)
+Detaylı güç zinciri: [`../docs/planning/ERDEM_SATIN_ALINACAKLAR.md`](../docs/planning/ERDEM_SATIN_ALINACAKLAR.md)
 bölümündeki "Güç zinciri" ve "Güç kuralları".

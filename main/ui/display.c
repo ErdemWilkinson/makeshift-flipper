@@ -19,7 +19,7 @@
 // module owns the shared bus: display_init() calls spi_bus_initialize() once.
 // The screen is write-only, so MISO is enabled only when the RC522 hardware
 // profile is selected. display_init() must run before rc522_init(). See
-// MCU_ARCHITECTURE_DECISION.md and RC522_SHARED_SPI_HOST in rc522.c.
+// docs/hardware/MCU_ARCHITECTURE_DECISION.md and RC522_SHARED_SPI_HOST in rc522.c.
 #define LCD_SCK_GPIO  18 // Pico GP10; shared with RC522
 #define LCD_MOSI_GPIO 19 // Pico GP11; shared with RC522
 #define LCD_SHARED_MISO_GPIO BOARD_RC522_MISO_GPIO // RC522 only

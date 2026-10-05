@@ -12,7 +12,7 @@ former two-chip (ESP32-P4 + ESP32-C6-over-UART) design is retired; if you
 find a row anywhere in this repo's history that references P4 GPIOs, an
 analog ADC joystick, or a SoftAP-based Wi-Fi setup server, it describes that
 retired design, not the current firmware — see
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md)'s Round 27 for how that mismatch was
+[KNOWN_ISSUES.md](../../KNOWN_ISSUES.md)'s Round 27 for how that mismatch was
 found and fixed.
 
 The single-MCU ESP32-C6 firmware builds under ESP-IDF v5.3.x and has been
@@ -151,7 +151,7 @@ with the display and the rest of the UI on one core.
 
 - Display/control bring-up has begun, but the rows above remain a checklist,
   not a blanket claim of complete device validation. See
-  [KNOWN_ISSUES.md](KNOWN_ISSUES.md)'s Round 27 for the audit that found
+  [KNOWN_ISSUES.md](../../KNOWN_ISSUES.md)'s Round 27 for the audit that found
   this matrix itself was out of date (still describing the retired P4
   pin map) and produced this rewrite.
 - Timing-sensitive things (IR NEC frame decode margins, button debounce

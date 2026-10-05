@@ -12,7 +12,7 @@ on-chip Wi-Fi/BLE; there is no ESP32-P4 companion or inter-MCU UART link.
 > hardware, vibration/buzzer motor and battery gauge have **not** been
 > validated as an assembled device. A menu item or compiled driver is not proof
 > that its external module is connected or working. See
-> [hardware checks](HARDWARE_TEST_MATRIX.md).
+> [hardware checks](docs/hardware/HARDWARE_TEST_MATRIX.md).
 
 > **Authorization matters.** Use the radio, RFID and IR functions only on
 > devices and networks you own or have explicit permission to test. The
@@ -122,7 +122,7 @@ and see every nearby 2.4 GHz network, not just one.
 Camera/OCR, microphone/voice control, GPS, Sub-GHz, cellular and general
 remote-control features are not part of the current firmware. For a broader
 capability and misuse-boundary discussion, see
-[CAPABILITY_AND_THREAT_ASSESSMENT.md](CAPABILITY_AND_THREAT_ASSESSMENT.md).
+[CAPABILITY_AND_THREAT_ASSESSMENT.md](docs/planning/CAPABILITY_AND_THREAT_ASSESSMENT.md).
 
 ## Current hardware profile
 
@@ -168,9 +168,9 @@ one-handed without a centre button.
 `BOARD_HAS_RC522` is `0` until the reader is wired. Connecting it does not
 enable it on its own. Do not power an RC522 from 5 V. RC522, RDM6300, IR and
 the motor are unverified on real hardware. The old TCA9554 button map in
-[C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) is historical
+[C6_STANDALONE_HARDWARE_PLAN.md](docs/hardware/C6_STANDALONE_HARDWARE_PLAN.md) is historical
 and **does not describe the current direct-GPIO build**. Use the source and
-[HARDWARE_TEST_MATRIX.md](HARDWARE_TEST_MATRIX.md) before changing wires.
+[HARDWARE_TEST_MATRIX.md](docs/hardware/HARDWARE_TEST_MATRIX.md) before changing wires.
 
 ## Build, flash and tests
 
@@ -193,7 +193,7 @@ ESP-IDF's Windows build tools may fail when the checkout path contains
 non-ASCII characters. An ASCII-only project copy was used for the latest
 build/flash; copy source changes there before building. A successful build
 or flash proves neither screen appearance nor every peripheral. Check the
-real device with the [test matrix](HARDWARE_TEST_MATRIX.md).
+real device with the [test matrix](docs/hardware/HARDWARE_TEST_MATRIX.md).
 
 Hardware-independent host tests can be run with Bash and a C compiler:
 
@@ -213,10 +213,10 @@ still need testing.
 | `main/` | ESP32-C6 firmware: UI, direct-GPIO controls, RFID/IR drivers, diagnostics and on-chip radios |
 | `main/net/c6_link.c`, `main/net/radio_ble.c` | Station Wi-Fi, local AP, scan/monitor and passive BLE; the `c6_link_*` name is historical, not a UART link |
 | `tests/` | Host-side logic tests; not a replacement for hardware testing |
-| [HARDWARE_TEST_MATRIX.md](HARDWARE_TEST_MATRIX.md) | Device-level checks and current direct-button map; some older prose may still need reconciliation |
-| [C6_STANDALONE_HARDWARE_PLAN.md](C6_STANDALONE_HARDWARE_PLAN.md) | Historical Pico/TCA9554 plan and unassembled power concept; **not** the current button pin map |
+| [HARDWARE_TEST_MATRIX.md](docs/hardware/HARDWARE_TEST_MATRIX.md) | Device-level checks and current direct-button map; some older prose may still need reconciliation |
+| [C6_STANDALONE_HARDWARE_PLAN.md](docs/hardware/C6_STANDALONE_HARDWARE_PLAN.md) | Historical Pico/TCA9554 plan and unassembled power concept; **not** the current button pin map |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Historical audit notes; some older P4/C6 and “not yet flashed” statements are stale |
-| [MCU_ARCHITECTURE_DECISION.md](MCU_ARCHITECTURE_DECISION.md) | Why the field unit moved to one C6 |
+| [MCU_ARCHITECTURE_DECISION.md](docs/hardware/MCU_ARCHITECTURE_DECISION.md) | Why the field unit moved to one C6 |
 
 The portable LiPo/charger/power-path system has not been validated. Do not
 assume a TP4056 alone provides safe simultaneous charging and operation.

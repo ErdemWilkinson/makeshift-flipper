@@ -161,7 +161,7 @@ product requirements if the component is added.
    interaction capabilities for misuse.
 8. **Field validation:** Do not claim any capability “works” until it has
    passed real-hardware testing and user acceptance using
-   `HARDWARE_TEST_MATRIX.md`.
+   `../hardware/HARDWARE_TEST_MATRIX.md`.
 
 ## Priority compliance and security work for this revision
 
@@ -457,7 +457,7 @@ surveillance — recording people, documents, screens, or license plates
 without consent, especially easy to conceal in something already shaped
 like an innocuous handheld.
 *Legitimate reason to add it anyway:* offline OCR, accessibility,
-owner-approved document/label capture (see `HARDWARE_INTEGRATION_PLAN.md`).
+owner-approved document/label capture (see `../hardware/HARDWARE_INTEGRATION_PLAN.md`).
 *Minimum restriction if added:* hardware-wired recording LED, physical
 shutter/cover, no background capture, no default upload, storage disabled
 by default.
@@ -598,7 +598,7 @@ menu but also on signed firmware and a hardware-expansion policy.
 
 - `README.md`: current modules, pin plan, operational limits, and security
   notes.
-- `C6_STANDALONE_HARDWARE_PLAN.md`: single-MCU pin map, power tree, missing-
+- `../hardware/C6_STANDALONE_HARDWARE_PLAN.md`: single-MCU pin map, power tree, missing-
   parts BOM, and bring-up order.
 - `KNOWN_ISSUES.md`: build/validation status and known security, reliability,
   and parsing issues.

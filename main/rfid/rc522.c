@@ -10,7 +10,7 @@
 #include "esp_log.h"
 
 // C6-standalone: the RC522 shares the single SPI2 host with the ST7789 LCD
-// (see display.c's LCD_* pins and MCU_ARCHITECTURE_DECISION.md). SCK/MOSI/
+// (see display.c's LCD_* pins and docs/hardware/MCU_ARCHITECTURE_DECISION.md). SCK/MOSI/
 // MISO are the shared bus lines that display.c already owns via
 // spi_bus_initialize(); CS and RST are this device's own signals.
 #define PIN_CS  GPIO_NUM_7 // Pico GP5

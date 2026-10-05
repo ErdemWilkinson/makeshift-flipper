@@ -2,7 +2,7 @@
 
 Son güncelleme: **28 Eylül 2026**. Fiyat ve stoklar değişebilir.
 Kart: **Waveshare ESP32-C6-DEV-KIT-NX** (C6-Pico değil). Pin haritası:
-[WIRING_MAP_RC522.md](WIRING_MAP_RC522.md).
+[WIRING_MAP_RC522.md](../../WIRING_MAP_RC522.md).
 
 ## Sende zaten var, tekrar alma
 
