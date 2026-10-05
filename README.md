@@ -222,3 +222,7 @@ The portable LiPo/charger/power-path system has not been validated. Do not
 assume a TP4056 alone provides safe simultaneous charging and operation.
 Keep the battery build separate from the USB-powered firmware bring-up until
 its wiring, protection and current budget are tested.
+
+## License
+
+Code in this repository is released under the [MIT License](LICENSE).
