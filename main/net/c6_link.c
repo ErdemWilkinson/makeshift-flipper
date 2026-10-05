@@ -401,6 +401,63 @@ bool c6_link_ap_is_running(void)
     return s_ap_running;
 }
 
+// --- Sifresiz (open) AP: captive portal icin. Belirtilen SSID ile acar. ---
+// Normal c6_link_ap_start ile ayni radyo/netif'i kullanir; ayni anda ikisi
+// birden calismaz. Captive portal modulu (captive_portal.c) cagirir.
+bool c6_link_ap_open_start(const char *ssid)
+{
+    if (s_ap_running) {
+        return false; // once mevcut AP'yi kapat
+    }
+    if (!s_wifi_ready || s_ap_netif == NULL || s_monitor_running ||
+        c6_bt_scan_is_running()) {
+        return false;
+    }
+    if (ssid == NULL || ssid[0] == '\0') {
+        return false;
+    }
+
+    wifi_config_t cfg = {0};
+    size_t sl = strlen(ssid);
+    if (sl > C6_SSID_MAX_LEN) sl = C6_SSID_MAX_LEN;
+    memcpy(cfg.ap.ssid, ssid, sl);
+    cfg.ap.ssid_len = (uint8_t)sl;
+    cfg.ap.channel = 1;
+    cfg.ap.max_connection = 4;
+    cfg.ap.authmode = WIFI_AUTH_OPEN;   // sifresiz
+
+    s_connect_pending = false;
+    esp_wifi_disconnect();
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi stop before open AP failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &cfg);
+    if (err == ESP_OK) err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "open AP start failed: %s", esp_err_to_name(err));
+        restore_sta_mode();
+        return false;
+    }
+    snprintf(s_ap_ssid, sizeof(s_ap_ssid), "%.*s", (int)sl, ssid);
+    s_ap_password[0] = '\0';
+    s_ap_running = true;
+    ESP_LOGI(TAG, "open AP started: SSID=%s", s_ap_ssid);
+    return true;
+}
+
+void c6_link_ap_open_stop(void)
+{
+    if (!s_ap_running) return;
+    esp_wifi_stop();
+    s_ap_running = false;
+    s_ap_ssid[0] = '\0';
+    restore_sta_mode();
+    ESP_LOGI(TAG, "open AP stopped");
+}
+
 bool c6_link_ap_get_status(c6_ap_status_t *out_status)
 {
     if (out_status == NULL) {

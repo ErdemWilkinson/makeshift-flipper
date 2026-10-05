@@ -19,6 +19,7 @@ idf_component_register(
         "diag/diag.c"
         "net/c6_link.c"
         "net/radio_ble.c"
+        "net/captive_portal.c"
     INCLUDE_DIRS
         "."
         "ui"
@@ -44,5 +45,6 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
+        esp_http_server
         bt
 )

