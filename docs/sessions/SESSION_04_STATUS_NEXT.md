@@ -101,15 +101,14 @@ truncation, monitor STA drop) **incelendi**: hepsi ya kabul edilebilir risk
 ya kasıtlı tasarım ya da düşük-etkili edge-case. Acil düzeltme gerektiren
 gerçek bug bulunamadı. Yeni bir bug ararken önce gerçek kodu doğrula.
 
-## 🤝 ÇOK-AI UYARISI (çok önemli)
+## 🤝 ÇOKLU ARAÇ UYARISI (çok önemli)
 
-Bu projede **birden fazla AI aynı anda çalıştı** (bu Claude + Codex/Continue
-eklentisi). Sonuçları:
+Bu projede **birden fazla araç aynı anda çalıştı**. Sonuçları:
 - Bazı dosyalar (özellikle `buttons.c`, `menu.c`, `c6_link.c`) beklenmedik
-  şekilde değişmiş olabilir — başka AI düzenlemiş olabilir.
-- Kullanıcı bir noktada "Codex butonu düzeltti, öyle kalsın" dedi.
+  şekilde değişmiş olabilir — başka bir araç düzenlemiş olabilir.
+- Kullanıcı bir noktada "buton düzeltildi, öyle kalsın" dedi.
 - **Kural:** Değişiklik yapmadan önce `git status` ve `git diff` ile gerçek
-  durumu gör. Kör commit/overwrite yapma. Başka AI'ın uydurduğu
+  durumu gör. Kör commit/overwrite yapma. Otomatik üretilmiş
   "doğrulama raporlarına" güvenme (geçmişte Sub-GHz, "hardware abstraction/"
   klasörü gibi var-olmayan şeyler uydurulmuştu).
 

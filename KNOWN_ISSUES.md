@@ -1,7 +1,7 @@
 # Known issues / risks (adversarial review notes)
 
 This file records the findings of a deliberately adversarial static
-review of the codebase. Two separate Claude sessions worked on the same
+review of the codebase. Two separate review passes covered the same
 codebase in parallel, so findings from both were merged here.
 
 **Status: every item has been addressed.** Each one was either fixed
