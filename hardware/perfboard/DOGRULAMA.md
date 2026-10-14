@@ -23,6 +23,40 @@ ya da kaynaklar çelişiyor: kendin ölç.**
 7. ⚠ **Pil kutup ucu.** JST/kablo renkleri üreticiye göre değişebilir; TP4056 B+/B−
    pedlerine bağlamadan önce multimetreyle bak.
 
+8. ⚠ **2N2222A pin sırası.** TO-92'de üreticiye göre değişiyor (PN2222A E-B-C, P2N2222A
+   C-B-E; kaynaklar kısmen çelişiyor). Multimetrenin hFE soketine iki yönde tak, yüksek
+   okunan yön doğru (E-B-C / C-B-E). Plandaki Q1/Q2 pedlerini buna göre çevir.
+9. ⚠ **RDM6300 TX seviyesi.** Hiçbir kaynak sayısal söylemiyor. 5V'a verip TX'i ölç.
+   ~5V ise 1k + 2k bölücü kalsın; ~3.3V ise bölücüyü atla (2.2V'a düşer, C6 HIGH sayamayabilir).
+10. ⚠ **KY-005 modülü (çıplak LED değil).** Orta pin kaynaklarda GND+direnç, VCC veya boş
+    diye çelişiyor. Diyot modunda LED'in iki ucunu bul (düz yönde ~1.0–1.3 V), orta pini
+    bağlama. Üzerinde SMD direnç varsa plandaki 33 Ω'u küçült veya çıkar.
+
+## Sipariş karşılaştırması (14 Ekim 2026, ekran görüntülerinden)
+
+| Parça | Siparişte | Plan ihtiyacı | Durum |
+|---|---|---|---|
+| ESP32-C6-DEV-KIT-NX | görüntülerde yok | 1 | Önceden sende olduğu varsayıldı |
+| Pico-LCD-1.3 | 1 | 1 | ✓ |
+| RC522 kit, RDM6300, lojik dönüştürücü, titreşim motoru, 1000 mAh LiPo | 1'er | 1'er | ✓ (dönüştürücü planda kullanılmıyor, bölücü var) |
+| MT3608 | 1 | 1 | ✓ |
+| 1N5819 | 4 | 2 | ✓ |
+| 2N2222A | 4 | 2 | ✓, pin sırasını doğrula (#8) |
+| VS1838B / TL1838 | 2 | 1 | ✓ |
+| IR verici | KY-005 ×2 | çıplak LED varsayılmıştı | ⚠ modül, #10 |
+| 1k direnç | 50 | 3 (bölücü) + 1–2 + 1 | ✓ |
+| 100R direnç | 50 | 33 Ω yerine 3 paralel | ✓ |
+| Perfboard 12×12 ×2, 6×13 ×1 | var | plan 38×38 delik = 9.7×9.7 cm | ✓ 12×12'ye sığar; 6×13'e sığmaz |
+| **10k direnç** | **yok** | R1, R2 (pil bölücü), Rp1, Rp2 | ✗ al (ya da geçici 1k+1k: çalışır ama ~2 mA sürekli akıtır) |
+| **470 Ω** | yok | Rb2 | 2×1k paralel (500 Ω) |
+| **Dişi header 1×16/1×40, erkek header 1×40** | yok | C6 soketi, LCD için erkek | ✗ al |
+| **Buzzer (aktif)** | yok | BZ1 | Opsiyonel; motor titreşimi var, soket boş kalabilir |
+| TP4056, PPTC 1.1 A, anahtar, 1000/100 µF, JST | görüntülerde yok | güç zinciri | TP4056 sende olduğu belirtilmişti; kalanlar için alışveriş listesine bak |
+| ESP32-C6 Geliştirme Kartı 160 MHz (2. fatura, 441 TL) | 1 | ana kart | ⚠ Fatura adı kesik; model (DEV-KIT-NX / C6-Pico / DevKitC) yazmıyor. Pin haritası DevKitC-1 uyumlu başlıklara göre: kartın üstündeki yazıyı kontrol et |
+| TP4056 Type-C şarj modülü (2. fatura, 9,8 TL) | 1 | 1 | ⚠ Koruma devresi olup olmadığı belli değil; fiyat korumasız olabileceğini düşündürüyor (çıkarım). OUT+/OUT− pedi var mı bak |
+| ESP32-P4-Pico (400 MHz), 0.96" SSD1306 OLED | 1'er | kullanılmıyor | Firmware C6 hedefli; yedek/deney parçası |
+| NodeMCU ESP8266 | 1 | kullanılmıyor | Firmware C6 hedefli; yedek/test kartı |
+
 ## Doğrulananlar (✓)
 
 | Konu | Sonuç | Kaynak |
@@ -34,7 +68,6 @@ ya da kaynaklar çelişiyor: kendin ölç.**
 | RC522 | 3.3 V; header sırası SDA SCK MOSI MISO IRQ GND RST 3.3V | Cirkit Designer, ShillehTek |
 | RDM6300 | P1: TX RX NC GND VCC(5 V), P2 anten, 9600 baud | Phipps, Cirkit |
 | VS1838B | Çıplak: OUT GND VCC. KY-022 kartı: GND VCC S | ShillehTek, iFuturetech |
-| 2N2222 (TO-92) | Düz yüz sana bakarken E-B-C. Metal kasa (TO-18) farklı | components101, microcontrollerslab |
 | TP4056 | IN+/IN−, B+/B−, OUT+/OUT−; yük OUT'tan, pil B'den | ShillehTek, Mischianti |
 | Dişi header | Gövde 8–8.45 mm, pin kuyruğu 3 mm | Electrokit, ProtoSupplies |
 | MT3608 | 37.2×17.2×14 mm | Components101 |

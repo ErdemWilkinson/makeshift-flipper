@@ -14,8 +14,18 @@ Kart: **Waveshare ESP32-C6-DEV-KIT-NX** (C6-Pico değil). Pin haritası:
 - 3,7 V 1000 mAh LiPo
 - TP4056 Type-C şarj kartı (aşağıdaki kontrolü yap)
 - 6x14 mm titreşim motoru (çıplak, 2 kablolu)
-- M-F ve F-F jumper kabloları, 3 adet 1 kΩ direnç
+- M-F ve F-F jumper kabloları, 1 kΩ ve 100 Ω direnç paketleri (50'şer)
 - Arduino Uno başlangıç seti
+- Sipariş (14 Ekim 2026): MT3608, 4× 1N5819, 4× 2N2222A, 2× KY-005 IR verici modülü,
+  2× VS1838B/TL1838, 2× 12×12 cm + 1× 6×13 cm perfboard (NodeMCU ESP8266 de geldi, bu projede kullanılmıyor).
+  Ayrıntı: [DOGRULAMA.md](../../hardware/perfboard/DOGRULAMA.md)
+
+- 2. fatura: ESP32-C6 geliştirme kartı (model adı faturada kesik, kartı kontrol et), TP4056 Type-C
+  (9,8 TL; korumasız olabilir, OUT+/OUT− pedine bak), ESP32-P4-Pico ve 0.96" OLED (bu projede kullanılmıyor).
+
+**Bu siparişte eksik kalanlar (hâlâ al):** 10 kΩ direnç (R1, R2 pil bölücü), dişi header
+(C6 soketi) ve erkek header (LCD için), PPTC 1,1 A, anahtar, 1000 µF / 100 µF kondansatör,
+JST kablo seti. Aktif buzzer opsiyonel.
 
 ## Alınacaklar
 

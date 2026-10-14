@@ -164,7 +164,7 @@ function layer(key, name, yBottom, sw) { const g = new THREE.Group(); g.userData
   const y = K.plate;
   box(g, 50, K.battery, 34, M(0x6f7684, 0.5, 0.2), -8, y + K.battery / 2, -13, { t: "LiPo 3.7V 1000mAh", d: "503450 ≈ 50×34×5–5.5 mm. Satıcıya göre 51×30×7 de olabiliyor: seninkini ölç" }, 2);
   box(g, 8, 2, 12, 0x2a2a2e, 22, y + 1, -13);
-  box(g, 28, K.pcb, 17, pcbMatsLocal(0x1746b8), -19, y + 2.2, 15, { t: "TP4056 Type-C (korumalı)", d: "28×17 mm · B+/B− pil, OUT+/OUT− yük (güç zinciri)" }, 1);
+  box(g, 28, K.pcb, 17, pcbMatsLocal(0x1746b8), -19, y + 2.2, 15, { t: "TP4056 Type-C", d: "≈26–28×17 mm · koruma (OUT+/OUT− pedi) elindeki üründe doğrulanmadı: B+/B− ve OUT pedlerini kontrol et" }, 1);
   box(g, 9, 3.2, 7.4, M(0xb7bbc4, 0.3, 0.95), -31, y + 4.2, 15, { t: "Type-C şarj girişi", d: "kasa kenarına gelmeli" });
   box(g, 37, K.pcb, 17, pcbMatsLocal(0x0b1f6b), 15, y + 3, 15, { t: "MT3608 boost", d: "37×17×14 mm · 5.3V'a ayarla (trimmer yönü kaynaklarda çelişiyor: multimetreyle bul)" }, 1);
   cyl(g, 5, 8, 0x1a1a1a, 22, y + 8, 15); box(g, 6.5, 4.5, 6.5, 0x1050c0, 4, y + 6, 15);
@@ -270,7 +270,7 @@ const FACTS = [
   ["ok", "RDM6300 P1: TX RX NC GND VCC(5V); P2 anten (kutup önemsiz); P3 LED; 9600 baud", "Phipps"],
   ["warn", "RDM6300 başlık sayısı kartlara göre 4–5 pin: yazıyı oku", "Cirkit vs Phipps"],
   ["ok", "VS1838B çıplak: OUT GND VCC; KY-022 kartında GND VCC S", "ShillehTek, iFuturetech"],
-  ["ok", "TO-92 2N2222/PN2222A: düz yüz sana bakarken E-B-C; metal kasa (TO-18) farklı", "components101, microcontrollerslab"],
+  ["warn", "2N2222A TO-92 pin sırası üreticiye göre değişiyor (PN2222A E-B-C, P2N2222A C-B-E): hFE soketiyle doğrula", "etechnophiles, EEVblog"],
   ["ok", "TP4056: IN+/IN−, B+/B−, OUT+/OUT−; yük OUT'tan", "ShillehTek, Mischianti"],
   ["warn", "MT3608 trimmer yönü kaynaklarda çelişiyor: multimetreyle bul", "Probots vs ShillehTek"],
   ["warn", "Pil 503450 ≈ 50×34×5–5.5 ama bazı 1000 mAh piller 51×30×7: seninkini ölç", "TKP, Grobotronics"],

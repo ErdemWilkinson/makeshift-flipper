@@ -269,8 +269,8 @@ def({ key:"irrx", name:"VS1838B IR alıcı", qty:1, col:C.black,
     dome.position.copy(P(0,0,1.2)); dome.castShadow=true; g.add(dome);
     for(const lx of [-1.27,0,1.27]){const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.3,4),mat(C.silver,0.3,0.8));
       leg.position.copy(P(lx,-1.5,-1.5)); g.add(leg);} }});
-def({ key:"irled", name:"IR LED 940 nm (verici)", qty:1, col:C.ir,
-  info:{ t:"IR LED 940nm", d:"Verici · GPIO0→1k→2N2222→LED" },
+def({ key:"irled", name:"IR verici (KY-005 modülü / LED)", qty:1, col:C.ir,
+  info:{ t:"IR verici (KY-005)", d:"Modül PCB'si modellenmedi (boyut doğrulanmadı), sadece LED gösteriliyor · GPIO0→1k→2N2222→LED" },
   asm:[-30,6,Z.esp+2], exp:[-52,8,Z.esp+2],
   build(g){ cyl(g,2.55,2.55,5,mat(0x3a1218,0.18),0,0,2.5,18);
     const dome=new THREE.Mesh(new THREE.SphereGeometry(2.55,18,12,0,6.3,0,1.57),mat(0x401018,0.12));
@@ -296,7 +296,7 @@ def({ key:"motor", name:"Titreşim motoru 6×14 mm", qty:1, col:C.alu,
 
 // --- 7. TP4056 Type-C charger (28x17mm) -------------------------------------
 def({ key:"tp4056", name:"TP4056 Type-C şarj", qty:1, col:C.blue,
-  info:{ t:"TP4056 (korumalı)", d:"Type-C · B+/B−/OUT+/OUT− · LiPo şarj" },
+  info:{ t:"TP4056 Type-C", d:"Koruma (OUT+/OUT− pedi) elindeki üründe doğrulanmadı · boyut ≈26–28×17 mm · LiPo şarj" },
   asm:[-16,-14,Z.rc+1], exp:[-40,-22,Z.rc],
   build(g){ box(g,28,17,1.4,pcbMats(C.blueboard),0,0,0);
     box(g,9,7.4,3.2,mat(C.alu,0.3,0.95),-13.5,0,1.4);     // Type-C

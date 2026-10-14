@@ -144,7 +144,7 @@ def nswitch(tag, ox, oy, stage, rb_val, in_net, load_k, load_a, qlabel):
     pad(f"Rp{tag}", 1, ox - 1, oy + 1, f"{q}_B", stage, "")
     pad(f"Rp{tag}", 2, ox - 1, oy + 5, "GND", stage, "")
     part(q, f"{q} 2N2222 ({qlabel})", "tr", stage,
-         "TO-92: düz yüz sana bakarken soldan sağa E-B-C (PN2222). Farklıysa çevir.")
+         "TO-92 pin sırası üreticiye göre değişir (PN2222A: E-B-C, P2N2222A: C-B-E). Lehimden önce multimetre hFE soketiyle doğrula.")
     pad(q, "E", ox, oy + 5, "GND", stage, "E", lab="b")
     pad(q, "B", ox + 1, oy + 5, f"{q}_B", stage, "B", lab="b")
     pad(q, "C", ox + 2, oy + 5, f"{q}_C", stage, "C", lab="b")
@@ -153,10 +153,11 @@ def nswitch(tag, ox, oy, stage, rb_val, in_net, load_k, load_a, qlabel):
 
 # IR transmitter
 nswitch("1", 3, 29, 7, "1k", "IR_TX", None, None, "IR LED sürücü")
-part("LED1", "IR LED 940nm (1x2 dişi soket)", "header", 7, "kısa bacak = katot (K)")
+part("LED1", "IR LED 940nm (1x2 dişi soket)", "header", 7,
+     "Çıplak LED: kısa bacak = katot (K). KY-005 modülünde LED'in iki ucunu multimetre diyot modunda bul (S ve − pini).")
 pad("LED1", "K", 7, 34, "Q1_C", 7, "K", lab="b")
 pad("LED1", "A", 8, 34, "LED_A", 7, "A", lab="b")
-part("Rled", "Rled 33Ω (LED seri)", "res", 7, "önce 33Ω; LED ısınırsa 47Ω", "33Ω")
+part("Rled", "Rled 33Ω (LED seri)", "res", 7, "33Ω = 3 adet 100Ω paralel (siparişteki 100R paketinden). KY-005 üzerinde direnç varsa bu direnci küçült.", "33Ω")
 pad("Rled", 1, 9, 29, "VLOAD", 7, "")
 pad("Rled", 2, 9, 33, "LED_A", 7, "")
 
@@ -214,7 +215,8 @@ STAGES = [
     dict(n=4, title="Buzzer + titreşim motoru + yük seçici",
          intro=["JP1'e jumper'ı 1-2'ye tak (USB testi, 3V3).",
                 "IO1 hem buzzer'a hem motor sürücüsünün baz direncine gider.",
-                "D1'in bantlı ucu (katot) M+ tarafına bakar."],
+                "D1'in bantlı ucu (katot) M+ tarafına bakar.",
+                "Siparişte 470Ω ve 10k yok: Rb2 için 2×1k paralel (=500Ω) kullan. Rp (baz→GND) zorunlu değil, boş bırakılabilir ya da 10k al."],
          test="Bir menüye girince buzzer ötmeli, titreşim sezilmeli."),
     dict(n=5, title="RC522 portu (6 tel)",
          intro=["SCK ve MOSI ekranla ORTAK: aynı C6 deliğine ikinci bir tel gelir.",
@@ -222,11 +224,14 @@ STAGES = [
          test="hardware_profile.h → BOARD_HAS_RC522 = 1, flashla. RFID menüsünde kart okut: UID."),
     dict(n=6, title="RDM6300 portu + bölücü",
          intro=["TX (5V seviyesi) → 1k → [IO15 düğümü] → 1k+1k → GND: 5V → 3.3V.",
-                "RDM6300 5V ile beslenir (C6'nın 5V pini)."],
+                "RDM6300 5V ile beslenir (C6'nın 5V pini).",
+                "Önce RDM6300'ü 5V'a verip TX'i multimetreyle ölç. ~5V ise bölücü şart; ~3.3V ise bölücüyü ATLA (3.3V → 2.2V'a düşer, C6 girişi HIGH sayamayabilir) ve TX'i doğrudan IO15'e ver."],
          test="125kHz anahtarlığı bobine yaklaştır: ID görünmeli."),
     dict(n=7, title="IR alıcı + IR verici",
          intro=["VS1838B: OUT → IO4.",
-                "Verici: IO0 → 1k → 2N2222 baz; LED, 33Ω üzerinden VLOAD'a."],
+                "Verici: IO0 → 1k → 2N2222 baz; LED, 33Ω üzerinden VLOAD'a.",
+                "Elindeki verici KY-005 MODÜLÜ (çıplak LED değil). Kaynaklar orta pini çelişkili anlatıyor: lehimden önce LED'in iki ucunu multimetre diyot modunda bul, orta pini bağlama.",
+                "Q1/Q2'yi lehimlemeden önce pin sırasını hFE soketiyle doğrula (PN2222A E-B-C, P2N2222A C-B-E)."],
          test="IR Öğren ile kumanda kodu yakala; IR Gönderim Testi'ni telefon kamerasıyla izle (mor yanıp söner)."),
     dict(n=8, title="Pil ölçer + güç girişleri",
          intro=["Pil bölücü (R1,R2) ve J_VBAT, J_5V portları, kondansatörler.",
@@ -237,6 +242,7 @@ STAGES = [
          intro=["Bu adım plakada delik değil, modüller arası kablolar. Sıra önemli: önce MT3608'i ayarla, sonra bağla.",
                 "MT3608'i hiçbir şeye bağlamadan, pile bağlayıp çıkışı multimetreyle ölç ve 5.3V'a getir. Trimmer yönü satıcıya göre ters olabilir: küçük adımlarla çevir, ölçerek yönü bul.",
                 "TP4056 korumalı olmalı (B+/B− ve ayrıca OUT+/OUT− pedleri var). Yük OUT pedlerinden alınır, pil B pedlerine bağlanır.",
+                "Siparişteki TP4056 modülü 9.8 TL: bu fiyat korumasız (sadece B+/B−) modül olduğunu düşündürüyor ama doğrulanmadı. Kartında OUT+/OUT− pedi yoksa pilin kendi koruma devresi (PCM) olmadan kullanma; korumalı TP4056 al.",
                 "Şarj ederken cihazı kapat; karta USB takmadan önce anahtarı kapat."],
          test="Anahtar açık, USB yok: ekran açılmalı, pil yüzdesi görünmeli. JP1 jumper'ı 2-3'e alınır."),
 ]

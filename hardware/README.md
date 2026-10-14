@@ -62,13 +62,13 @@ makeshift_flipper.net   (ELİMİZDE ✅)
 | U4 | VS1838B | 1 | IR alıcı, 3.3V |
 | U6 | 5V→3.3V level shifter (BSS138 tipi) | 1 | RDM6300 TX → IO15 için |
 | Q1 | NPN transistör (2N2222 vb.) | 1 | IR LED sürücüsü |
-| D1 | IR LED 940nm | 1 | IR verici |
-| R3 | 100Ω | 1 | IR LED seri direnci (LED'e göre ayarla) |
+| D1 | IR LED 940nm (elde: KY-005 modülü) | 1 | IR verici; KY-005'in orta pini belirsiz, önce ölç ([DOGRULAMA](perfboard/DOGRULAMA.md)) |
+| R3 | 33Ω (3×100Ω paralel) | 1 | IR LED seri direnci (LED'e göre ayarla) |
 | R4 | 1kΩ | 1 | Q1 base direnci (IO0'dan). 100Ω GPIO'yu ~26 mA ile zorlar, 1kΩ kullan |
 | BZ1 | Aktif buzzer | 1 | + → IO1, − → GND. Sürücü/diyot gerekmez |
 | R1 | 10kΩ | 1 | Pil bölücü üst |
 | R2 | 10kΩ | 1 | Pil bölücü alt (R1==R2 → 2:1) |
-| U5 | ST7789 1.8" 240x240 LCD | 1 | SPI, SCK/MOSI ortak |
+| U5 | Waveshare Pico-LCD-1.3 (ST7789, 1.3" 240x240) | 1 | SPI, SCK/MOSI ortak; joystick + A dahil |
 | J1 | JST-PH 2 pin | 1 | LiPo pil girişi |
 
 ## Kritik kurallar (lehim/tasarım)

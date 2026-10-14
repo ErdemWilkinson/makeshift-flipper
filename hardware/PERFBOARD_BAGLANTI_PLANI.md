@@ -49,6 +49,7 @@ Tel boyu = delik mesafesi × 2.54 mm + pay + sıyırma.
 - JP1'e jumper'ı 1-2'ye tak (USB testi, 3V3).
 - IO1 hem buzzer'a hem motor sürücüsünün baz direncine gider.
 - D1'in bantlı ucu (katot) M+ tarafına bakar.
+- Siparişte 470Ω ve 10k yok: Rb2 için 2×1k paralel (=500Ω) kullan. Rp (baz→GND) zorunlu değil, boş bırakılabilir ya da 10k al.
 - **Test:** Bir menüye girince buzzer ötmeli, titreşim sezilmeli.
 
 | # | Nereden | Nereye | Delik | Kes | Renk |
@@ -86,6 +87,7 @@ Tel boyu = delik mesafesi × 2.54 mm + pay + sıyırma.
 
 - TX (5V seviyesi) → 1k → [IO15 düğümü] → 1k+1k → GND: 5V → 3.3V.
 - RDM6300 5V ile beslenir (C6'nın 5V pini).
+- Önce RDM6300'ü 5V'a verip TX'i multimetreyle ölç. ~5V ise bölücü şart; ~3.3V ise bölücüyü ATLA (3.3V → 2.2V'a düşer, C6 girişi HIGH sayamayabilir) ve TX'i doğrudan IO15'e ver.
 - **Test:** 125kHz anahtarlığı bobine yaklaştır: ID görünmeli.
 
 | # | Nereden | Nereye | Delik | Kes | Renk |
@@ -102,6 +104,8 @@ Tel boyu = delik mesafesi × 2.54 mm + pay + sıyırma.
 
 - VS1838B: OUT → IO4.
 - Verici: IO0 → 1k → 2N2222 baz; LED, 33Ω üzerinden VLOAD'a.
+- Elindeki verici KY-005 MODÜLÜ (çıplak LED değil). Kaynaklar orta pini çelişkili anlatıyor: lehimden önce LED'in iki ucunu multimetre diyot modunda bul, orta pini bağlama.
+- Q1/Q2'yi lehimlemeden önce pin sırasını hFE soketiyle doğrula (PN2222A E-B-C, P2N2222A C-B-E).
 - **Test:** IR Öğren ile kumanda kodu yakala; IR Gönderim Testi'ni telefon kamerasıyla izle (mor yanıp söner).
 
 | # | Nereden | Nereye | Delik | Kes | Renk |
@@ -146,6 +150,7 @@ Tel boyu = delik mesafesi × 2.54 mm + pay + sıyırma.
 - Bu adım plakada delik değil, modüller arası kablolar. Sıra önemli: önce MT3608'i ayarla, sonra bağla.
 - MT3608'i hiçbir şeye bağlamadan, pile bağlayıp çıkışı multimetreyle ölç ve 5.3V'a getir. Trimmer yönü satıcıya göre ters olabilir: küçük adımlarla çevir, ölçerek yönü bul.
 - TP4056 korumalı olmalı (B+/B− ve ayrıca OUT+/OUT− pedleri var). Yük OUT pedlerinden alınır, pil B pedlerine bağlanır.
+- Siparişteki TP4056 modülü 9.8 TL: bu fiyat korumasız (sadece B+/B−) modül olduğunu düşündürüyor ama doğrulanmadı. Kartında OUT+/OUT− pedi yoksa pilin kendi koruma devresi (PCM) olmadan kullanma; korumalı TP4056 al.
 - Şarj ederken cihazı kapat; karta USB takmadan önce anahtarı kapat.
 - **Test:** Anahtar açık, USB yok: ekran açılmalı, pil yüzdesi görünmeli. JP1 jumper'ı 2-3'e alınır.
 
