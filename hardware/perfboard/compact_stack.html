@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kompakt Yığın 3D</title>
+<style>
+  :root { --bg:#0e1016; --panel:#171a22; --line:#282d39; --fg:#e9ecf3; --dim:#9298a6; --acc:#4ea3ff; --ok:#3ecf8e; --warn:#ffb84d; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif; overflow:hidden; }
+  #c { position:fixed; inset:0; }
+  .panel { position:fixed; background:rgba(23,26,34,.93); border:1px solid var(--line); border-radius:13px; backdrop-filter:blur(8px); box-shadow:0 10px 36px rgba(0,0,0,.45); }
+  #hud { left:16px; top:16px; width:270px; padding:14px 16px; }
+  #hud h1 { font-size:16px; margin:0 0 2px; }
+  #hud .sub { color:var(--dim); font-size:12px; margin-bottom:12px; }
+  .row { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+  button { background:#232733; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:13px; cursor:pointer; flex:1; }
+  button:hover { border-color:var(--acc); } button.on { background:var(--acc); color:#06121f; border-color:var(--acc); font-weight:600; }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  label.chk { display:flex; gap:8px; align-items:center; color:var(--dim); font-size:13px; cursor:pointer; padding:2px 0; }
+  #side { right:16px; top:16px; width:380px; max-height:calc(100vh - 32px); overflow:auto; padding:14px 16px; }
+  #side h2 { font-size:13px; text-transform:uppercase; letter-spacing:1.1px; color:var(--dim); margin:14px 0 8px; }
+  #side h2:first-child { margin-top:0; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  td,th { padding:4px 5px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.layer { cursor:pointer; } tr.layer:hover td, tr.hl td { background:#1d2535; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); }
+  .note { background:#241d10; border:1px solid #5a4116; color:#ffd9a0; border-radius:8px; padding:8px 10px; font-size:12.5px; margin:8px 0; }
+  .good { background:#13261e; border:1px solid #1f4a37; color:#bfeed6; border-radius:8px; padding:8px 10px; font-size:12.5px; margin:8px 0; }
+  a { color:var(--acc); }
+  #tip { position:fixed; pointer-events:none; display:none; background:#04060b; border:1px solid var(--acc); border-radius:8px; padding:6px 10px; font-size:12px; z-index:9; max-width:270px; }
+  @media (max-width:900px){ #side{ display:none; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud" class="panel">
+  <h1>Kompakt yığın</h1>
+  <div class="sub">tüm parçalar gelmiş hali · katman katman</div>
+  <div class="row"><button id="bAsm" class="on">Montajlı</button><button id="bExp">Patlatılmış</button></div>
+  <label style="color:var(--dim);font-size:12px">Patlatma <span id="exV">0%</span></label>
+  <input type="range" id="ex" min="0" max="100" value="0">
+  <div class="row" style="margin-top:8px"><button id="vIso">Eğik</button><button id="vSide">Yan kesit</button><button id="vTop">Üst</button></div>
+  <label class="chk"><input type="checkbox" id="tWire" checked> Kablolar</label>
+  <label class="chk"><input type="checkbox" id="tDim" checked> Yükseklik çizgileri</label>
+  <label class="chk"><input type="checkbox" id="tSpin"> Otomatik döndür</label>
+  <div style="color:var(--dim);font-size:11px;margin-top:8px">Parçanın üstüne gel: ne olduğu. Sağda yükseklik bütçesi ve doğrulama durumu.</div>
+</div>
+<div id="side" class="panel"></div>
+<div id="tip"></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+
+// ---------------------------------------------------------------- parameters
+// mm. src: v = web'de doğrulandı, e = tahmin/standart, m = senin ölçmen gerek.
+const K = {
+  pcb: 1.6,
+  coil: 3.0,            // RDM6300 bobini 46x33x3  (v: Robu/Phipps)
+  rcClear: 4.0,         // RC522 üstü: çip/kristal + lehim uçları (e)
+  plate: 1.6,           // güç katmanı plakası (e)
+  mt3608: 14.0,         // en uzun parça (v: Components101 37.2x17.2x14)
+  battery: 5.5,         // 503450 ≈ 50x34x5-5.5 (v, satıcıya göre değişir)
+  tail: 3.0,            // header/lehim ucu altta (v: ProtoSupplies pin 3mm)
+  margin: 1.0,
+  female: 8.45,         // 1x16 dişi header gövde (v: Electrokit 8.45)
+  usbc: 3.4,            // USB-C jak yüksekliği (e)
+  standoff: 18,         // M ↔ T ara parça (seçim)
+  maleBase: 2.5,        // erkek header plastiği (e: standart)
+  lcdCtl: 5.0,          // joystick/tuşlar LCD PCB üstünde (e)
+};
+// vertical positions, bottom (back of device) -> top (front). y = bottom face.
+const Y = {};
+Y.coilB = 0;                       Y.coilT = Y.coilB + K.coil;
+Y.rcB = Y.coilT + 0.5;             Y.rcT = Y.rcB + K.pcb;
+Y.pB = Y.rcT + K.rcClear;          Y.pT = Y.pB + K.plate;
+Y.partsT = Y.pT + K.mt3608;
+Y.mB = Y.partsT + K.tail + K.margin; Y.mT = Y.mB + K.pcb;
+Y.c6B = Y.mT + K.female;           Y.c6T = Y.c6B + K.pcb;  Y.c6Top = Y.c6T + K.usbc;
+Y.tB = Y.mT + K.standoff;          Y.tT = Y.tB + K.pcb;
+Y.lcdB = Y.tT + K.maleBase + K.female; Y.lcdT = Y.lcdB + K.pcb; Y.lcdTop = Y.lcdT + K.lcdCtl;
+const TOTAL = Y.lcdTop;
+const FOOT = { x: 66, z: 62 };
+
+// ---------------------------------------------------------------- scene
+const P3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0e1016);
+scene.fog = new THREE.Fog(0x0e1016, 400, 1100);
+const cam = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 1, 4000);
+const ren = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: true });
+ren.setPixelRatio(Math.min(devicePixelRatio, 2)); ren.setSize(innerWidth, innerHeight);
+ren.shadowMap.enabled = true; ren.shadowMap.type = THREE.PCFSoftShadowMap;
+ren.toneMapping = THREE.ACESFilmicToneMapping;
+const ctl = new OrbitControls(cam, ren.domElement); ctl.enableDamping = true; ctl.target.set(0, TOTAL / 2, 0);
+scene.add(new THREE.HemisphereLight(0xdbe8ff, 0x1a1c24, 0.9));
+const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(120, 260, 160); key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048); Object.assign(key.shadow.camera, { near: 50, far: 800, left: -160, right: 160, top: 160, bottom: -160 });
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x5c8cff, 0.7); rim.position.set(-150, 80, -120); scene.add(rim);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(600, 64), new THREE.MeshStandardMaterial({ color: 0x090b10, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -6; floor.receiveShadow = true; scene.add(floor);
+
+// ---------------------------------------------------------------- helpers
+const M = (c, r = 0.6, m = 0) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+const hover = [];
+function add(g, mesh, info) { mesh.castShadow = mesh.receiveShadow = true; if (info) mesh.userData.info = info; g.add(mesh); hover.push(mesh); return mesh; }
+function box(g, w, h, d, col, x, y, z, info, r = 0.8) {
+  const geo = (r > 0 && Math.min(w, h, d) > 0.8) ? new RoundedBoxGeometry(w, h, d, 2, Math.min(r, h / 2.2, w / 3, d / 3)) : new THREE.BoxGeometry(w, h, d);
+  const m = add(g, new THREE.Mesh(geo, (col.isMaterial || Array.isArray(col)) ? col : M(col)), info); m.position.set(x, y, z); return m;
+}
+function cyl(g, r, h, col, x, y, z, info, seg = 28) {
+  const m = add(g, new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg), col.isMaterial ? col : M(col)), info); m.position.set(x, y, z); return m;
+}
+function strip(g, n, x0, y, z, col, info, alongX = true, pinUp = 5) {
+  const pm = M(0x0c0c0e, 0.7), gm = M(0xd9b24a, 0.3, 1);
+  box(g, alongX ? n * 2.54 : 2.4, 2.5, alongX ? 2.4 : n * 2.54, col || pm, x0, y + 1.25, z, info, 0.3);
+  for (let i = 0; i < n; i++) { const o = -((n - 1) * 2.54) / 2 + i * 2.54;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.6, pinUp, 0.6), gm); p.position.set(x0 + (alongX ? o : 0), y + 2.5 + pinUp / 2, z + (alongX ? 0 : o)); g.add(p); }
+}
+const pcbEdge = M(0xcaa94a, 0.5, 0.25);
+function pcb(g, w, d, col, y, info) {
+  const m = add(g, new THREE.Mesh(new RoundedBoxGeometry(w, K.pcb, d, 2, 0.8),
+    [pcbEdge, pcbEdge, M(col, 0.55), M(col, 0.7), pcbEdge, pcbEdge]), info); m.position.set(0, y + K.pcb / 2, 0); return m;
+}
+function perfboard(g, w, d, y, info) {
+  const m = pcb(g, w, d, 0x9c7b3c, y, info);
+  const dots = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.45, 0.45, 0.05, 6), M(0xe6c76a, 0.4, 0.8), Math.floor(w / 2.54) * Math.floor(d / 2.54));
+  let i = 0; const q = new THREE.Matrix4();
+  for (let a = 0; a < Math.floor(w / 2.54); a++) for (let b = 0; b < Math.floor(d / 2.54); b++) {
+    q.makeTranslation(-w / 2 + 1.5 + a * 2.54, y + K.pcb + 0.03, -d / 2 + 1.5 + b * 2.54); dots.setMatrixAt(i++, q); }
+  g.add(dots); return m;
+}
+
+// layer registry
+const LAYERS = []; // {key,name,group,base (y of group origin), info, color, height-note}
+function layer(key, name, yBottom, sw) { const g = new THREE.Group(); g.userData = { key, name, y0: yBottom, sw }; g.position.y = yBottom; scene.add(g); LAYERS.push(g); return g; }
+
+// ---------------------------------------------------------------- L0 coil + RDM6300
+{ const g = layer("coil", "RDM6300 + 125 kHz bobin (en arka)", Y.coilB, "#b9742f");
+  const ring = (R, y) => { const t = new THREE.Mesh(new THREE.TorusGeometry(R, 0.5, 8, 48), M(0xb9742f, 0.4, 0.85)); t.rotation.x = Math.PI / 2; t.position.set(-6, y, -14.5); t.castShadow = true; g.add(t); };
+  box(g, 46, 1.4, 33, 0x1a140e, -6, 0.7, -14.5, { t: "125 kHz bobin", d: "46×33×3 mm, ayrı parça (Robu/Phipps: 46×32–33×3). Arka yüze bakar." }, 3);
+  for (let i = 0; i < 5; i++) ring(20 - i * 1.6, 1.6);
+  const rdm = box(g, 38.5, K.pcb, 19, 0x6a0f12, -4, K.pcb / 2 + 0.6, 22, { t: "RDM6300 kartı", d: "38.5×19 mm, 5V, TX→IO15 bölücü. P1: TX RX NC GND VCC" }, 1);
+  box(g, 5, 1.2, 5, 0x1c1f26, -10, 2.2, 22); strip(g, 5, 10, 1.4, 22, null, { t: "RDM6300 P1", d: "TX, RX, NC, GND, VCC (Phipps)" }); }
+// ---------------------------------------------------------------- L1 RC522 (antenna faces the back)
+{ const g = layer("rc", "RC522 (anten arkaya bakar)", Y.rcB, "#12379e");
+  pcb(g, 60, 40, 0x1746b8, 0, { t: "RC522", d: "60×40 mm, 3.3V, 13.56 MHz. Anten döngüsü ALT yüzde (arkaya bakar)" });
+  const sh = new THREE.Shape(); const rr = (s, w, h, r) => { s.moveTo(-w/2+r,-h/2); s.lineTo(w/2-r,-h/2); s.quadraticCurveTo(w/2,-h/2,w/2,-h/2+r); s.lineTo(w/2,h/2-r); s.quadraticCurveTo(w/2,h/2,w/2-r,h/2); s.lineTo(-w/2+r,h/2); s.quadraticCurveTo(-w/2,h/2,-w/2,h/2-r); s.lineTo(-w/2,-h/2+r); s.quadraticCurveTo(-w/2,-h/2,-w/2+r,-h/2); };
+  rr(sh, 50, 30, 5); const hole = new THREE.Path(); rr(hole, 43, 23, 4); sh.holes.push(hole);
+  const loop = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: 0.35, bevelEnabled: false }), M(0xb9742f, 0.4, 0.8));
+  loop.rotation.x = Math.PI / 2; loop.position.set(0, 0.05, -2); g.add(loop);
+  box(g, 5, 1.1, 5, 0x1c1f26, 20, K.pcb + 0.55, 14); box(g, 3.2, 1.2, 1.8, 0xc4c7cf, 14, K.pcb + 0.6, 14);
+  strip(g, 8, -22, K.pcb, 16, null, { t: "RC522 8 pin", d: "SDA SCK MOSI MISO IRQ GND RST 3.3V (tek uçtan okununca)" }, true, 2); }
+// ---------------------------------------------------------------- L2 power layer
+{ const g = layer("power", "Güç katmanı (pil, TP4056, MT3608)", Y.pB, "#8c8c99");
+  perfboard(g, FOOT.x, FOOT.z, 0, { t: "Güç plakası", d: "66×62 mm delikli plaka; modüller buraya vidalanır/yapıştırılır" });
+  const y = K.plate;
+  box(g, 50, K.battery, 34, M(0x6f7684, 0.5, 0.2), -8, y + K.battery / 2, -13, { t: "LiPo 3.7V 1000mAh", d: "503450 ≈ 50×34×5–5.5 mm. Satıcıya göre 51×30×7 de olabiliyor: seninkini ölç" }, 2);
+  box(g, 8, 2, 12, 0x2a2a2e, 22, y + 1, -13);
+  box(g, 28, K.pcb, 17, pcbMatsLocal(0x1746b8), -19, y + 2.2, 15, { t: "TP4056 Type-C (korumalı)", d: "28×17 mm · B+/B− pil, OUT+/OUT− yük (güç zinciri)" }, 1);
+  box(g, 9, 3.2, 7.4, M(0xb7bbc4, 0.3, 0.95), -31, y + 4.2, 15, { t: "Type-C şarj girişi", d: "kasa kenarına gelmeli" });
+  box(g, 37, K.pcb, 17, pcbMatsLocal(0x0b1f6b), 15, y + 3, 15, { t: "MT3608 boost", d: "37×17×14 mm · 5.3V'a ayarla (trimmer yönü kaynaklarda çelişiyor: multimetreyle bul)" }, 1);
+  cyl(g, 5, 8, 0x1a1a1a, 22, y + 8, 15); box(g, 6.5, 4.5, 6.5, 0x1050c0, 4, y + 6, 15);
+  cyl(g, 5, 4, M(0x222, 0.5), 28, y + 3, -26.5, { t: "Güç anahtarı", d: "yuvarlak mini ON/OFF (çap ölçüsü: senin parçan)" });
+  box(g, 5, 2, 5, 0x12502a, 8, y + 1, -27, { t: "PPTC 1.1A", d: "TP4056 OUT+ ile anahtar arasında" }); }
+function pcbMatsLocal(c) { return [pcbEdge, pcbEdge, M(c, 0.55), M(c, 0.7), pcbEdge, pcbEdge]; }
+// ---------------------------------------------------------------- L3 main board M + C6 + ports
+{ const g = layer("main", "Ana plaka M + ESP32-C6", Y.mB, "#11602f");
+  perfboard(g, FOOT.x, 40, 0, { t: "Ana plaka M", d: "C6 dişi şeritleri + portlar + sürücü blokları (perfboard planı)" });
+  const yS = K.pcb;
+  strip(g, 16, 0, yS, -11.43, M(0x0c0c0e), { t: "1×16 dişi şerit (J1)", d: "gövde 8.45 mm (Electrokit) → C6'yı 8.45 mm yükseltir" }, true, 0);
+  strip(g, 16, 0, yS, 11.43, M(0x0c0c0e), { t: "1×16 dişi şerit (J3)", d: "şerit arası 22.86 mm VARSAYIM: kartı ölçüp doğrula" }, true, 0);
+  // components on M outside the C6 footprint
+  cyl(g, 5, 16.5, M(0x1a1a22, 0.5), -27, yS + 8.25, -12, { t: "C1 1000µF", d: "boyu 16.5 mm: T plakasının altına sığar (18 mm)" });
+  box(g, 20, 2, 4, 0x0c0c0e, -20, yS + 1, 17, { t: "RC522 / RDM portları", d: "1×8 + 1×3 erkek header" }, 0.3);
+  box(g, 6, 3, 12, 0x14161c, 28, yS + 1.5, 14, { t: "IR/motor sürücü blokları", d: "2N2222 ×2, dirençler, D1, JP1" }, 0.3);
+  box(g, 7, 6, 6, 0x151515, 30, yS + 3, -14, { t: "VS1838B", d: "IR alıcı, kasanın ön kenarına bakar" }); }
+// C6 sits 8.45 mm above M on its own sockets
+{ const g = layer("c6", "ESP32-C6 DevKit", Y.c6B, "#11602f");
+  pcb(g, 54, 25.4, 0x11602f, 0, { t: "ESP32-C6-DEV-KIT-NX", d: "54×25.4 mm (kaynaklar 51–55 diyor). Anten kenarı dışarı, USB-C diğer uçta" });
+  box(g, 16, 2.6, 13, M(0xc4c7cf, 0.35, 0.9), 14, K.pcb + 1.3, 0, { t: "ESP32-C6 modülü + anten", d: "anten ucu çıkıntıda kalmalı" });
+  box(g, 9, 3.4, 7.6, M(0xb7bbc4, 0.3, 0.95), -27, K.pcb + 1.7, 0, { t: "USB-C", d: "yığının kısa kenarında, kablo için serbest" });
+  strip(g, 16, 0, K.pcb, -11.43, null, null, true, 0); strip(g, 16, 0, K.pcb, 11.43, null, null, true, 0); }
+// ---------------------------------------------------------------- L4 T plate with LCD male header
+{ const g = layer("t", "T plakası (ekran erkek pinleri)", Y.tB, "#9c7b3c");
+  perfboard(g, 58, 30, 0, { t: "T plakası", d: "30×58 mm küçük delikli plaka: ekranın 2×20 erkek pinlerini tutar, 13 tel altından iner" });
+  for (const z of [-8.89, 8.89]) strip(g, 20, 0, K.pcb, z, null, { t: "2×20 erkek pin (Pico dizilimi)", d: "ekranın dişi soketi buraya oturur; sıra aralığı 17.78 mm (Pico standardı, bu aramada metinle doğrulanamadı)" }, true, 6);
+  // four standoffs between M and T
+  for (const [sx, sz] of [[-30, -17], [30, -17], [-30, 17], [30, 17]]) { const s = cyl(g, 2.5, K.standoff, M(0xc9a24a, 0.35, 0.9), sx, -K.standoff / 2 + 0, sz, { t: "Ara parça 18 mm (M2.5/M3)", d: "M ile T arasını sabitler; C6 üstü kalan boşluk " + (K.standoff - (K.female + K.pcb + K.usbc)).toFixed(1) + " mm" }, 6); } }
+// ---------------------------------------------------------------- L5 LCD
+let screenMat;
+{ const g = layer("lcd", "Pico-LCD-1.3 (en üst)", Y.lcdB, "#101216");
+  pcb(g, 52, 26.5, 0x0f1115, 0, { t: "Pico-LCD-1.3", d: "52×26.5 mm, 240×240. Arkasında hazır lehimli dişi soket (Waveshare/ThePihut)" });
+  box(g, 27.5, 1.2, 27.5, 0x080808, -4, K.pcb + 0.6, 0);
+  screenMat = new THREE.MeshStandardMaterial({ roughness: 0.2, emissive: 0xffffff });
+  const sc = add(g, new THREE.Mesh(new THREE.PlaneGeometry(23.4, 23.4), screenMat), { t: "Ekran 240×240", d: "Menün (koddan çizildi)" }); sc.rotation.x = -Math.PI / 2; sc.position.set(-4, K.pcb + 1.25, 0);
+  cyl(g, 3.2, 4.6, M(0x18181c, 0.5), 19, K.pcb + 2.3, 5, { t: "Joystick", d: "UP/DOWN/LEFT/RIGHT" });
+  for (const [bx, bz] of [[19, -5], [15, -8], [23, -8], [19, -11]]) cyl(g, 1.9, 2.4, M(0x24262e, 0.5), bx, K.pcb + 1.2, bz, null, 16);
+  for (const z of [-8.89, 8.89]) box(g, 20 * 2.54, K.female, 2.5, 0x101114, 0, -K.female / 2, z, { t: "Ekranın dişi soketi", d: "gövde 8.45 mm + erkek plastiği 2.5 mm = 10.95 mm aralık" }, 0.3); }
+(function menu() {
+  const S = 512, cv = document.createElement("canvas"); cv.width = cv.height = S; const g = cv.getContext("2d");
+  g.fillStyle = "#061320"; g.fillRect(0, 0, S, S); g.fillStyle = "#0a6cff"; g.fillRect(0, 0, S, 76);
+  g.fillStyle = "#fff"; g.font = "bold 36px monospace"; g.textBaseline = "middle"; g.fillText("Makeshift", 20, 38);
+  g.font = "24px monospace"; g.fillStyle = "#bfe0ff"; g.fillText("82%", S - 96, 38);
+  ["RFID / NFC", "Kizilotesi", "SecLab", "Hacking", "Ayarlar"].forEach((t, i) => { const y = 108 + i * 74;
+    if (i === 1) { g.fillStyle = "#113a5e"; g.fillRect(8, y - 32, S - 16, 64); g.fillStyle = "#0a6cff"; g.fillRect(8, y - 32, 8, 64); }
+    g.fillStyle = i === 1 ? "#fff" : "#aab8c6"; g.font = "32px monospace"; g.fillText(t, 40, y); });
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; screenMat.map = tex; screenMat.emissiveMap = tex; screenMat.needsUpdate = true;
+})();
+
+// ---------------------------------------------------------------- wires (schematic)
+const wires = new THREE.Group(); scene.add(wires);
+const WC = ["#ffd21a", "#ff9f1c", "#27d651", "#3d7bff", "#a24dff", "#f0f3f8", "#5ec8ff", "#5e8cff", "#9ad66a", "#ff7b7b", "#ffb36b", "#ff4d4d", "#cfd8dc"];
+function tube(a, b, col, r = 0.45, sag = 6) {
+  const mid = a.clone().lerp(b, 0.5); mid.x += sag;
+  const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, a.clone().lerp(mid, 0.6), mid, mid.clone().lerp(b, 0.4), b]), 24, r, 6), M(new THREE.Color(col).getHex(), 0.45));
+  m.castShadow = true; wires.add(m); return m;
+}
+const wireMeshes = [];
+// T <-> C6: 13 wires (LCD pin columns -> C6 pad rows)
+for (let i = 0; i < 13; i++) {
+  const x = (i - 6) * 2.54 * 1.4;
+  const a = P3(x, Y.tB - 0.4, i % 2 ? 8.89 : -8.89), b = P3(x * 0.8, Y.c6T + 0.2, i % 2 ? 11.43 : -11.43);
+  wireMeshes.push(tube(a, b, WC[i % WC.length], 0.4, 3));
+}
+// M <-> RC522 (8-wire ribbon), M <-> RDM (3 wires), M <-> power (VBAT, 5V, GND)
+for (let i = 0; i < 8; i++) wireMeshes.push(tube(P3(-22 + i * 0.9, Y.mB - 1, 18), P3(-22 + i * 2.54, Y.rcT + 2, 16), "#aab4c4", 0.35, -10));
+for (let i = 0; i < 3; i++) wireMeshes.push(tube(P3(-12 + i * 1.2, Y.mB - 1, 18), P3(8 + i * 2.54, Y.coilT + 2.5, 22), "#ff9a1f", 0.35, -4));
+for (const [c, x] of [["#ff4d4d", -4], ["#cfd8dc", -2], ["#ff9a1f", 0]]) wireMeshes.push(tube(P3(x, Y.mB - 1, -18), P3(x + 8, Y.pT + 6, 0), c, 0.55, 6));
+
+// ---------------------------------------------------------------- dimension lines
+const dim = new THREE.Group(); scene.add(dim);
+function sprite(text, pos, col = "#eaf1ff") {
+  const f = 26, pad = 12, cv = document.createElement("canvas"), g = cv.getContext("2d"); g.font = `${f}px system-ui`;
+  const w = g.measureText(text).width; cv.width = w + pad * 2; cv.height = f + pad; g.font = `${f}px system-ui`;
+  g.fillStyle = "rgba(8,12,20,.85)"; g.fillRect(0, 0, cv.width, cv.height); g.strokeStyle = "rgba(78,163,255,.55)"; g.strokeRect(1, 1, cv.width - 2, cv.height - 2);
+  g.fillStyle = col; g.textBaseline = "middle"; g.fillText(text, pad, cv.height / 2);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true })); s.scale.set(cv.width * 0.1, cv.height * 0.1, 1); s.position.copy(pos); dim.add(s); return s;
+}
+const marks = [["arka", Y.coilB], ["RC522 üstü", Y.rcT], ["güç plakası", Y.pT], ["M üstü", Y.mT], ["C6 üstü", Y.c6Top], ["T üstü", Y.tT], ["LCD üstü", Y.lcdTop]];
+const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, TOTAL, 6), M(0x4ea3ff)); bar.position.set(FOOT.x / 2 + 12, TOTAL / 2, 0); dim.add(bar);
+marks.forEach(([n, y]) => { const t = new THREE.Mesh(new THREE.BoxGeometry(6, 0.3, 0.3), M(0x4ea3ff)); t.position.set(FOOT.x / 2 + 12, y, 0); dim.add(t);
+  sprite(`${n} · ${y.toFixed(1)} mm`, P3(FOOT.x / 2 + 38, y, 0)); });
+
+// ---------------------------------------------------------------- UI
+const budget = [
+  ["LCD üstü (joystick)", K.lcdCtl, "e"], ["LCD PCB", K.pcb, "v"], ["dişi soket + erkek plastik (ekran↔T)", K.female + K.maleBase, "v"],
+  ["T plakası", K.pcb, "v"], ["T alt boşluk: C6 üstüne kadar", K.standoff - (K.female + K.pcb + K.usbc), "e"],
+  ["C6 (PCB + USB-C)", K.pcb + K.usbc, "e"], ["C6 dişi şerit gövdesi", K.female, "v"], ["M plakası", K.pcb, "v"],
+  ["M altı: lehim ucu + pay", K.tail + K.margin, "v"], ["güç katmanı: en uzun parça (MT3608)", K.mt3608, "v"], ["güç plakası", K.plate, "e"],
+  ["RC522 üstü boşluk", K.rcClear, "e"], ["RC522 PCB", K.pcb, "v"], ["RC522–bobin arası", 0.5, "e"], ["125 kHz bobin", K.coil, "v"],
+];
+const sum = budget.reduce((a, r) => a + r[1], 0);
+const FACTS = [
+  ["ok", "Ekranda hazır lehimli 2×20 dişi soket var; plakada ERKEK pin gerekir", "Waveshare, ThePihut"],
+  ["ok", "Ekran yönü: üzerindeki “USB” yazılı uç = Pico USB ucu", "Waveshare wiki"],
+  ["ok", "Ekran sinyalleri GP2/3/8–13/15–21 ve güç VSYS", "Waveshare wiki"],
+  ["ok", "C6 J1/J3 tabloları (16'şar pin); Waveshare kartı DevKitC-1 ile pin uyumlu", "Espressif, Waveshare"],
+  ["warn", "C6 şerit arası mesafe metinle yayınlanmamış (sadece PDF/DXF): 22.86 mm varsayım", "ÖLÇ: kartı breadboard'a tak, delik say"],
+  ["warn", "C6 boyu 51.8 / 54 / 55 mm diye değişiyor; eni 25.4", "espboards, Cirkit, Notebookcheck"],
+  ["ok", "RC522: 3.3V; sıra SDA SCK MOSI MISO IRQ GND RST 3.3V (diğer kaynak aynı başlığı ters uçtan okuyor)", "Cirkit, ShillehTek"],
+  ["ok", "RDM6300 P1: TX RX NC GND VCC(5V); P2 anten (kutup önemsiz); P3 LED; 9600 baud", "Phipps"],
+  ["warn", "RDM6300 başlık sayısı kartlara göre 4–5 pin: yazıyı oku", "Cirkit vs Phipps"],
+  ["ok", "VS1838B çıplak: OUT GND VCC; KY-022 kartında GND VCC S", "ShillehTek, iFuturetech"],
+  ["ok", "TO-92 2N2222/PN2222A: düz yüz sana bakarken E-B-C; metal kasa (TO-18) farklı", "components101, microcontrollerslab"],
+  ["ok", "TP4056: IN+/IN−, B+/B−, OUT+/OUT−; yük OUT'tan", "ShillehTek, Mischianti"],
+  ["warn", "MT3608 trimmer yönü kaynaklarda çelişiyor: multimetreyle bul", "Probots vs ShillehTek"],
+  ["warn", "Pil 503450 ≈ 50×34×5–5.5 ama bazı 1000 mAh piller 51×30×7: seninkini ölç", "TKP, Grobotronics"],
+  ["ok", "Dişi 1×16 gövde 8–8.45 mm, pin kuyruğu 3 mm", "Electrokit, ProtoSupplies"],
+  ["warn", "Pico sıra aralığı 17.78 mm: Pico standardı ama bu aramada metinle doğrulanamadı", "ekran soketini şeritle karşılaştır"],
+];
+function renderSide() {
+  const s = document.getElementById("side");
+  s.innerHTML = `<h2>Katmanlar (arkadan öne)</h2><table>${LAYERS.map(g => `<tr class="layer" data-k="${g.userData.key}"><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${g.userData.sw};margin-right:6px"></span>${g.userData.name}</td><td class="n">${g.userData.y0.toFixed(1)} mm</td></tr>`).join("")}</table>
+  <h2>Yükseklik bütçesi</h2><table>${budget.map(r => `<tr><td>${r[0]}</td><td class="n">${r[1].toFixed(1)}</td><td class="${r[2] === "v" ? "ok" : "warn"}">${r[2] === "v" ? "✓" : "~"}</td></tr>`).join("")}<tr><td><b>Toplam kalınlık</b></td><td class="n"><b>${sum.toFixed(1)}</b></td><td></td></tr></table>
+  <div class="good"><b>Boyut:</b> ${FOOT.x} × ${FOOT.z} mm taban × ~${TOTAL.toFixed(0)} mm kalınlık ≈ ${(FOOT.x * FOOT.z * TOTAL / 1000).toFixed(0)} cm³.<br>Yayılmış 10×10 cm perfboard planı: 100 × 100 × ~22 mm ≈ 220 cm³.</div>
+  <div class="note"><b>Dürüst sonuç:</b> yığın <u>tabanı</u> küçültüyor (66×62 mm, avuç içi) ama hacmi küçültmüyor, biraz büyütüyor bile (ara parça + boşluklar). Flipper Zero ~100×40×25 mm. O boyuta ancak özel PCB ile inilir (netlist hazır: hardware/makeshift_flipper.net).</div>
+  <div class="note"><b>Risk:</b> RC522 (13.56 MHz) ve 125 kHz bobin üst üste, pil de arkasında. Menzil düşebilir. Önce yan yana test et, sonra yığ. Bobin ve RC522 anteni arkaya (alta) bakar.</div>
+  <h2>Doğrulama durumu</h2><table>${FACTS.map(f => `<tr><td class="${f[0]}">${f[0] === "ok" ? "✓" : "⚠"}</td><td>${f[1]}<div style="color:var(--dim);font-size:11px">${f[2]}</div></td></tr>`).join("")}</table>
+  <h2>Montaj sırası (arkadan öne)</h2><ol style="margin:0 0 0 18px;padding:0;color:#c7cdd9">
+   <li>Bobin + RDM6300 alt plakaya, üstüne RC522 (anten aşağı).</li><li>Güç plakası: pil, TP4056, MT3608 (önce 5.3V ayarla), anahtar, PPTC.</li>
+   <li>Ana plaka M: C6 dişi şeritleri, portlar, sürücü blokları (perfboard planı adım 1–8).</li>
+   <li>M'yi 18 mm ara parçalarla güç plakasının üstüne, kablo demetlerini lehimle.</li>
+   <li>T plakası: 2×20 erkek pin + 13 tel (ekran→C6), M'nin üstüne 18 mm ara parçayla.</li>
+   <li>Ekranı T'nin pinlerine tak (USB yazılı uç yönü!).</li></ol>`;
+  s.querySelectorAll("tr.layer").forEach(tr => { tr.onmouseenter = () => flash(tr.dataset.k, true); tr.onmouseleave = () => flash(tr.dataset.k, false); });
+}
+function flash(key, on) { LAYERS.filter(g => g.userData.key === key).forEach(g => g.traverse(o => { if (o.isMesh && o.material && !Array.isArray(o.material) && o.material.emissive) { o.material.emissive.setHex(on ? 0x2a4cff : 0x000000); } })); }
+renderSide();
+
+let exploded = 0, target = 0, spin = false;
+const GAP = 22;
+const order = ["coil", "rc", "power", "main", "c6", "t", "lcd"]; // c6 rides with main in explode order
+function setEx(v) { target = v; document.getElementById("ex").value = Math.round(v * 100); document.getElementById("exV").textContent = Math.round(v * 100) + "%"; }
+document.getElementById("bAsm").onclick = e => { setEx(0); e.target.classList.add("on"); document.getElementById("bExp").classList.remove("on"); };
+document.getElementById("bExp").onclick = e => { setEx(1); e.target.classList.add("on"); document.getElementById("bAsm").classList.remove("on"); };
+document.getElementById("ex").oninput = e => { target = e.target.value / 100; document.getElementById("exV").textContent = e.target.value + "%"; };
+const view = (dir) => { const cy = TOTAL / 2 + 3 * GAP * target, d = 1 + target * 1.2;
+  cam.position.set(dir[0] * d, cy + dir[1] * d, dir[2] * d); ctl.target.set(0, cy, 0); };
+const VIEWS = { Iso: [130, 40, 170], Side: [0, 0, 210], Top: [0, 190, 1] };
+for (const k in VIEWS) document.getElementById("v" + k).onclick = () => view(VIEWS[k]);
+document.getElementById("tWire").onchange = e => wires.visible = e.target.checked;
+document.getElementById("tSpin").onchange = e => ctl.autoRotate = e.target.checked;
+ctl.autoRotateSpeed = 0.8; view(VIEWS.Iso);
+
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(), tip = document.getElementById("tip");
+addEventListener("pointermove", e => { mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); ray.setFromCamera(mouse, cam);
+  const h = ray.intersectObjects(hover, false).find(x => x.object.userData.info);
+  if (h) { const i = h.object.userData.info; tip.innerHTML = `<b style="color:#4ea3ff">${i.t}</b><br>${i.d}`; tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 290) + "px"; tip.style.top = (e.clientY + 14) + "px"; } else tip.style.display = "none"; });
+addEventListener("resize", () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); ren.setSize(innerWidth, innerHeight); });
+
+const base = new Map(LAYERS.map(g => [g, g.userData.y0]));
+ren.setAnimationLoop(() => {
+  exploded += (target - exploded) * 0.1;
+  LAYERS.forEach(g => { const idx = order.indexOf(g.userData.key); g.position.y = base.get(g) + idx * GAP * exploded; });
+  wires.visible = document.getElementById("tWire").checked && exploded < 0.35;
+  dim.visible = document.getElementById("tDim").checked && exploded < 0.05;
+  ctl.update(); ren.render(scene, cam);
+});
+</script>
+</body>
+</html>

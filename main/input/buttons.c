@@ -79,7 +79,10 @@ static digital_button_t s_buttons[] = {
 void buttons_init(void)
 {
     gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << GPIO_UP) | (1ULL << GPIO_PRESS) |
+        // GPIO_PRESS (GPIO3) is deliberately not configured here: it is the
+        // battery ADC input (battery.c) and a pull-up from this call would skew
+        // the divider reading depending on init order.
+        .pin_bit_mask = (1ULL << GPIO_UP) |
                         (1ULL << GPIO_A) |
                         (1ULL << GPIO_DOWN) |
                         (1ULL << GPIO_LEFT) | (1ULL << GPIO_RIGHT),

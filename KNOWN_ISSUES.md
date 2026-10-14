@@ -1471,6 +1471,35 @@ over these older notes):
   splice that in, rather than relying on runtime clamps GCC can't see. Keep
   this in mind when editing any radar/list footer.
 
+## Round 30 (2026-10-14): wiring audit of the current DEV-KIT-NX pin map
+
+Full pass over `WIRING_MAP_RC522.md`, `hardware/`, `main/` pin definitions
+and `HARDWARE_TEST_MATRIX.md`. Verdict: the pin map itself has no GPIO
+collision (LCD 18/19/9/8/20/21, buttons 6/11/23/22/10, buzzer 1, RC522
+5/7/2, RDM6300 15, IR 4/0, battery 3) and does not need to be redesigned.
+
+- ✅ **FIXED — IR LED BASE RESISTOR WAS 100 ohm:** `hardware/README.md` and
+  `makeshift_flipper.net` specified R4 = 100R from IO0 to the NPN base,
+  roughly 26 mA out of a GPIO (above the C6's safe per-pin current), while
+  `LEHIM_REHBERI.md` already said 1k. Both now say 1k (~2.6 mA base current,
+  plenty to saturate a 2N2222 for a ~20 mA LED).
+- ✅ **FIXED — GPIO3 WAS CONFIGURED BY TWO DRIVERS:** `buttons_init()`
+  enabled a pull-up on GPIO3 (unpolled centre press) and `battery_init()`
+  later set it floating for the ADC. Correct only because of init order in
+  `app_main()`. GPIO3 is removed from `buttons_init()`'s pin mask so the
+  battery divider can't be skewed by a reordering.
+- ✅ **FIXED — STALE PINS IN `HARDWARE_TEST_MATRIX.md`:** IR GPIO14/17 ->
+  GPIO4/0, motor GPIO3 -> active buzzer GPIO1, RDM6300 GPIO1 -> GPIO15,
+  RC522 MISO GPIO6 -> GPIO5, backlight "tied to 3V3" -> GPIO21, and the
+  "move UP off GPIO6" note (no longer true). Stale header comments in
+  `buttons.h` (GPIO5) and `vibration.h` (GPIO20) corrected.
+- ✅ **DOCUMENTED:** `WIRING_MAP_RC522.md` listed only IO4/5/15 as strapping
+  pins; the C6 also straps IO8 and IO9 (LCD DC/CS, already working).
+- 🟡 **NOTED, NOT CHANGED:** RDM6300 is fed from the 5V pin, so it only
+  works with USB power unless a boost converter is added on battery. A
+  2.2k/3.3k divider is a valid substitute for the BSS138 level shifter
+  because the RDM6300 TX line is one-way 9600 baud.
+
 ## General
 
 - The current **standalone ESP32-C6 firmware** builds clean (esp32c6) and

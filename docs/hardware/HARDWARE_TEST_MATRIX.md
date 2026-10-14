@@ -36,14 +36,14 @@ wiring differs — don't just work around it in your head.
 | LCD renders text and colors cleanly, no garbled/mirrored pixels | Menu items readable, correct colors (not swapped R/B) | SCK=GPIO18, MOSI=GPIO19, CS=GPIO9, DC=GPIO8, RST=GPIO20 (shared SPI2 bus with RC522) |
 | Colors are correct, not inverted (e.g. background isn't white when it should be black) | If colors look inverted, toggle `esp_lcd_panel_invert_color()`'s argument in `display_init()` -- this varies by panel batch | — |
 | Display orientation looks right for your specific panel (not upside-down or mirrored) | If wrong, adjust `esp_lcd_panel_mirror()`/`esp_lcd_panel_swap_xy()` calls (not currently called -- add if needed) | — |
-| Backlight turns on with the device | Screen is lit on power-up | Tied to 3V3 (no dedicated backlight GPIO on this build) |
+| Backlight turns on with the device | Screen is lit on power-up | LCD_BL_GPIO = GPIO21, driven high in `display_init()` |
 
 ## 2. Joystick and buttons
 
 | Check | Expected | Pin(s) |
 |---|---|---|
 | UP moves the cursor up | Cursor moves | LCD GP2 -> C6 GPIO6 (current wiring) |
-| PRESS (center) selects/activates, when physically wired | Menu action fires | LCD GP3 -> C6 GPIO3 (firmware assignment; wire not yet verified) |
+| PRESS (center) is not polled | A button (GPIO10) is the confirm key | GPIO3 is the battery ADC input, not a button |
 | DOWN moves the cursor down | Cursor moves | LCD GP18 -> C6 GPIO11 (moved from GPIO2; disconnect B first) |
 | LEFT backs out on ordinary screens | Returns to parent menu | LCD GP16 -> C6 GPIO23 |
 | RIGHT enters/selects on ordinary screens | Menu action fires | LCD GP20 -> C6 GPIO22 |
@@ -51,28 +51,27 @@ wiring differs — don't just work around it in your head.
 | Keyboard horizontal navigation | Short LEFT/RIGHT move one column; long LEFT exits, long RIGHT selects | GPIO23/GPIO22; A acts immediately |
 | Text entry grid (`text_entry.c`, used by WiFi Tara/Bağlan's password screen) navigates and appends chars correctly | Matches `tests/test_text_entry.c`'s host-tested logic | via same button pins |
 
-These are proposed direct wires, not a completed hardware check. Verify the
-actual carrier header labels and common GND before connecting them. In
-particular, GPIO6 is UP on the current screen-only build. RC522 MISO is
-disabled in this profile; attaching an RC522 later requires moving UP off
-GPIO6.
+These are direct wires, not a completed hardware check. Verify the actual
+carrier header labels and common GND before connecting them. UP is GPIO6 and
+RC522 MISO is GPIO5 (`hardware_profile.h`), so they no longer collide;
+`BOARD_HAS_RC522` stays 0 until the RC522 is physically wired.
 
 ## 3. Vibration motor
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| Motor pulses on the events `vibration.c` is wired to (check call sites — no dedicated menu action) | Physical buzz felt | GPIO3 (via transistor driver; motor must never connect directly to the GPIO) |
-| A flyback diode is present across the motor | No voltage spike visible on the GPIO line when the motor stops | — |
+| Active buzzer beeps on the events `vibration.c` is wired to (check call sites — no dedicated menu action) | Audible chirp (bench-tested) | GPIO1, buzzer(+) direct, buzzer(-) to GND. A motor or passive buzzer must go through a transistor driver, never directly on the GPIO |
+| If a motor is used instead: flyback diode across it | No voltage spike visible on the GPIO line when the motor stops | — |
 | No motor buzz bleeding into I2C/SPI lines (check wiring layout, not just firmware) | Clean display/RFID reads while motor fires | — |
 
 ## 4. IR: transmit + receive
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| "IR Send Test" transmits a recognizable NEC frame | Verify with a second IR receiver, phone camera (IR LEDs show as faint purple on most phone cameras), or a known target device (e.g. TV power) | TX=GPIO17 (via transistor driver) |
-| IR receiver picks up an incoming NEC frame | Decoded frame shown/logged | RX=GPIO14 (VS1838B OUT) |
-| "IR Learn" captures a remote button press and saves it under a chosen name | Entry appears in "IR Library" afterward, survives a reboot | RX=GPIO14 |
-| "IR Library" replays (PRESS) a saved code | Target device reacts the same as to the original remote | TX=GPIO17 |
+| "IR Send Test" transmits a recognizable NEC frame | Verify with a second IR receiver, phone camera (IR LEDs show as faint purple on most phone cameras), or a known target device (e.g. TV power) | TX=GPIO0 (via NPN driver, 1k base resistor) |
+| IR receiver picks up an incoming NEC frame | Decoded frame shown/logged | RX=GPIO4 (VS1838B OUT) |
+| "IR Learn" captures a remote button press and saves it under a chosen name | Entry appears in "IR Library" afterward, survives a reboot | RX=GPIO4 |
+| "IR Library" replays (PRESS) a saved code | Target device reacts the same as to the original remote | TX=GPIO0 |
 | "IR Library" delete (LEFT) removes an entry and persists the change | Entry gone from the list after a reboot | — |
 | "IR Learn"/"IR Library" behave correctly at capacity (16 entries) | "Library full" shown, existing entries untouched, no crash | — |
 | ⚠️ **"IR Direction Find" is not available on this build** — `app_main()` deliberately never calls `ir_direction_init()` (this pin map has no spare RMT RX channels once the regular IR receiver/transmitter are running), and the screen says so explicitly instead of hanging. Do not treat this as a bug to fix; it's a feature kept out of this hardware profile. | Screen shows "Not available on this build" | — |
@@ -81,7 +80,7 @@ GPIO6.
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| "Read 13.56MHz" detects a MIFARE Classic card in range | UID displayed | SCK=GPIO18, MOSI=GPIO19, MISO=GPIO6, CS=GPIO7, RST=GPIO2 (shared SPI2 bus with the LCD; separate CS) |
+| "Read 13.56MHz" detects a MIFARE Classic card in range | UID displayed | SCK=GPIO18, MOSI=GPIO19, MISO=GPIO5, CS=GPIO7, RST=GPIO2 (shared SPI2 bus with the LCD; separate CS) |
 | SPI wiring doesn't conflict with the LCD (shared SCK/MOSI, separate CS) | Clean reads on both display and RC522, no bus contention | GPIO18/19 shared; GPIO9 (LCD CS) vs GPIO7 (RC522 CS) must toggle independently |
 | "Clone (13.56MHz)" successfully reads a source card's sector data | No `RC522_DUMP_NO_SECTORS` in Errors | same SPI pins |
 | "Clone (13.56MHz)" successfully writes to a target (writable) card | Target card's UID/data matches source afterward, verify with "Read 13.56MHz" | same SPI pins |
@@ -95,15 +94,15 @@ GPIO6.
 > ℹ️ **UART1 function-clock hang fixed (KNOWN_ISSUES.md Round 28).**
 > `rdm6300_init()` no longer hangs the watchdog -- the cause was UART1's
 > function clock being left gated by ESP-IDF, not a GPIO conflict, and
-> `rdm6300_init()` now enables it before `uart_driver_install()`. RX has
-> moved to **GPIO1 (Pico GP28)**. Wire the RDM6300 TX line (through the
-> level shifter) to GP28 before testing this section.
+> `rdm6300_init()` now enables it before `uart_driver_install()`. On the
+> current DEV-KIT-NX build RX is **GPIO15** (GPIO1 is the buzzer). Wire the
+> RDM6300 TX line through the level shifter (or a 2.2k/3.3k divider) to GPIO15.
 
 | Check | Expected | Pin(s) |
 |---|---|---|
-| "Read 125kHz" detects a 125kHz EM4100-family tag in range | Tag ID displayed | RX=GPIO1 (UART1, receive-only module; RDM6300 is 5V, needs a level shifter down to 3.3V) |
-| Read is reliable across multiple tag presentations, not just the first one after boot | Repeated reads work without a reboot | GPIO1 |
-| "Save 125kHz" saves a scanned tag ID under a chosen name | Entry appears in "RFID Library" marked 'L' (low frequency), survives a reboot | GPIO1 |
+| "Read 125kHz" detects a 125kHz EM4100-family tag in range | Tag ID displayed | RX=GPIO15 (UART1, receive-only module; RDM6300 is 5V, needs a level shifter down to 3.3V) |
+| Read is reliable across multiple tag presentations, not just the first one after boot | Repeated reads work without a reboot | GPIO15 |
+| "Save 125kHz" saves a scanned tag ID under a chosen name | Entry appears in "RFID Library" marked 'L' (low frequency), survives a reboot | GPIO15 |
 | "RFID Library" delete (LEFT) removes an entry (either kind) and persists the change | Entry gone from the list after a reboot | — |
 | "Save 125kHz"/"Save 13.56MHz" behave correctly at capacity (16 entries total) | "Library full" shown, existing entries untouched, no crash | — |
 

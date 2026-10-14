@@ -4,6 +4,17 @@ Bu klasör, firmware'deki pin haritasından türetilmiş PCB üretim girdilerini
 içerir. Amaç: kablolamayı bir dosyaya döküp, sonunda **lehimli bir PCB**
 ürettirmek (JLCPCB / PCBWay gibi bir servise).
 
+## Perfboard'a lehimleme: yeni plan
+
+Delik delik, adım adım rehber: [`perfboard/perfboard_plan.html`](perfboard/perfboard_plan.html)
+(tarayıcıda aç; "Arka (lehim) yüzü" kutusu plakayı ters çevirmişsin gibi gösterir).
+Aynı tel listesi metin olarak: [`PERFBOARD_BAGLANTI_PLANI.md`](PERFBOARD_BAGLANTI_PLANI.md).
+Üst üste (yığın) hali 3D: [`perfboard/compact_stack.html`](perfboard/compact_stack.html).
+Lehimden önce ölçülmesi gerekenler: [`perfboard/DOGRULAMA.md`](perfboard/DOGRULAMA.md).
+Tek kaynak `perfboard/make_plan.py`; bir delik koordinatını değiştirip `python make_plan.py`
+çalıştırınca ikisi de yeniden üretilir. Eski `LEHIM_REHBERI.md` / `DIYLC_PERFBOARD_REHBERI.md`
+sadece net listesi veriyordu, hangi deliğe ne geleceğini vermiyordu.
+
 ## Dosyalar
 
 - **`makeshift_flipper.net`** — KiCad netlist (bağlantı listesi). Hangi
@@ -53,7 +64,7 @@ makeshift_flipper.net   (ELİMİZDE ✅)
 | Q1 | NPN transistör (2N2222 vb.) | 1 | IR LED sürücüsü |
 | D1 | IR LED 940nm | 1 | IR verici |
 | R3 | 100Ω | 1 | IR LED seri direnci (LED'e göre ayarla) |
-| R4 | 100Ω | 1 | Q1 base direnci (IO0'dan) |
+| R4 | 1kΩ | 1 | Q1 base direnci (IO0'dan). 100Ω GPIO'yu ~26 mA ile zorlar, 1kΩ kullan |
 | BZ1 | Aktif buzzer | 1 | + → IO1, − → GND. Sürücü/diyot gerekmez |
 | R1 | 10kΩ | 1 | Pil bölücü üst |
 | R2 | 10kΩ | 1 | Pil bölücü alt (R1==R2 → 2:1) |

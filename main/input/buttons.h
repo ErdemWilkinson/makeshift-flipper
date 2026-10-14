@@ -12,7 +12,7 @@ typedef enum {
     BUTTON_DOWN,
     BUTTON_LEFT,   // short physical LEFT in keyboard mode
     BUTTON_RIGHT,  // stick pushed right: navigation / enter
-    BUTTON_PRESS,  // center press: confirm / activate (GPIO5, if physically wired)
+    BUTTON_PRESS,  // center press: confirm / activate (unused: GPIO3 is the battery ADC)
     BUTTON_BACK,   // stick LEFT outside keyboard, or long LEFT in keyboard mode
     BUTTON_COUNT,
 } button_id_t;

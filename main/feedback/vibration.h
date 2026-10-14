@@ -1,7 +1,8 @@
 #pragma once
 
-// Driver for the vibration motor (driven through an NPN transistor on
-// GPIO20, per the wiring report — GPIO -> 1k resistor -> base).
+// Driver for the feedback output on GPIO1: the active buzzer is wired
+// straight to the pin; a motor would need GPIO -> 1k resistor -> NPN base
+// plus a flyback diode.
 
 // Configures the GPIO as an output, motor off. Call once at startup.
 void vibration_init(void);

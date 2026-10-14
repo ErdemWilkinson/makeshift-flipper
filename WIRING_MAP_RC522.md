@@ -81,7 +81,11 @@ pinine iki jumper güvenle oturmaz, o yüzden:
 ## Pinler neden böyle dağıtıldı
 
 - Kartta boş kalan pinler: IO0, 1, 2, 3, 4, 5, 7, 15.
-- IO4, IO5 ve IO15 strap (açılış ayarı) pinleri. Bunlara sadece boşta
+- C6'nın strap pinleri IO4, IO5, IO8, IO9 ve IO15. IO8 (LCD DC) ve IO9 (LCD
+  CS) ekranın kendi kartında zaten yüksekte bekliyor ve çalışıyor; IO9'u
+  açılışta asla düşük tutma (download moduna girer). IO8 ayrıca kart
+  üzerindeki RGB LED'in girişidir, ekran yazarken LED titreyebilir.
+- IO4, IO5 ve IO15 için: bunlara sadece boşta
   yüksek kalan girişler verildi (RC522 MISO, IR alıcı, RDM6300). Böylece
   reset anında hiçbir modül bu pinleri düşük çekmez.
 - Çıkışlar (RC522 CS/RST, IR verici, buzzer) strap olmayan IO0, IO1, IO2 ve
