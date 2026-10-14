@@ -6,7 +6,8 @@ ya da kaynaklar çelişiyor: kendin ölç.**
 
 ## Lehim öncesi ölçülecekler (5 dk, sırayla)
 
-1. ⚠ **C6 şerit arası mesafe.** Planda 9 delik (22.86 mm) varsayıldı. Kartı
+1. ⚠ **C6 şerit arası mesafe.** Planda 9 delik (22.86 mm) var; bu Espressif'in DevKitC-1
+   çizimiyle uyumlu, Waveshare kendi ölçüsünü metin olarak vermiyor. Kartı
    breadboard'a veya iki ayrı şeride tak, iki pin sırası arasındaki delik sayısını say.
    Farklıysa `make_plan.py` içinde `J1X, J3X` değerini değiştirip `python make_plan.py` çalıştır.
 2. ⚠ **C6'nın USB-C ucu.** Metinle yayınlanmıyor. Plan "USB ucu aşağı" çiziyor;
@@ -52,7 +53,7 @@ ya da kaynaklar çelişiyor: kendin ölç.**
 | **Dişi header 1×16/1×40, erkek header 1×40** | yok | C6 soketi, LCD için erkek | ✗ al |
 | **Buzzer (aktif)** | yok | BZ1 | Opsiyonel; motor titreşimi var, soket boş kalabilir |
 | TP4056, PPTC 1.1 A, anahtar, 1000/100 µF, JST | görüntülerde yok | güç zinciri | TP4056 sende olduğu belirtilmişti; kalanlar için alışveriş listesine bak |
-| ESP32-C6 Geliştirme Kartı 160 MHz (2. fatura, 441 TL) | 1 | ana kart | ⚠ Fatura adı kesik; model (DEV-KIT-NX / C6-Pico / DevKitC) yazmıyor. Pin haritası DevKitC-1 uyumlu başlıklara göre: kartın üstündeki yazıyı kontrol et |
+| ESP32-C6 Geliştirme Kartı 160 MHz (2. fatura, 441 TL, kod 2504020021) | 1 | planın kartı değil | ✓ Satıcı sayfasıyla kod eşleşti: Waveshare **ESP32-C6-Pico** (MINI-1, 4 MB, Pico biçimi, tek USB-C). Plan ve firmware **DEV-KIT-NX** için; Pico'nun pinleri farklı, bu plana takılmaz |
 | TP4056 Type-C şarj modülü (2. fatura, 9,8 TL) | 1 | 1 | ⚠ Koruma devresi olup olmadığı belli değil; fiyat korumasız olabileceğini düşündürüyor (çıkarım). OUT+/OUT− pedi var mı bak |
 | ESP32-P4-Pico (400 MHz), 0.96" SSD1306 OLED | 1'er | kullanılmıyor | Firmware C6 hedefli; yedek/deney parçası |
 | NodeMCU ESP8266 | 1 | kullanılmıyor | Firmware C6 hedefli; yedek/test kartı |
@@ -64,6 +65,7 @@ ya da kaynaklar çelişiyor: kendin ölç.**
 | Pico-LCD-1.3 | Arkasında hazır lehimli dişi soket var → plakada ERKEK pin | Waveshare wiki, ThePihut |
 | LCD yönü | Üzerinde "USB" yazılı uç = Pico USB ucu = pin 1 ucu | Waveshare wiki |
 | LCD sinyalleri | DIN GP11, CLK GP10, CS GP9, DC GP8, RST GP12, BL GP13, A GP15, UP GP2, DOWN GP18, LEFT GP16, RIGHT GP20, CTRL GP3, VCC→VSYS | Waveshare wiki |
+| Ana kart (kullanıcı fotoğrafı) | ESP32-C6-WROOM-1 modüllü Waveshare DevKit (N8 ailesi), tek USB-C (CH343 + CH334 hub), sıra başına ~16 pin (fotoğraftan sayım, kesin değil) | Waveshare ESP32-C6-DEV-KIT-N8 wiki + kullanıcı fotoğrafı |
 | C6 pin tabloları | J1/J3 16'şar pin, DevKitC-1 uyumlu; IO12/13 USB, IO16/17 CH343 | Espressif DevKitC-1 kılavuzu, Waveshare wiki |
 | RC522 | 3.3 V; header sırası SDA SCK MOSI MISO IRQ GND RST 3.3V | Cirkit Designer, ShillehTek |
 | RDM6300 | P1: TX RX NC GND VCC(5 V), P2 anten, 9600 baud | Phipps, Cirkit |

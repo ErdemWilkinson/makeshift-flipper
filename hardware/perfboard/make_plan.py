@@ -37,7 +37,8 @@ def part(ref, name, kind, stage, note="", value=""):
 
 
 # --------------------------------------------------------------------------
-# ESP32-C6 DevKit: two 1x16 female strips, 9 holes apart (verify, see checks)
+# ESP32-C6 DevKit: two 1x16 female strips, 9 holes apart (22.86 mm: Espressif DevKitC-1
+# layout drawing; Waveshare's own outline is not published as text, so measure yours)
 # --------------------------------------------------------------------------
 J1X, J3X, CY = 11, 20, 3
 J1 = ["3V3", "RST", "IO4", "IO5", "IO6", "IO7", "IO0", "IO1", "IO8", "IO10",
@@ -190,13 +191,13 @@ pad("C1", 2, 7, 25, "GND", 8, "−", lab=None)
 # Module bodies for the diagram (hole units)
 # --------------------------------------------------------------------------
 MODULES = [
-    dict(name="ESP32-C6 DevKit (üstten)", x0=10.58, y0=-0.13, x1=20.42, y1=21.13,
+    dict(name="ESP32-C6 DevKit (üstten)", x0=10.5, y0=0.3, x1=20.5, y1=20.7,
          note="anten ↑ · USB-C ↓"),
     dict(name="Pico-LCD-1.3", x0=23.3, y0=2.27, x1=33.7, y1=22.73, note="pin-1 üstte"),
 ]
 ZONES = [
-    dict(name="ANTEN BÖLGESİ: tel/parça yok", x0=10.58, y0=-0.13, x1=20.42, y1=3.6, kind="keepout"),
-    dict(name="USB KABLO KORİDORU: alçak parça", x0=11, y0=21.2, x1=20, y1=29, kind="corridor"),
+    dict(name="ANTEN BÖLGESİ: tel/parça yok", x0=10.5, y0=0.3, x1=20.5, y1=3.6, kind="keepout"),
+    dict(name="USB KABLO KORİDORU: alçak parça", x0=11, y0=20.8, x1=20, y1=29, kind="corridor"),
 ]
 
 STAGES = [

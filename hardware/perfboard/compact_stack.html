@@ -184,9 +184,9 @@ function pcbMatsLocal(c) { return [pcbEdge, pcbEdge, M(c, 0.55), M(c, 0.7), pcbE
   box(g, 7, 6, 6, 0x151515, 30, yS + 3, -14, { t: "VS1838B", d: "IR alıcı, kasanın ön kenarına bakar" }); }
 // C6 sits 8.45 mm above M on its own sockets
 { const g = layer("c6", "ESP32-C6 DevKit", Y.c6B, "#11602f");
-  pcb(g, 54, 25.4, 0x11602f, 0, { t: "ESP32-C6-DEV-KIT-NX", d: "54×25.4 mm (kaynaklar 51–55 diyor). Anten kenarı dışarı, USB-C diğer uçta" });
-  box(g, 16, 2.6, 13, M(0xc4c7cf, 0.35, 0.9), 14, K.pcb + 1.3, 0, { t: "ESP32-C6 modülü + anten", d: "anten ucu çıkıntıda kalmalı" });
-  box(g, 9, 3.4, 7.6, M(0xb7bbc4, 0.3, 0.95), -27, K.pcb + 1.7, 0, { t: "USB-C", d: "yığının kısa kenarında, kablo için serbest" });
+  pcb(g, 51.8, 25.4, 0x11602f, 0, { t: "ESP32-C6-DEV-KIT (WROOM-1)", d: "51.8×25.4 mm (Espressif DevKitC-1 resmi çizimi; Waveshare ölçüsü doğrulanmadı). Anten kenarı dışarı, USB-C diğer uçta" });
+  box(g, 25.5, 2.6, 18, M(0xc4c7cf, 0.35, 0.9), 13.15, K.pcb + 1.3, 0, { t: "ESP32-C6-WROOM-1 (18×25.5 mm)", d: "son 6 mm PCB anteni: üstü ve yanı boş kalmalı" });
+  box(g, 7.3, 3.4, 8.9, M(0xb7bbc4, 0.3, 0.95), -23.5, K.pcb + 1.7, 0, { t: "USB-C", d: "yığının kısa kenarında, kablo için serbest" });
   strip(g, 16, 0, K.pcb, -11.43, null, null, true, 0); strip(g, 16, 0, K.pcb, 11.43, null, null, true, 0); }
 // ---------------------------------------------------------------- L4 T plate with LCD male header
 { const g = layer("t", "T plakası (ekran erkek pinleri)", Y.tB, "#9c7b3c");
@@ -265,7 +265,7 @@ const FACTS = [
   ["ok", "Ekran sinyalleri GP2/3/8–13/15–21 ve güç VSYS", "Waveshare wiki"],
   ["ok", "C6 J1/J3 tabloları (16'şar pin); Waveshare kartı DevKitC-1 ile pin uyumlu", "Espressif, Waveshare"],
   ["warn", "C6 şerit arası mesafe metinle yayınlanmamış (sadece PDF/DXF): 22.86 mm varsayım", "ÖLÇ: kartı breadboard'a tak, delik say"],
-  ["warn", "C6 boyu 51.8 / 54 / 55 mm diye değişiyor; eni 25.4", "espboards, Cirkit, Notebookcheck"],
+  ["ok", "DevKitC-1 resmi çizimi: 51.8 × 25.4 mm, sıra aralığı 22.86 mm (Waveshare kartı için bu ölçüler doğrulanmadı, pin uyumlu diye geçiyor)", "Espressif PCB layout PDF, espboards"],
   ["ok", "RC522: 3.3V; sıra SDA SCK MOSI MISO IRQ GND RST 3.3V (diğer kaynak aynı başlığı ters uçtan okuyor)", "Cirkit, ShillehTek"],
   ["ok", "RDM6300 P1: TX RX NC GND VCC(5V); P2 anten (kutup önemsiz); P3 LED; 9600 baud", "Phipps"],
   ["warn", "RDM6300 başlık sayısı kartlara göre 4–5 pin: yazıyı oku", "Cirkit vs Phipps"],

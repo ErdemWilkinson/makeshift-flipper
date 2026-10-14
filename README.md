@@ -172,6 +172,24 @@ the motor are unverified on real hardware. The old TCA9554 button map in
 and **does not describe the current direct-GPIO build**. Use the source and
 [HARDWARE_TEST_MATRIX.md](docs/hardware/HARDWARE_TEST_MATRIX.md) before changing wires.
 
+## Hardware visuals
+
+Screenshots of the interactive pages in this repo (open the HTML files for the live, rotatable versions).
+
+| 3D model, assembled | 3D model, exploded |
+|---|---|
+| ![3D viewer, assembled](docs/images/3d-viewer-assembled.png) | ![3D viewer, exploded](docs/images/3d-viewer-exploded.png) |
+
+| Compact stack, assembled | Compact stack, exploded |
+|---|---|
+| ![Compact stack, assembled](docs/images/compact-stack-assembled.png) | ![Compact stack, exploded](docs/images/compact-stack-exploded.png) |
+
+| Perfboard plan, step 1 | Perfboard plan, step 7 |
+|---|---|
+| ![Perfboard plan, step 1](docs/images/perfboard-plan.png) | ![Perfboard plan, step 7](docs/images/perfboard-plan-step7.png) |
+
+Sources: [`3d/viewer.html`](3d/viewer.html), [`hardware/perfboard/compact_stack.html`](hardware/perfboard/compact_stack.html), [`hardware/perfboard/perfboard_plan.html`](hardware/perfboard/perfboard_plan.html). Dimensions and unverified items: [`hardware/perfboard/DOGRULAMA.md`](hardware/perfboard/DOGRULAMA.md).
+
 ## Build, flash and tests
 
 The project targets `esp32c6`, 4 MB flash and the custom

@@ -20,7 +20,7 @@ Kart: **Waveshare ESP32-C6-DEV-KIT-NX** (C6-Pico değil). Pin haritası:
   2× VS1838B/TL1838, 2× 12×12 cm + 1× 6×13 cm perfboard (NodeMCU ESP8266 de geldi, bu projede kullanılmıyor).
   Ayrıntı: [DOGRULAMA.md](../../hardware/perfboard/DOGRULAMA.md)
 
-- 2. fatura: ESP32-C6 geliştirme kartı (model adı faturada kesik, kartı kontrol et), TP4056 Type-C
+- 2. fatura: ESP32-C6 geliştirme kartı (ürün kodu 2504020021 = Waveshare ESP32-C6-Pico, NX değil; bu planın kartı değil), TP4056 Type-C
   (9,8 TL; korumasız olabilir, OUT+/OUT− pedine bak), ESP32-P4-Pico ve 0.96" OLED (bu projede kullanılmıyor).
 
 **Bu siparişte eksik kalanlar (hâlâ al):** 10 kΩ direnç (R1, R2 pil bölücü), dişi header
