@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bare Stack 3D</title>
+<style>
+  :root { --bg:#0e1016; --panel:#171a22; --line:#282d39; --fg:#e9ecf3; --dim:#9298a6; --acc:#4ea3ff; --ok:#3ecf8e; --warn:#ffb84d; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif; overflow:hidden; }
+  #c { position:fixed; inset:0; }
+  .panel { position:fixed; background:rgba(23,26,34,.93); border:1px solid var(--line); border-radius:13px; backdrop-filter:blur(8px); box-shadow:0 10px 36px rgba(0,0,0,.45); }
+  #hud { left:16px; top:16px; width:270px; padding:14px 16px; }
+  #hud h1 { font-size:16px; margin:0 0 2px; }
+  #hud .sub { color:var(--dim); font-size:12px; margin-bottom:12px; }
+  .row { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+  button { background:#232733; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:13px; cursor:pointer; flex:1; }
+  button:hover { border-color:var(--acc); } button.on { background:var(--acc); color:#06121f; border-color:var(--acc); font-weight:600; }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  label.chk { display:flex; gap:8px; align-items:center; color:var(--dim); font-size:13px; cursor:pointer; padding:2px 0; }
+  #side { right:16px; top:16px; width:410px; max-height:calc(100vh - 32px); overflow:auto; padding:14px 16px; }
+  #side h2 { font-size:13px; text-transform:uppercase; letter-spacing:1.1px; color:var(--dim); margin:14px 0 8px; }
+  #side h2:first-child { margin-top:0; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  td,th { padding:4px 5px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); }
+  .note { background:#241d10; border:1px solid #5a4116; color:#ffd9a0; border-radius:8px; padding:8px 10px; font-size:12.5px; margin:8px 0; }
+  .good { background:#13261e; border:1px solid #1f4a37; color:#bfeed6; border-radius:8px; padding:8px 10px; font-size:12.5px; margin:8px 0; }
+  a { color:var(--acc); }
+  #tip { position:fixed; pointer-events:none; display:none; background:#04060b; border:1px solid var(--acc); border-radius:8px; padding:6px 10px; font-size:12px; z-index:9; max-width:290px; }
+  #hud { max-height:calc(100vh - 32px); overflow:auto; }
+  #hudT { position:absolute; right:10px; top:10px; flex:none; width:auto; padding:3px 10px; }
+  #hud.min #hudBody { display:none; }
+  #sideBtn { display:none; position:fixed; right:10px; bottom:10px; z-index:12; width:auto; flex:none; padding:10px 14px; border-radius:12px; background:#232733; box-shadow:0 6px 20px rgba(0,0,0,.5); }
+  @media (max-width:900px){
+    button { min-height:40px; }
+    #hud { left:8px; right:8px; top:8px; width:auto; max-height:70vh; }
+    #side { display:block; left:0; right:0; top:auto; bottom:0; width:auto; max-height:64vh; border-radius:16px 16px 0 0; transform:translateY(110%); transition:transform .25s ease; padding-bottom:72px; z-index:11; }
+    #side.open { transform:none; }
+    #sideBtn { display:block; }
+    #cap { left:10px !important; transform:none !important; bottom:64px !important; width:calc(100vw - 20px) !important; max-width:none !important; padding:10px 14px; }
+    #cap .t { font-size:16px; } #cap .d { font-size:12px; }
+    #tip { max-width:230px; }
+  }
+  #cap { position:fixed; left:calc(50% - 130px); bottom:26px; transform:translateX(-50%); display:none; background:rgba(23,26,34,.95); border:1px solid var(--acc); border-radius:14px; padding:12px 20px; max-width:min(640px,92vw); text-align:center; z-index:8; box-shadow:0 10px 36px rgba(0,0,0,.5); }
+  #cap .n { color:var(--acc); font-weight:700; font-size:13px; letter-spacing:1px; text-transform:uppercase; }
+  #cap .t { font-size:18px; font-weight:700; margin:2px 0; }
+  #cap .d { color:var(--dim); font-size:13px; }
+  #cap .bar { height:4px; background:#282d39; border-radius:2px; margin-top:10px; overflow:hidden; }
+  #cap .bar i { display:block; height:100%; width:0; background:var(--acc); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud" class="panel">
+  <h1>Bare stack · no enclosure</h1>
+  <button id="hudT" title="Toggle menu">☰</button>
+  <div class="sub">open read face · battery between cardboard</div>
+  <div class="row" style="margin-top:2px"><button id="bAnim">▶ Assembly animation</button></div>
+  <div id="hudBody">
+  <div class="row"><button id="bAsm" class="on">Assembled</button><button id="bExp">Exploded</button></div>
+  <label style="color:var(--dim);font-size:12px">Explode <span id="exV">0%</span></label>
+  <input type="range" id="ex" min="0" max="100" value="0">
+  <div class="row" style="margin-top:8px"><button id="vIso">Iso</button><button id="vTop">Top</button></div>
+  <div class="row"><button id="vBack">Bottom (read face)</button><button id="vSide">Side</button></div>
+  <label class="chk"><input type="checkbox" id="tShell" checked> Cardboard + electrical tape</label>
+  <label class="chk"><input type="checkbox" id="tFlip"> Flipper Zero size (reference)</label>
+  <label class="chk"><input type="checkbox" id="tWire" checked> Wires</label>
+  <label class="chk"><input type="checkbox" id="tPads" checked> Hole-plan pads (hover = hole address)</label>
+  <label class="chk"><input type="checkbox" id="tLabels" checked> Dimension labels</label>
+  <label class="chk"><input type="checkbox" id="tSpin"> Auto-rotate</label>
+  <div style="color:var(--dim);font-size:11px;margin-top:8px">Hover/tap a part to see what it is. Size, clash check and risks are in the side panel (the "Info" button on mobile).</div>
+  </div>
+</div>
+<button id="sideBtn">ℹ Info</button>
+<div id="side" class="panel"></div>
+<div id="tip"></div>
+<div id="cap"><div class="n"></div><div class="t"></div><div class="d"></div><div class="bar"><i></i></div></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+
+// ---------------------------------------------------------------- layout (mm), NO ENCLOSURE / BARE STACK
+// Coordinates: x = length (0 = USB end), y = width, z = thickness (0 = READ FACE, open; T = screen face).
+// Each part is [x0, y0, z0, dx, dy, dz]. Source flags: v = verified, e = estimate/standard, m = you must measure.
+// Bottom to top: coil(3) / cardboard(1) / battery(5.5) / cardboard(1) / bridge-foot gap(2.5) / ONE perfboard / screen stack.
+const L = 118, W = 46;
+const PLATE_Z = 13.0;                          // plate underside: top of cardboard 10.5 + 2.5 mm bridge foot
+const LCD_Z = PLATE_Z + 1.6 + 8.45 + 2.5;      // underside of the screen PCB
+const T = PLATE_Z + 1.6 + 17.55;               // total thickness (no shell, no lid)
+const PARTS = [
+  // key, name, box, color, group, source, description
+  ["coil",  "RDM6300 125 kHz coil",  [64, 6.5, 0, 46, 33, 3],      0x8a5a2b, "back", "v", "46×33×3 mm. The read face points DOWN and stays open: only thin Kapton/clear tape may cover it (NO metallised tape). Hold the card against this face."],
+  ["card1", "Cardboard (between coil and battery)", [61, 5, 3, 52, 36, 1],       0xc9a46b, "back", "e", "≈1 mm of dry cardboard. Separates the battery from the coil's metal/heat and adds coil-to-battery distance. Measure read range with and without it."],
+  ["bat",   "LiPo 3.7V 1000 mAh",     [62, 6, 4, 50, 34, 5.5],      0x6f7684, "back", "m", "503450 ≈ 50×34×5.5 mm (measure your own cell). Cardboard above and below, sides wrapped in electrical tape. NOT glued to the plate."],
+  ["card2", "Cardboard (between battery and plate)", [61, 5, 9.5, 52, 36, 1],     0xc9a46b, "back", "e", "≈1 mm cardboard: a rigid layer so solder tips cannot reach the cell. Still trim the pin tips short."],
+  ["rc522", "RC522",                  [1, 3, 0, 60, 40, 3.4],       0x1746b8, "back", "v", "60×40 mm, antenna loop faces DOWN (read face open). No metal or battery below it. Solder thin wires directly to the 8 pads."],
+  ["rdm",   "RDM6300 board (inside the coil)", [67.75, 13.5, 0, 38.5, 19, 3], 0x6a0f12, "back", "e", "The 38.5×19 mm board lies flat in the OPENING at the centre of the coil (same 3 mm thickness). ⚠ Coil opening not measured: ~36×23 mm estimated from the 46×33 outline, 38.5 mm may not fit — measure with calipers. Tall parts (5-pin header) are removed; wires go straight to the pads."],
+  ["ft1",   "Bridge foot (tall)",      [1.2, 3.2, 3.4, 4, 4, 9.6],   0xb89a5a, "mid",  "e", "At an RC522 corner (11.4 mm above its PCB): perfboard-scrap squares stacked 7 high and glued. Bottom end taped/siliconed to the RC522 PCB, top end to the plate underside. Do not use metal."],
+  ["ft2",   "Bridge foot (tall)",      [1.2, 38.8, 3.4, 4, 4, 9.6],  0xb89a5a, "mid",  "e", "Second RC522 corner."],
+  ["ft3",   "Bridge foot (tall)",      [56.2, 3.2, 3.4, 4, 4, 9.6],  0xb89a5a, "mid",  "e", "Third RC522 corner."],
+  ["ft4",   "Bridge foot (tall)",      [56.2, 38.8, 3.4, 4, 4, 9.6], 0xb89a5a, "mid",  "e", "Fourth RC522 corner."],
+  ["ft5",   "Bridge foot (short)",      [73, 7, 10.5, 4, 4, 2.5],     0xb89a5a, "mid",  "e", "2.5 mm: between the top cardboard and the plate underside. Two perfboard scraps or an eraser piece."],
+  ["ft6",   "Bridge foot (short)",      [73, 35, 10.5, 4, 4, 2.5],    0xb89a5a, "mid",  "e", "Short bridge foot."],
+  ["ft7",   "Bridge foot (short)",      [108, 7, 10.5, 4, 4, 2.5],    0xb89a5a, "mid",  "e", "Short bridge foot."],
+  ["ft8",   "Bridge foot (short)",      [108, 35, 10.5, 4, 4, 2.5],   0xb89a5a, "mid",  "e", "Short bridge foot."],
+  ["plate", "ONE PERFBOARD (118×46)", [0, 0, PLATE_Z, 118, 46, 1.6], 0x9c7b3c, "mid",  "e", "The backbone. Everything below (RC522, RDM6300, battery sandwich) hangs from it via bridge feet and tape. Solder side DOWN, pin tips trimmed short."],
+  ["c6",    "ESP32-C6-DEV-KIT",       [0, 2.6, PLATE_Z + 1.6, 51.8, 22.86, 7.5], 0x11602f, "mid", "e", "51.8 mm long; 16 + 16 pins, rows 8 holes (20.3 mm) apart (measured). Width ≈ 22.86 mm is an ESTIMATE from the row spacing + 1.27 mm edge margins: measure it. USB-C exposed at the left end."],
+  ["tp",    "TP4056 Type-C",          [2, 28.5, PLATE_Z + 2.6, 26, 17, 5],   0x1746b8, "mid", "e", "≈26×17 mm, on 1 mm foam. Type-C exposed at the end. Protection (OUT+/OUT−) not verified."],
+  ["mt",    "MT3608 boost",           [29, 28.5, PLATE_Z + 2.6, 37, 17, 14], 0x0b1f6b, "mid", "m", "37×17 mm. Sources disagree on height (7 mm vs 14 mm); computed with 14 mm — measure it."],
+  ["lcd",   "Pico-LCD-1.3",           [66, 9.75, PLATE_Z + 1.6, 52, 26.5, 17.55], 0x0f1115, "front", "v", "52×26.5 mm, ST7789 240×240. Female socket 8.45 + male plastic 2.5 = 10.95 mm gap."],
+  ["drv",   "Driver blocks",          [69.5, 37, PLATE_Z + 1.6, 32, 8.5, 5],   0x2a2a2e, "mid", "e", "Q1/Q2 (2N2222A) with Rb/Rp resistors in the bottom strip, holes x28–40, rows 15–18."],
+  ["mot",   "Vibration motor 6×14",   [102, 3, PLATE_Z + 1.6, 14, 6, 6],    0xa8aab3, "mid", "v", "6×14 mm, driven by Q2. Only its two wires land in holes M1 (x41–42, y18); the body can sit anywhere, here beside the IR receiver."],
+  ["irtx",  "IR LED 940 nm",          [109.1, 39.1, PLATE_Z + 1.6, 5.8, 5.8, 8], 0x401018, "mid", "m", "Bare 5 mm IR LED at holes LED1 (x44–45, y17), facing the end edge. The KY-005 module has an unverified pin order: find the LED terminals with a multimeter first."],
+  ["sw",    "Power switch",           [57.5, 18, PLATE_Z + 1.6, 8.5, 9.4, 10], 0x222226, "mid", "m", "Round mini ON/OFF in the gap between C6 and screen; wired by flying leads (no plate holes). Measure the diameter on your part."],
+  ["c2",    "C2 100 µF",              [72.5, 1.3, PLATE_Z + 1.6, 5, 5, 11],      0x1a1a22, "mid", "e", "RDM6300 5 V input (holes x30, x32, y2)."],
+  ["c1",    "C1 470 µF",              [84, 0, PLATE_Z + 1.6, 8, 8, 11.5], 0x1a1a22, "mid", "m", "Ø8 fits (holes x34, x36, y2). A 1000 µF/10 V cap is usually Ø10×16: does not fit, use 470 µF Ø8."],
+  ["irrx",  "VS1838B IR receiver",    [93, 1, PLATE_Z + 1.6, 7, 6, 5.5],    0x151515, "mid", "e", "Holes x38–40, y2; faces the top edge."],
+];
+const BOXES = PARTS.map(p => ({ key: p[0], name: p[1], b: p[2], col: p[3], grp: p[4], src: p[5], info: p[6] }));
+const Lo = L, Wo = W, To = T;
+const VOL = Lo * Wo * To / 1000;
+const FLIP = { L: 100.3, W: 40.1, T: 25.6 };
+const FVOL = FLIP.L * FLIP.W * FLIP.T / 1000;
+
+function overlap(a, b) {
+  const A = a.b, B = b.b;
+  return A[0] < B[0] + B[3] - 1e-6 && B[0] < A[0] + A[3] - 1e-6 &&
+         A[1] < B[1] + B[4] - 1e-6 && B[1] < A[1] + A[4] - 1e-6 &&
+         A[2] < B[2] + B[5] - 1e-6 && B[2] < A[2] + A[5] - 1e-6;
+}
+const clashes = []; for (let i = 0; i < BOXES.length; i++) for (let j = i + 1; j < BOXES.length; j++) if (overlap(BOXES[i], BOXES[j]) && !((BOXES[i].key === 'coil' && BOXES[j].key === 'rdm') || (BOXES[i].key === 'rdm' && BOXES[j].key === 'coil'))) clashes.push(BOXES[i].name + " ↔ " + BOXES[j].name);
+const outside = BOXES.filter(p => p.b[0] < -1e-6 || p.b[1] < -1e-6 || p.b[2] < -1e-6 || p.b[0] + p.b[3] > L + 1e-6 || p.b[1] + p.b[4] > W + 1e-6 || p.b[2] + p.b[5] > T + 1e-6).map(p => p.name);
+const usedVol = BOXES.reduce((s, p) => s + p.b[3] * p.b[4] * p.b[5], 0);
+
+// ---------------------------------------------------------------- scene
+const P3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0e1016);
+scene.fog = new THREE.Fog(0x0e1016, 450, 1200);
+const cam = new THREE.PerspectiveCamera(36, innerWidth / innerHeight, 1, 4000);
+const ren = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: true });
+ren.setPixelRatio(Math.min(devicePixelRatio, 2)); ren.setSize(innerWidth, innerHeight);
+ren.shadowMap.enabled = true; ren.shadowMap.type = THREE.PCFSoftShadowMap; ren.toneMapping = THREE.ACESFilmicToneMapping;
+const ctl = new OrbitControls(cam, ren.domElement); ctl.enableDamping = true; ctl.target.set(0, T / 2, 0);
+scene.add(new THREE.HemisphereLight(0xdbe8ff, 0x2a2c34, 1.0));
+const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(120, 260, 160); key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048); Object.assign(key.shadow.camera, { near: 50, far: 800, left: -170, right: 170, top: 170, bottom: -170 }); scene.add(key);
+const under = new THREE.DirectionalLight(0xffffff, 0.9); under.position.set(-80, -220, -90); scene.add(under);
+const rim = new THREE.DirectionalLight(0x5c8cff, 0.7); rim.position.set(-150, 80, -120); scene.add(rim);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(700, 64), new THREE.MeshStandardMaterial({ color: 0x090b10, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -60; floor.receiveShadow = true; scene.add(floor);
+
+// ---------------------------------------------------------------- helpers
+const M = (c, r = 0.6, m = 0) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+const hover = [];
+function add(g, mesh, info) { mesh.castShadow = mesh.receiveShadow = true; if (info) mesh.userData.info = info; g.add(mesh); hover.push(mesh); return mesh; }
+function box(g, w, h, d, col, x, y, z, info, r = 0.5) {
+  const geo = (r > 0 && Math.min(w, h, d) > 0.8) ? new RoundedBoxGeometry(w, h, d, 2, Math.min(r, h / 2.2, w / 3, d / 3)) : new THREE.BoxGeometry(w, h, d);
+  const m = add(g, new THREE.Mesh(geo, (col.isMaterial || Array.isArray(col)) ? col : M(col)), info); m.position.set(x, y, z); return m;
+}
+function cyl(g, r, h, col, x, y, z, info, seg = 24) { const m = add(g, new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg), col.isMaterial ? col : M(col)), info); m.position.set(x, y, z); return m; }
+const pcbEdge = M(0xcaa94a, 0.5, 0.25);
+const pcbMats = c => [pcbEdge, pcbEdge, M(c, 0.55), M(c, 0.7), pcbEdge, pcbEdge];
+// internal coordinate -> world: X = x - L/2, Y = z, Z = y - W/2
+const wc = (x, y, z) => P3(x - L / 2, z, y - W / 2);
+const partG = {};
+function part(p) {
+  const [x0, y0, z0, dx, dy, dz] = p.b; const g = new THREE.Group(); g.position.copy(wc(x0 + dx / 2, y0 + dy / 2, z0 + dz / 2)); scene.add(g);
+  g.userData = { zc: z0 + dz / 2, grp: p.grp }; partG[p.key] = g; return g;
+}
+const info = p => ({ t: p.name, d: p.info + (p.src === "v" ? "" : p.src === "m" ? "  [MEASURE]" : "  [estimate]") });
+const tapeMat = M(0x0b0b0d, 0.35);
+const tapeInfo = { t: "Electrical tape", d: "Wraps the cardboard–battery–cardboard sandwich from the sides: 2 strips. Do not tape over the battery lead or the JST." };
+
+// ---------------------------------------------------------------- parts (detailed drawings stay inside their AABB)
+for (const p of BOXES) {
+  const [x0, y0, z0, dx, dy, dz] = p.b; const g = part(p); const I = info(p);
+  if (p.key.startsWith("ft")) { const ext = dz > 5 ? 1.8 : 0; box(g, dx, dz + ext, dy, p.col, 0, -ext / 2, 0, I, 0.3); continue; }   // tall foot reaches down to the RC522 PCB
+  if (p.key === "card1" || p.key === "card2") { box(g, dx, dz, dy, M(p.col, 0.9), 0, 0, 0, I, 0); continue; }
+  switch (p.key) {
+    case "coil": { box(g, dx, 1.4, dy, 0x1a140e, 0, -dz / 2 + 0.7, 0, I, 1);
+      for (let i = 0; i < 5; i++) { const t = new THREE.Mesh(new THREE.TorusGeometry(16 - i * 1.4, 0.5, 8, 48), M(0xb9742f, 0.4, 0.85)); t.rotation.x = Math.PI / 2; t.position.set(0, 0.6, 0); t.scale.set(1.45, 1.0, 0.85); g.add(t); } break; }
+    case "rc522": { box(g, dx, 1.6, dy, pcbMats(0x1746b8), 0, -dz / 2 + 0.8, 0, I, 0.8);
+      const sh = new THREE.Shape(); const rr = (s, w, h, r) => { s.moveTo(-w/2+r,-h/2); s.lineTo(w/2-r,-h/2); s.quadraticCurveTo(w/2,-h/2,w/2,-h/2+r); s.lineTo(w/2,h/2-r); s.quadraticCurveTo(w/2,h/2,w/2-r,h/2); s.lineTo(-w/2+r,h/2); s.quadraticCurveTo(-w/2,h/2,-w/2,h/2-r); s.lineTo(-w/2,-h/2+r); s.quadraticCurveTo(-w/2,-h/2,-w/2+r,-h/2); };
+      rr(sh, 50, 30, 5); const hole = new THREE.Path(); rr(hole, 43, 23, 4); sh.holes.push(hole);
+      const loop = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: 0.35, bevelEnabled: false }), M(0xb9742f, 0.4, 0.8)); loop.rotation.x = Math.PI / 2; loop.position.set(0, -dz / 2 - 0.02, 0); g.add(loop);
+      box(g, 5, 1.1, 5, 0x1c1f26, 15, -dz / 2 + 2.2, 8); for (let k = 0; k < 8; k++) box(g, 1.4, 0.5, 1.4, 0xd9b24a, -26, -dz / 2 + 2.0, (k - 3.5) * 2.54, k === 0 ? { t: "RC522 8 pad", d: "SDA SCK MOSI MISO IRQ GND RST 3.3V — solder thin wires straight to the pads" } : null, 0.1); break; }
+    case "plate": { box(g, dx, dz, dy, pcbMats(0x9c7b3c), 0, 0, 0, I, 0.6);
+      const n = Math.floor(dx / 2.54), q = Math.floor(dy / 2.54); const dots = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.4, 0.4, 0.05, 6), M(0xe6c76a, 0.4, 0.8), n * q * 2); let i = 0; const mt = new THREE.Matrix4();
+      for (const sgn of [1, -1]) for (let a = 0; a < n; a++) for (let b = 0; b < q; b++) { mt.makeTranslation(-dx / 2 + 1.6 + a * 2.54, sgn * (dz / 2 + 0.03), -dy / 2 + 1.6 + b * 2.54); dots.setMatrixAt(i++, mt); } g.add(dots); break; }
+    case "c6": {
+      const yb = -dz / 2; box(g, 51.8, 1.6, dy, pcbMats(0x11602f), 0, yb + 2.5 + 0.8, 0, I, 0.8);
+      box(g, 19.5, 2.6, 18, M(0xc4c7cf, 0.35, 0.9), -25.9 + 51.8 - 25.5 + 9.75, yb + 4.1 + 1.3, 0, { t: "ESP32-C6-WROOM-1", d: "last 6 mm is the PCB antenna: no metal or wires above/beside it" });
+      box(g, 6, 0.4, 18, 0x0c3f20, 22.9, yb + 4.1 + 0.2, 0, { t: "Antenna zone", d: "keep RDM6300 and the battery away" });
+      box(g, 7.3, 3.4, 8.9, M(0xb7bbc4, 0.3, 0.95), -25.9 + 3.65 - 1, yb + 4.1 + 1.7, 0, { t: "USB-C", d: "exposed at the end" });
+      box(g, 2.5, 2.5, dy, 0x0c0c0e, 0, yb + 1.25, 0, null, 0.2); break; }
+    case "tp": { box(g, 26, 1.6, 17, pcbMats(0x1746b8), 0, -dz / 2 + 0.8, 0, I, 0.8); box(g, 7.5, 3.2, 9, M(0xb7bbc4, 0.3, 0.95), -11.2, -dz / 2 + 1.6 + 1.6, 0, { t: "Type-C charge input", d: "exposed at the end" }); box(g, 5, 1.2, 5, 0x1c1f26, 2, -dz / 2 + 2.2, 0); break; }
+    case "mt": { box(g, 37, 1.6, 17, pcbMats(0x0b1f6b), 0, -dz / 2 + 0.8, 0, I, 0.8); box(g, 10, dz - 2.2, 10, 0x1a1a1a, 8, 0.8, 0, { t: "Inductor / tallest part", d: "the part that makes the module 7–14 mm tall depending on source" }); box(g, 6.5, 4.5, 6.5, 0x1050c0, -12, -dz / 2 + 3.8, 0); break; }
+    case "rdm": { box(g, 38.5, 1.6, 19, pcbMats(0x6a0f12), 0, -dz / 2 + 0.8 + 0.3, 0, I, 0.8); box(g, 5, 1.0, 5, 0x1c1f26, 6, -dz / 2 + 2.2, 0); box(g, 3, 0.8, 8, 0xd9b24a, -14, -dz / 2 + 2.0, 0, { t: "RDM6300 pads", d: "TX RX GND 5V: header removed, thin wires soldered directly" }, 0.1); break; }
+    case "bat": { box(g, dx, dz, dy, M(0x6f7684, 0.5, 0.2), 0, 0, 0, I, 1.8); box(g, 8, 1.4, 5, 0x2a2a2e, -dx / 2 + 1, 0, 0, null, 0.3);
+      // electrical tape: ring around cardboards + battery (z 3..10.5), 2 strips
+      const bh = 7.7, bw = dy + 2.2, bc = 6.75 - (z0 + dz / 2);
+      for (const bx of [-14, 14]) { box(g, 4, 0.22, bw, tapeMat, bx, bc + bh / 2 + 0.11, 0, tapeInfo, 0); box(g, 4, 0.22, bw, tapeMat, bx, bc - bh / 2 - 0.11, 0, tapeInfo, 0);
+        for (const sgn of [1, -1]) box(g, 4, bh, 0.22, tapeMat, bx, bc, sgn * (bw / 2 - 0.11), tapeInfo, 0); } break; }
+    case "lcd": {
+      const py = dz / 2 - 5.0 - 0.8; box(g, 52, 1.6, 26.5, pcbMats(0x0f1115), 0, py, 0, I, 0.8);
+      box(g, 27.5, 1.2, 25, 0x080808, -10, py + 1.4, 0);
+      const screenMat = new THREE.MeshStandardMaterial({ roughness: 0.2, emissive: 0xffffff });
+      const sc = add(g, new THREE.Mesh(new THREE.PlaneGeometry(23.4, 23.4), screenMat), { t: "Screen 240×240", d: "Menu (drawn from the firmware)" }); sc.rotation.x = -Math.PI / 2; sc.position.set(-10, py + 2.05, 0);
+      cyl(g, 3.2, 4.6, M(0x18181c, 0.5), 16, py + 2.5, 5, { t: "Joystick", d: "UP/DOWN/LEFT/RIGHT (position approximate)" });
+      for (const [bx, bz] of [[16, -5], [12, -8], [20, -8], [16, -11]]) cyl(g, 1.9, 2.4, M(0x24262e, 0.5), bx, py + 1.8, bz, null, 16);
+      for (const z of [-8.89, 8.89]) { box(g, 20 * 2.54, 8.45, 2.5, 0x101114, 0, -dz / 2 + 2.5 + 4.225, z, { t: "Screen female socket", d: "8.45 mm" }, 0.3); box(g, 20 * 2.54, 2.5, 2.4, 0x0c0c0e, 0, -dz / 2 + 1.25, z, { t: "2×20 male pins (single plate)", d: "row spacing 17.78 mm (Pico standard, not verified)" }, 0.3); }
+      const S = 512, cv = document.createElement("canvas"); cv.width = cv.height = S; const c2 = cv.getContext("2d");
+      c2.fillStyle = "#061320"; c2.fillRect(0, 0, S, S); c2.fillStyle = "#0a6cff"; c2.fillRect(0, 0, S, 76);
+      c2.fillStyle = "#fff"; c2.font = "bold 36px monospace"; c2.textBaseline = "middle"; c2.fillText("Makeshift", 20, 38); c2.font = "24px monospace"; c2.fillStyle = "#bfe0ff"; c2.fillText("82%", S - 96, 38);
+      ["RFID / NFC", "Infrared", "SecLab", "Hacking", "Settings"].forEach((t, i) => { const y = 108 + i * 74; if (i === 1) { c2.fillStyle = "#113a5e"; c2.fillRect(8, y - 32, S - 16, 64); c2.fillStyle = "#0a6cff"; c2.fillRect(8, y - 32, 8, 64); } c2.fillStyle = i === 1 ? "#fff" : "#aab8c6"; c2.font = "32px monospace"; c2.fillText(t, 40, y); });
+      const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; screenMat.map = tex; screenMat.emissiveMap = tex; screenMat.needsUpdate = true; break; }
+    case "mot": { const m = cyl(g, 3, 14, M(0xa8aab3, 0.3, 0.85), 0, 0, 0, I, 20); m.rotation.z = Math.PI / 2; const e = cyl(g, 1.2, 3, 0xb08030, 8, 0, 0, null, 12); e.rotation.z = Math.PI / 2; break; }
+    case "irtx": { cyl(g, 2.5, dz - 2.5, M(0x401018, 0.2), 0, -1.25, 0, I, 18); const dome = new THREE.Mesh(new THREE.SphereGeometry(2.5, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), M(0x401018, 0.2)); dome.position.set(0, dz / 2 - 2.5, 0); add(g, dome, I); break; }
+    case "irrx": { box(g, dx, dz, dy, M(0x151515, 0.5), 0, 0, 0, I, 0.8); break; }
+    case "c1": case "c2": { cyl(g, dx / 2, dz, M(0x1a1a22, 0.5), 0, 0, 0, I, 20); box(g, dx - 1, 0.1, 1.2, 0xcccccc, 0, dz / 2 + 0.05, 0, null, 0); break; }
+    case "sw": { cyl(g, 5, 8, M(0x222226, 0.5), 0, -1, 0, I, 20); cyl(g, 1.5, 4, M(0xdddddd, 0.3, 0.8), 0, 4, 0, null, 12).rotation.x = Math.PI / 2; break; }
+    default: box(g, dx, dz, dy, p.col, 0, 0, 0, I, 0.6);
+  }
+}
+{ const [x0, y0, z0, dx, dy] = BOXES.find(b => b.key === "mt").b; const e = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(dx, 7, dy)), new THREE.LineBasicMaterial({ color: 0xffb84d })); e.position.copy(wc(x0 + dx / 2, y0 + dy / 2, z0 + 3.5)); partG.mt.add(e); e.position.sub(partG.mt.position); }
+
+// no shell: empty group (kept for the old capture API and the checkbox)
+const shellG = new THREE.Group(); scene.add(shellG);
+
+// READ FACE arrows (show that the bottom face is open)
+const readG = new THREE.Group(); scene.add(readG);
+for (const [x, y] of [[30, 23], [87, 23]]) {
+  const a = new THREE.Mesh(new THREE.ConeGeometry(4, 9, 20), new THREE.MeshBasicMaterial({ color: 0x4ea3ff })); a.position.copy(wc(x, y, -9)); readG.add(a);
+  const s = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 9, 12), new THREE.MeshBasicMaterial({ color: 0x4ea3ff })); s.position.copy(wc(x, y, -17)); readG.add(s);
+}
+
+// ---------------------------------------------------------------- Flipper Zero reference (wireframe)
+const flipG = new THREE.Group(); flipG.visible = false; scene.add(flipG);
+{ const e = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(FLIP.L, FLIP.T, FLIP.W)), new THREE.LineBasicMaterial({ color: 0xffb84d })); e.position.set(0, FLIP.T / 2, -Wo / 2 - FLIP.W / 2 - 14); flipG.add(e); }
+
+// ---------------------------------------------------------------- wires (schematic)
+const HX = v => (v - 1) * 2.54 + 1.3;   // hole index -> mm from the plate's top-left corner
+const PLAN = /*PLAN*/{"pads":[["J1","3V3",18,2,"3V3",false],["J1","IO4",16,2,"IR_RX",false],["J1","IO5",15,2,"MISO",false],["J1","IO6",14,2,"BTN_UP",false],["J1","IO7",13,2,"RC_CS",false],["J1","IO0",12,2,"IR_TX",false],["J1","IO1",11,2,"FB",false],["J1","IO8",10,2,"LCD_DC",false],["J1","IO10",9,2,"BTN_A",false],["J1","IO11",8,2,"BTN_DOWN",false],["J1","IO2",7,2,"RC_RST",false],["J1","IO3",6,2,"BAT_SENSE",false],["J1","5V",5,2,"5V",false],["J1","GND",4,2,"GND",false],["J3","GND",18,10,"GND",false],["J3","TX",17,10,null,true],["J3","RX",16,10,null,true],["J3","IO15",15,10,"RDM_TX",false],["J3","IO23",14,10,"BTN_LEFT",false],["J3","IO22",13,10,"BTN_RIGHT",false],["J3","IO21",12,10,"LCD_BL",false],["J3","IO20",11,10,"LCD_RST",false],["J3","IO19",10,10,"MOSI",false],["J3","IO18",9,10,"SCK",false],["J3","IO9",8,10,"LCD_CS",false],["J3","GND",7,10,"GND",false],["J3","IO13",6,10,null,true],["J3","IO12",5,10,null,true],["J3","GND",4,10,"GND",false],["LCD","UP",30,13,"BTN_UP",false],["LCD","DC",37,13,"LCD_DC",false],["LCD","CS",38,13,"LCD_CS",false],["LCD","CLK",40,13,"SCK",false],["LCD","DIN",41,13,"MOSI",false],["LCD","RST",42,13,"LCD_RST",false],["LCD","BL",43,13,"LCD_BL",false],["LCD","A",46,13,"BTN_A",false],["LCD","LEFT",46,6,"BTN_LEFT",false],["LCD","DOWN",43,6,"BTN_DOWN",false],["LCD","RIGHT",41,6,"BTN_RIGHT",false],["LCD","GND",29,6,"GND",false],["LCD","VSYS",28,6,"3V3",false],["J_RC522","SDA/CS",27,3,"RC_CS",false],["J_RC522","SCK",28,3,"SCK",false],["J_RC522","MOSI",29,3,"MOSI",false],["J_RC522","MISO",30,3,"MISO",false],["J_RC522","GND",32,3,"GND",false],["J_RC522","RST",33,3,"RC_RST",false],["J_RC522","3.3V",34,3,"3V3",false],["J_RDM","TX",27,1,"RDM_TXIN",false],["J_RDM","GND",28,1,"GND",false],["J_RDM","5V",29,1,"5V",false],["R7","1",30,1,"RDM_TXIN",false],["R7","2",34,1,"RDM_TX",false],["R8","2",35,1,"RDM_TX",false],["R8","1",39,1,"RDM_MID",false],["R9","1",40,1,"RDM_MID",false],["R9","2",44,1,"GND",false],["J_5V","5V",27,2,"5V",false],["J_5V","GND",28,2,"GND",false],["C2","+",30,2,"5V",false],["C2","−",32,2,"GND",false],["C1","+",34,2,"5V",false],["C1","−",36,2,"GND",false],["IR_RX","OUT",38,2,"IR_RX",false],["IR_RX","GND",39,2,"GND",false],["IR_RX","VCC",40,2,"3V3",false],["J_VBAT","VBAT",22,10,"VBAT",false],["J_VBAT","GND",23,10,"GND",false],["R1","1",22,3,"VBAT",false],["R1","2",22,7,"BAT_SENSE",false],["R2","1",24,3,"GND",false],["R2","2",24,7,"BAT_SENSE",false],["C3","1",26,4,"BAT_SENSE",false],["C3","2",26,6,"GND",false],["Rb1","1",28,17,"IR_TX",false],["Rb1","2",32,17,"Q1_B",false],["Rp1","1",29,15,"Q1_B",false],["Rp1","2",33,15,"GND",false],["Q1","E",33,16,"GND",false],["Q1","B",33,17,"Q1_B",false],["Q1","C",33,18,"Q1_C",false],["Rb2","1",35,17,"FB",false],["Rb2","2",39,17,"Q2_B",false],["Rp2","1",36,15,"Q2_B",false],["Rp2","2",40,15,"GND",false],["Q2","E",40,16,"GND",false],["Q2","B",40,17,"Q2_B",false],["Q2","C",40,18,"Q2_C",false],["LED1","K",44,17,"Q1_C",false],["LED1","A",45,17,"LED_A",false],["Rled","1",41,15,"VLOAD",false],["Rled","2",45,15,"LED_A",false],["M1","M−",41,18,"Q2_C",false],["M1","M+",42,18,"VLOAD",false],["D1","A",41,16,"Q2_C",false],["D1","K",45,16,"VLOAD",false],["BZ1","BZ+",41,17,"FB",false],["BZ1","BZ−",42,17,"GND",false],["JP1","3V3",44,18,"3V3",false],["JP1","VLOAD",45,18,"VLOAD",false],["JP1","VBAT",46,18,"VBAT",false]],"wires":[[18,2,28,6,"3V3",1],[18,10,29,6,"GND",2],[12,10,43,13,"LCD_BL",3],[8,10,38,13,"LCD_CS",4],[10,2,37,13,"LCD_DC",5],[11,10,42,13,"LCD_RST",6],[10,10,41,13,"MOSI",7],[9,10,40,13,"SCK",8],[9,2,46,13,"BTN_A",9],[8,2,43,6,"BTN_DOWN",10],[14,10,46,6,"BTN_LEFT",11],[13,10,41,6,"BTN_RIGHT",12],[14,2,30,13,"BTN_UP",13],[28,6,44,18,"3V3",14],[35,17,41,17,"FB",15],[11,2,35,17,"FB",16],[40,15,40,16,"GND",17],[40,16,42,17,"GND",18],[29,6,40,15,"GND",19],[39,17,40,17,"Q2_B",20],[39,17,36,15,"Q2_B",21],[40,18,41,18,"Q2_C",22],[41,18,41,16,"Q2_C",23],[45,16,45,18,"VLOAD",24],[42,18,45,18,"VLOAD",25],[28,6,34,3,"3V3",26],[29,6,32,3,"GND",27],[15,2,30,3,"MISO",28],[41,13,29,3,"MOSI",29],[13,2,27,3,"RC_CS",30],[7,2,33,3,"RC_RST",31],[40,13,28,3,"SCK",32],[5,2,29,1,"5V",33],[32,3,28,1,"GND",34],[32,3,44,1,"GND",35],[39,1,40,1,"RDM_MID",36],[34,1,35,1,"RDM_TX",37],[15,10,34,1,"RDM_TX",38],[27,1,30,1,"RDM_TXIN",39],[34,3,40,2,"3V3",40],[33,15,33,16,"GND",41],[44,1,39,2,"GND",42],[33,15,40,15,"GND",43],[16,2,38,2,"IR_RX",44],[12,2,28,17,"IR_TX",45],[45,17,45,15,"LED_A",46],[32,17,33,17,"Q1_B",47],[32,17,29,15,"Q1_B",48],[33,18,44,17,"Q1_C",49],[41,15,42,18,"VLOAD",50],[29,1,30,2,"5V",51],[29,1,27,2,"5V",52],[30,2,34,2,"5V",53],[22,7,24,7,"BAT_SENSE",54],[24,7,26,4,"BAT_SENSE",55],[6,2,22,7,"BAT_SENSE",56],[32,3,32,2,"GND",57],[28,1,28,2,"GND",58],[29,6,26,6,"GND",59],[36,2,39,2,"GND",60],[24,3,26,6,"GND",61],[18,10,23,10,"GND",62],[22,10,22,3,"VBAT",63],[22,10,46,18,"VBAT",64]],"netcol":{"3V3":"#ff4d4d","5V":"#ff9a1f","GND":"#cfd8dc","VBAT":"#ff5fa2","VLOAD":"#ff8fb8","SCK":"#ffd21a","MOSI":"#ff9f1c","MISO":"#1fd6e6","LCD_CS":"#27d651","LCD_DC":"#3d7bff","LCD_RST":"#a24dff","LCD_BL":"#f0f3f8","BTN_UP":"#5ec8ff","BTN_DOWN":"#5e8cff","BTN_LEFT":"#9ad66a","BTN_RIGHT":"#ff7b7b","BTN_A":"#ffb36b","RC_CS":"#26a69a","RC_RST":"#ef5350","RDM_TX":"#ff6f00","IR_RX":"#42a5f5","IR_TX":"#ab47bc","FB":"#66bb6a","BAT_SENSE":"#ffee58"},"W":46,"H":18,"rowGap":8}/*END*/;
+const wires = new THREE.Group(); scene.add(wires);
+function route(pts, col, r = 0.4) { const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(p => wc(...p))), 40, r, 6), M(new THREE.Color(col).getHex(), 0.45)); m.castShadow = true; wires.add(m); return m; }
+const WC = ["#ffd21a", "#ff9f1c", "#27d651", "#3d7bff", "#a24dff", "#f0f3f8", "#5ec8ff", "#5e8cff", "#9ad66a", "#ff7b7b", "#ffb36b", "#ff4d4d", "#cfd8dc"];
+for (let i = 0; i < 8; i++) route([[5, 23 + (i - 3.5) * 2.54, 3.3], [5, 23 + (i - 3.5) * 2.54, PLATE_Z - 1.5], [HX(27 + i), HX(3), PLATE_Z - 0.9], [HX(27 + i), HX(3), PLATE_Z + 2.2]], ["#aab4c4", "#f0f3f8", "#ffd21a", "#3d7bff", "#27d651", "#8e9199", "#a24dff", "#ff4d4d"][i], 0.25);   // RC522 pads -> J_RC522 holes (x27-34, y3), along the underside
+for (let i = 0; i < 2; i++) route([[64.5, 18 + i * 3, 1.5], [66, 18 + i * 3, 2.2], [69, 18 + i * 3, 2.0]], "#ff9a1f", 0.3);  // coil -> RDM6300 (inside the coil, short)
+for (let i = 0; i < 3; i++) route([[72 + i * 2, 20, 2.4], [72 + i * 2, 4.2, 2.6], [HX(27 + i), HX(1), PLATE_Z - 0.9], [HX(27 + i), HX(1), PLATE_Z + 2]], ["#f0f3f8", "#27d651", "#ffd21a"][i], 0.22);  // RDM6300 board -> J_RDM holes (x27-29, y1)
+route([[62, 12, 6.7], [60, 18, PLATE_Z - 1], [60, 28, PLATE_Z + 2], [30, 38, PLATE_Z + 3.2], [27, 40, PLATE_Z + 4.5]], "#ff4d4d", 0.5);   // pil (+) -> TP4056 B+
+route([[62, 14, 6.7], [61, 20, PLATE_Z - 1], [60, 30, PLATE_Z + 2], [29, 38, PLATE_Z + 3.0], [27, 42, PLATE_Z + 4.5]], "#cfd8dc", 0.5); // pil (-) -> TP4056 B-
+route([[28, 38, PLATE_Z + 4.5], [30, 44, PLATE_Z + 2.5], [90, 40, PLATE_Z + 2.5], [92, 42, PLATE_Z + 4]], "#ff4d4d", 0.4);    // TP4056 -> switch
+route([[66, 36, PLATE_Z + 4], [67, 35, PLATE_Z + 2], [70, 36, PLATE_Z + 1.9]], "#ff9a1f", 0.4);                 // MT3608 -> power rail
+// (C6 <-> screen and all other on-plate wires now come from the hole plan: see PLAN below)
+
+// ---------------------------------------------------------------- hole plan overlay (data written by make_plan_bare.py)
+const padG = new THREE.Group(); scene.add(padG);
+if (PLAN) {
+  const dotGeo = new THREE.CylinderGeometry(0.85, 0.85, 0.35, 14);
+  for (const [ref, label, x, y, net, forbid] of PLAN.pads) {
+    const col = PLAN.netcol[net] || "#b0bec5";
+    const m = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(forbid ? "#ff4b4b" : col) }));
+    m.position.copy(wc(HX(x), HX(y), PLATE_Z + 1.6 + 0.18));
+    m.userData.info = { t: `${ref}.${label}`, d: `hole x${x}, y${y}` + (net ? ` · net ${net}` : "") + (forbid ? " · NEVER connect a wire" : "") };
+    hover.push(m); padG.add(m);
+  }
+  for (const [ax, ay, bx, by, net, n] of PLAN.wires) {
+    const col = PLAN.netcol[net] || "#b0bec5";
+    const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([wc(HX(ax), HX(ay), PLATE_Z - 0.45), wc(HX(bx), HX(by), PLATE_Z - 0.45)]), 2, 0.2, 5), M(new THREE.Color(col).getHex(), 0.5));
+    m.userData.info = { t: `Plan wire #${n} · ${net}`, d: `x${ax},y${ay} → x${bx},y${by} (soldered on the underside)` };
+    hover.push(m); wires.add(m);
+  }
+}
+
+// ---------------------------------------------------------------- dimension labels
+const dim = new THREE.Group(); scene.add(dim);
+function sprite(text, pos, scale = 0.09) {
+  const f = 26, pad = 12, cv = document.createElement("canvas"), g = cv.getContext("2d"); g.font = `${f}px system-ui`; const w = g.measureText(text).width; cv.width = w + pad * 2; cv.height = f + pad; g.font = `${f}px system-ui`;
+  g.fillStyle = "rgba(8,12,20,.85)"; g.fillRect(0, 0, cv.width, cv.height); g.strokeStyle = "rgba(78,163,255,.55)"; g.strokeRect(1, 1, cv.width - 2, cv.height - 2); g.fillStyle = "#eaf1ff"; g.textBaseline = "middle"; g.fillText(text, pad, cv.height / 2);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true })); s.scale.set(cv.width * scale, cv.height * scale, 1); s.position.copy(pos); dim.add(s);
+}
+sprite(`${Lo.toFixed(0)} mm`, P3(0, -8, Wo / 2 + 10)); sprite(`${Wo.toFixed(0)} mm`, P3(Lo / 2 + 14, To + 6, 0)); sprite(`${To.toFixed(1)} mm`, P3(-Lo / 2 - 16, To / 2, Wo / 2));
+sprite("▼ READ FACE (open)", P3(0, -26, 0), 0.11);
+
+// ---------------------------------------------------------------- panel
+const ZL = [["RDM6300 coil (read face)", 0, 3], ["Cardboard", 3, 4], ["Battery", 4, 9.5], ["Cardboard", 9.5, 10.5], ["Bridge-foot gap (solder tips live here)", 10.5, PLATE_Z], ["ONE plate", PLATE_Z, PLATE_Z + 1.6], ["C6 / TP4056 / MT3608", PLATE_Z + 1.6, PLATE_Z + 16.6], ["Screen + joystick", PLATE_Z + 1.6, T]];
+const FACTS = [
+  ["ok", "Flipper Zero (referans): 100.3 × 40.1 × 25.6 mm, 102 g", "docs.flipper.net tech specs"],
+  ["ok", "Pico-LCD-1.3: ready-soldered female socket → MALE pins on the plate; socket 8.45 + plastic 2.5 = 10.95 mm", "Waveshare, Electrokit"],
+  ["ok", "DevKitC-1: 51.8×25.4 mm, row spacing 22.86 mm (not verified for the Waveshare board)", "Espressif PCB layout"],
+  ["warn", "Read range: battery sits 1 mm (cardboard) above the coil, board inside the coil: neither is TESTED", "MEASURE"],
+  ["warn", "Coil opening: ~36×23 mm estimated from the 46×33 outline; board is 38.5×19 mm. If it does not fit, rotate it or place it beside the coil", "MEASURE"],
+  ["warn", "Battery size 50×34×5.5 or 51×30×7: measure. If 7 mm, total thickness +1.5 mm", "MEASURE"],
+  ["warn", "Does the TP4056 module have battery protection (DW01): not verified, measure/check", "MEASURE"],
+  ["warn", "MT3608 height 7 mm or 14 mm: measure (yellow frame = 7 mm)", "MEASURE"],
+  ["warn", "KY-005 size, switch diameter and 1000 µF can size not measured", "MEASURE"],
+];
+const RISKS = [
+  "No enclosure: exposed solder joints and pads SHORT-CIRCUIT if they touch a metal surface (keys, coins). Protect the top and sides with a thin non-metal film or sleeve; put ONLY thin Kapton/clear tape on the read face (NO metallised tape, foil or copper tape).",
+  "Battery is exposed (wrapped in cardboard + tape): it must not be crushed or punctured. Connect it LAST; verify the TP4056 protection first. Keep the soldering iron and hot air away from the cell.",
+  "The battery is only 1 mm (cardboard) above the coil: its aluminium pouch weakens the 125 kHz field. Measure range with and without the battery; if bad, add a ferrite sheet in between.",
+  "RDM6300 board inside the coil: its copper can weaken the 125 kHz field a little and 38.5 mm may not fit the coil opening. Remove the header, solder wires straight to the pads; measure range with the board inside and outside the coil.",
+  "The space above the RC522 is now empty (~9.6 mm under the plate): TP4056/MT3608 could move there to declutter the top. But the switching MT3608 sitting over the RC522 antenna may add noise: test it.",
+  "The plate is the backbone: hanging parts (RC522, battery sandwich) rely on 4+4 bridge feet and tape; tape fatigue makes them wobble. Also fix the corner feet with hot glue.",
+  "Bridge feet sit under the plate: keep them off solder tips and wires; never use metal feet.",
+];
+const side = document.getElementById("side");
+side.innerHTML = `<h2>Size</h2><div class="good"><b>${Lo.toFixed(0)} × ${Wo.toFixed(0)} × ${To.toFixed(1)} mm</b> (no enclosure) ≈ ${VOL.toFixed(0)} cm³.<br>Flipper Zero: ${FLIP.L} × ${FLIP.W} × ${FLIP.T} mm ≈ ${FVOL.toFixed(0)} cm³.<br>Difference: +${(100 * (Lo / FLIP.L - 1)).toFixed(0)}% longer, +${(100 * (Wo / FLIP.W - 1)).toFixed(0)}% wider, +${(100 * (To / FLIP.T - 1)).toFixed(0)}% thicker, ${(VOL / FVOL).toFixed(1)}× volume.</div>
+<h2>Architecture (bare, no enclosure)</h2><table>
+<tr><td><b>Bottom face</b></td><td>Read face OPEN: RDM6300 coil (board in the coil's centre, under the battery) and RC522 side by side, antennas facing down.</td></tr>
+<tr><td><b>Sandwich</b></td><td>coil / cardboard / battery / cardboard, 2 strips of electrical tape around the sides. Not glued to the plate; 2.5 mm air gap.</td></tr>
+<tr><td><b>Backbone</b></td><td>One perfboard, solder side down. RC522 and the sandwich hang from it via bridge feet/tape.</td></tr>
+<tr><td><b>Top face</b></td><td>C6, TP4056, MT3608, screen + joystick, drivers, IR. USB-C ports and IR exposed at the edges.</td></tr>
+<tr><td><b>RDM6300 board</b></td><td>In the opening at the centre of the coil (⚠ opening size, test).</td></tr></table>
+<h2>Layout check (automatic, 3D box clashes)</h2><table>
+<tr><td>Part count</td><td class="n">${BOXES.length}</td></tr>
+<tr><td>Clashes</td><td class="n ${clashes.length ? "warn" : "ok"}">${clashes.length ? clashes.join(", ") : "none ✓"}</td></tr>
+<tr><td>Outside the envelope</td><td class="n ${outside.length ? "warn" : "ok"}">${outside.length ? outside.join(", ") : "none ✓"}</td></tr>
+<tr><td>Volume fill</td><td class="n">${(100 * usedVol / (L * W * T)).toFixed(0)}%</td></tr></table>
+<div style="color:var(--dim);font-size:11px;margin:4px 0">The check tests each part's rectangular footprint only. Wire routes, tape and solder allowances are not checked.</div>
+<h2>Thickness (z, mm; 0 = read face)</h2><table>${ZL.map(r => `<tr><td>${r[0]}</td><td class="n">${r[1].toFixed(1)} → ${r[2].toFixed(1)}</td></tr>`).join("")}<tr><td><b>Total</b></td><td class="n"><b>${T.toFixed(1)}</b></td></tr></table>
+<div class="note"><b>Honest result:</b> With no enclosure the footprint equals the plate (118×46), but thickness is ${T.toFixed(1)} mm: ${(100 * (To / FLIP.T - 1)).toFixed(0)}% thicker than a Flipper. The battery sandwich (10.5 mm: coil + 2 cardboards + battery) and the foot gap add the thickness; the ~9 mm of volume above the RC522 stays empty (the board now sits inside the coil).</div>
+<div class="note"><b>Hole plan:</b> <a href="perfboard_plan_bare.html">perfboard_plan_bare.html</a> lists every pin and wire for this 46×18-hole plate. Part positions in this 3D model are approximate; the hole plan is the reference for soldering.</div>
+<h2>Risks (to be tested)</h2><ul style="margin:0 0 0 18px;padding:0;color:#e2c79b;font-size:12.5px">${RISKS.map(r => `<li style="margin-bottom:5px">${r}</li>`).join("")}</ul>
+<h2>Verification status</h2><table>${FACTS.map(f => `<tr><td class="${f[0]}">${f[0] === "ok" ? "✓" : "⚠"}</td><td>${f[1]}<div style="color:var(--dim);font-size:11px">${f[2]}</div></td></tr>`).join("")}</table>
+<h2>Assembly order</h2><ol style="margin:0 0 0 18px;padding:0;color:#c7cdd9"><li>Get everything working on a breadboard first.</li><li>Cut the plate; solder C6, screen pins and modules on top; wires on the underside; trim tips flush.</li><li>Glue the bridge feet (perfboard scrap); hang the RC522 and the RDM6300 board from the plate.</li><li>Battery sandwich: coil / cardboard / battery / cardboard, 2 strips of tape; attach to the plate with the short feet.</li><li>Read test: measure range without the battery connected, then with it.</li><li>Connect the battery LAST.</li></ol>`;
+
+// ---------------------------------------------------------------- interaction
+let exploded = 0, target = 0;
+function setEx(v) { target = v; document.getElementById("ex").value = Math.round(v * 100); document.getElementById("exV").textContent = Math.round(v * 100) + "%"; }
+document.getElementById("bAsm").onclick = e => { setEx(0); e.target.classList.add("on"); document.getElementById("bExp").classList.remove("on"); };
+document.getElementById("bExp").onclick = e => { setEx(1); e.target.classList.add("on"); document.getElementById("bAsm").classList.remove("on"); };
+document.getElementById("ex").oninput = e => { target = e.target.value / 100; document.getElementById("exV").textContent = e.target.value + "%"; };
+let fit = 1;
+const calcFit = () => Math.max(1, Math.min(4, 0.92 / (innerWidth / innerHeight)));   // on narrow screens fit the model width to the screen
+const OX = () => (innerWidth < 900 ? 0 : 22);   // desktop: shift left to leave room for the side panel; mobile: centre
+const view = dir => { const d = (1 + target * 0.5) * fit; cam.position.set(dir[0] * d + OX(), dir[1] * d + T / 2, dir[2] * d); ctl.target.set(OX(), T / 2 + target * 10, 0); };
+const VIEWS = { Iso: [120, 130, 170], Top: [0, 270, 1], Back: [-120, -170, 170], Side: [0, 10, 300] };
+for (const k in VIEWS) document.getElementById("v" + k).onclick = () => view(VIEWS[k]);
+const protect = ["card1", "card2"];
+function applyToggles() {
+  const on = document.getElementById("tShell").checked;
+  for (const k of protect) partG[k].visible = on;
+  partG.bat.children.forEach(m => { if (m.userData.info && m.userData.info.t === "Electrical tape") m.visible = on; });
+}
+document.getElementById("tShell").onchange = applyToggles;
+document.getElementById("tFlip").onchange = e => flipG.visible = e.target.checked;
+document.getElementById("tWire").onchange = e => wires.visible = e.target.checked;
+document.getElementById("tPads").onchange = e => padG.visible = e.target.checked;
+document.getElementById("tLabels").onchange = e => dim.visible = e.target.checked;
+document.getElementById("tSpin").onchange = e => ctl.autoRotate = e.target.checked;
+ctl.autoRotateSpeed = 0.8; fit = calcFit(); view(VIEWS.Iso);
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(), tip = document.getElementById("tip");
+const showTip = e => { mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); ray.setFromCamera(mouse, cam);
+  const hits = ray.intersectObjects(hover, false).filter(x => x.object.userData.info && x.object.visible && x.object.parent.visible !== false);
+  const h = hits[0];
+  if (h) { const i = h.object.userData.info; tip.innerHTML = `<b style="color:#4ea3ff">${i.t}</b><br>${i.d}`; tip.style.display = "block"; tip.style.left = Math.max(8, Math.min(e.clientX + 14, innerWidth - 250)) + "px"; tip.style.top = (e.clientY + 14) + "px"; } else tip.style.display = "none"; };
+addEventListener("pointermove", showTip);
+addEventListener("pointerdown", e => { if (e.target !== ren.domElement) return; showTip(e); if (e.pointerType === "touch") setTimeout(() => { tip.style.display = "none"; }, 3500); });
+addEventListener("resize", () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); ren.setSize(innerWidth, innerHeight); const f = calcFit(); if (Math.abs(f - fit) > 0.05) { fit = f; if (!anim.on) view(VIEWS.Iso); } });
+const base = new Map(Object.values(partG).map(g => [g, g.position.y]));
+// ---------------------------------------------------------------- assembly animation
+const FLY = 1.3, STEP = 3.2, FLYDIST = 70;
+const STEPS = [
+  { t: "One perfboard: the backbone", d: "A 118×46 mm plate is cut from a 12×12 cm perfboard (46×18 holes). Every part hangs from or is soldered to it.", keys: ["plate"], dir: 1, view: "Iso" },
+  { t: "ESP32-C6 is soldered to the plate", d: "Pins go straight into the plate; USB-C is exposed at the end and the antenna end stays clear.", keys: ["c6"], dir: 1, view: "Iso" },
+  { t: "TP4056 and MT3608", d: "Charger and boost modules beside the C6, on 1 mm foam. Measure the MT3608 height (7 mm or 14 mm).", keys: ["tp", "mt"], dir: 1, view: "Iso" },
+  { t: "Drivers and motor", d: "2N2222A ×2, resistors, flyback diode; vibration motor. (The PPTC fuse is inline in the battery lead, not on the plate.)", keys: ["drv", "mot"], dir: 1, view: "Iso" },
+  { t: "IR, switch, capacitors", d: "IR transmitter/receiver face the edge; power switch; C1/C2 (Ø8 fits, Ø10 does not).", keys: ["irtx", "irrx", "sw", "c1", "c2"], dir: 1, view: "Iso" },
+  { t: "Screen plugs into the male pins", d: "Pico-LCD-1.3: female socket 8.45 mm + male plastic 2.5 mm = 10.95 mm gap. Joystick and A button sit on the screen board.", keys: ["lcd"], dir: 1, view: "Iso" },
+  { t: "Flip the plate: tall bridge feet", d: "Perfboard scrap is stacked 7 high and glued, then taped to the RC522 corners and the plate underside. Do not use metal.", keys: ["ft1", "ft2", "ft3", "ft4"], dir: -1, view: "Back" },
+  { t: "RC522 hangs from the feet", d: "Its antenna faces down (read face open). Thin wires go through plate holes to the 8 pads.", keys: ["rc522"], dir: -1, view: "Back" },
+  { t: "Sandwich: coil first", d: "RDM6300 125 kHz coil with the read face down. Do not use metallised tape.", keys: ["coil"], dir: -1, view: "Back" },
+  { t: "RDM6300 board goes inside the coil", d: "The 38.5×19 mm board lies flat in the coil opening. Header removed, wires straight to the pads. ⚠ Measure the opening.", keys: ["rdm"], dir: -1, view: "Back" },
+  { t: "Cardboard + battery + cardboard", d: "1 mm dry cardboard / LiPo / 1 mm cardboard. The battery is not glued to the plate.", keys: ["card1", "bat", "card2"], dir: -1, view: "Back" },
+  { t: "Wrap with electrical tape", d: "The sandwich is held by 2 strips of tape around the sides. Do not tape over the battery lead or JST.", keys: ["@tape"], dir: -1, view: "Back" },
+  { t: "Short bridge feet: the sandwich hangs from the plate", d: "2.5 mm air gap so solder tips never touch the cell. Feet are taped/siliconed to the top cardboard and the plate underside.", keys: ["ft5", "ft6", "ft7", "ft8"], dir: -1, view: "Back" },
+  { t: "Wires", d: "RC522 ↔ plate, coil ↔ RDM6300, battery ↔ TP4056, C6 ↔ screen signals (under the plate).", keys: ["@wires"], dir: 0, view: "Iso" },
+  { t: "Done: connect the battery LAST", d: "Range-test first (battery disconnected, then connected). The read face is on the bottom, open.", keys: [], dir: 0, view: "Iso" },
+];
+const anim = { on: false, t0: 0, last: -1 };
+const capEl = document.getElementById("cap"), bAnim = document.getElementById("bAnim");
+const tapeMeshes = partG.bat.children.filter(m => m.userData.info && m.userData.info.t === "Electrical tape");
+const ease3 = x => 1 - Math.pow(1 - x, 3);
+function animStart() {
+  anim.on = true; anim.t0 = performance.now() / 1000; anim.last = -1; setEx(0); exploded = 0; target = 0;
+  document.getElementById("bExp").classList.remove("on"); document.getElementById("bAsm").classList.add("on");
+  bAnim.textContent = "■ Stop"; ctl.enabled = false; capEl.style.display = "block";
+  document.getElementById("hud").classList.add("min"); document.getElementById("side").classList.remove("open"); document.getElementById("sideBtn").textContent = "ℹ Info";
+}
+function animStop(finished) {
+  anim.on = false; bAnim.textContent = "▶ Assembly animation"; ctl.enabled = true;
+  const prot = document.getElementById("tShell").checked;
+  Object.values(partG).forEach(g => { g.visible = true; g.userData.off = 0; });
+  partG.card1.visible = partG.card2.visible = prot; tapeMeshes.forEach(m => m.visible = prot);
+  setTimeout(() => { if (!anim.on) capEl.style.display = "none"; }, finished ? 4000 : 0);
+}
+bAnim.onclick = () => anim.on ? animStop(false) : animStart();
+function animFrame() {
+  const now = performance.now() / 1000 - anim.t0, i = Math.min(STEPS.length - 1, Math.floor(now / STEP)), local = now - i * STEP;
+  const shown = new Set(), off = {}; let tape = false, wire = false;
+  for (let j = 0; j <= i; j++) for (const k of STEPS[j].keys) {
+    const pr = j < i ? 1 : ease3(Math.min(1, local / FLY));
+    if (k === "@tape") { tape = pr > 0.02; continue; }
+    if (k === "@wires") { wire = true; continue; }
+    shown.add(k); off[k] = (1 - pr) * STEPS[j].dir * FLYDIST;
+  }
+  for (const k of Object.keys(partG)) { const g = partG[k]; g.visible = shown.has(k); g.userData.off = off[k] || 0; }
+  tapeMeshes.forEach(m => m.visible = tape);
+  wires.visible = wire && document.getElementById("tWire").checked;
+  if (i !== anim.last) { anim.last = i; capEl.querySelector(".n").textContent = `Step ${i + 1} / ${STEPS.length}`; capEl.querySelector(".t").textContent = STEPS[i].t; capEl.querySelector(".d").textContent = STEPS[i].d; }
+  capEl.querySelector(".bar i").style.width = Math.min(100, 100 * now / (STEPS.length * STEP)) + "%";
+  const v = VIEWS[STEPS[i].view];
+  cam.position.lerp(P3(v[0] * fit + OX(), v[1] * fit + T / 2, v[2] * fit), 0.035); ctl.target.lerp(P3(OX(), T / 2, 0), 0.05);
+  if (now > STEPS.length * STEP + 1.5) animStop(true);
+}
+
+// ---------------------------------------------------------------- mobile: menu and info panel
+{ const hud = document.getElementById("hud"), hudT = document.getElementById("hudT"), sideEl = document.getElementById("side"), sideBtn = document.getElementById("sideBtn");
+  if (innerWidth < 900) hud.classList.add("min");
+  hudT.onclick = () => hud.classList.toggle("min");
+  sideBtn.onclick = () => { const o = sideEl.classList.toggle("open"); sideBtn.textContent = o ? "✕ Close" : "ℹ Info"; };
+}
+// ---------------------------------------------------------------- capture API (?capture=1)
+if (new URLSearchParams(location.search).has("capture")) {
+  for (const id of ["hud", "side", "tip"]) { const el = document.getElementById(id); if (el) el.style.display = "none"; }
+  ctl.enableDamping = false; ctl.enabled = false;
+  window.__cap = {
+    set(o) {
+      if (o.ex !== undefined) { exploded = o.ex; target = o.ex; }
+      if (o.cam) cam.position.set(...o.cam);
+      if (o.target) ctl.target.set(...o.target);
+      cam.lookAt(ctl.target);
+      if (o.shell !== undefined) { document.getElementById("tShell").checked = o.shell; applyToggles(); }
+      if (o.flip !== undefined) flipG.visible = o.flip;
+      if (o.wires !== undefined) document.getElementById("tWire").checked = o.wires;
+      if (o.labels !== undefined) dim.visible = o.labels;
+      Object.values(partG).forEach(g => { g.position.y = base.get(g) + exploded * (g.userData.zc - T / 2) * 2.2; });
+      wires.visible = document.getElementById("tWire").checked && exploded < 0.15;
+      cam.updateMatrixWorld(); ren.render(scene, cam);
+    },
+    screen(keys) {
+      const out = {};
+      for (const k of keys) { const g = partG[k]; if (!g) continue; const v = g.position.clone().project(cam); out[k] = [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight]; }
+      return out;
+    },
+    dims: { Lo, Wo, To, T },
+  };
+}
+
+ren.setAnimationLoop(() => {
+  exploded += (target - exploded) * 0.1;
+  if (anim.on) animFrame();
+  Object.values(partG).forEach(g => { g.position.y = base.get(g) + exploded * (g.userData.zc - T / 2) * 2.2 + (anim.on ? (g.userData.off || 0) : 0); });
+  if (!anim.on) wires.visible = document.getElementById("tWire").checked && exploded < 0.15;
+  readG.visible = !new URLSearchParams(location.search).has("capture") && !anim.on;
+  padG.visible = document.getElementById("tPads").checked && exploded < 0.05 && !anim.on;
+  ctl.update(); ren.render(scene, cam);
+});
+</script>
+</body>
+</html>

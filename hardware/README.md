@@ -4,16 +4,38 @@ Bu klasör, firmware'deki pin haritasından türetilmiş PCB üretim girdilerini
 içerir. Amaç: kablolamayı bir dosyaya döküp, sonunda **lehimli bir PCB**
 ürettirmek (JLCPCB / PCBWay gibi bir servise).
 
-## Perfboard'a lehimleme: yeni plan
+## Güncel plan: çıplak yığın (kutusuz), tek perfboard
 
-Delik delik, adım adım rehber: [`perfboard/perfboard_plan.html`](perfboard/perfboard_plan.html)
-(tarayıcıda aç; "Arka (lehim) yüzü" kutusu plakayı ters çevirmişsin gibi gösterir).
-Aynı tel listesi metin olarak: [`PERFBOARD_BAGLANTI_PLANI.md`](PERFBOARD_BAGLANTI_PLANI.md).
-Üst üste (yığın) hali 3D: [`perfboard/compact_stack.html`](perfboard/compact_stack.html).
-Lehimden önce ölçülmesi gerekenler: [`perfboard/DOGRULAMA.md`](perfboard/DOGRULAMA.md).
-Tek kaynak `perfboard/make_plan.py`; bir delik koordinatını değiştirip `python make_plan.py`
-çalıştırınca ikisi de yeniden üretilir. Eski `LEHIM_REHBERI.md` / `DIYLC_PERFBOARD_REHBERI.md`
-sadece net listesi veriyordu, hangi deliğe ne geleceğini vermiyordu.
+Güncel mimari: 118×46 mm tek perfboard (46×18 delik), kutu yok, okuma yüzü açık.
+RDM6300 bobini + kartı ve RC522 aşağı bakar; üstünde karton / LiPo / karton
+sandviçi, elektrik bandıyla sarılı. Plaka ile sandviç arası 2.5 mm hava boşluğu
+(perfboard artığından köprü ayaklar), vida yok. Ana README'de özet ve görseller:
+[`../README.md`](../README.md#physical-build-the-bare-stack).
+
+| Ne | Dosya |
+|---|---|
+| 3D model (çarpışma kontrolü, delik planı, montaj animasyonu; mobilde de çalışır) | [`perfboard/bare_stack.html`](perfboard/bare_stack.html) |
+| Delik delik plan, 9 adım, her tel numaralı (tarayıcıda aç; "Back (solder) side" kutusu plakayı ters çevirir) | [`perfboard/perfboard_plan_bare.html`](perfboard/perfboard_plan_bare.html) |
+| Aynı tel listesi metin olarak | [`PERFBOARD_BAGLANTI_PLANI_BARE.md`](PERFBOARD_BAGLANTI_PLANI_BARE.md) |
+| Üstten çizim (parçalar + delikler, telli/telsiz) | [`perfboard/bare_board_top.svg`](perfboard/bare_board_top.svg), [`perfboard/bare_board_top_wires.svg`](perfboard/bare_board_top_wires.svg) |
+| Lehimden önce ölçülecekler / ⚠ doğrulanmamışlar | [`perfboard/DOGRULAMA.md`](perfboard/DOGRULAMA.md) |
+
+Tek kaynak `perfboard/make_plan_bare.py`: bir delik koordinatını değiştirip
+`python make_plan_bare.py` çalıştırınca plan sayfası, metin listesi ve 3D
+sayfadaki plan verisi yeniden üretilir; çizimler için ardından
+`python make_board_drawing.py`. Plan sayfası ve çizimler İngilizce, bu klasördeki
+notlar Türkçe.
+
+### Eski / karşılaştırma amaçlı sayfalar
+
+Bunlar güncel plan **değildir**, geçmiş denemeler olarak duruyor:
+[`perfboard/perfboard_plan.html`](perfboard/perfboard_plan.html) +
+[`PERFBOARD_BAGLANTI_PLANI.md`](PERFBOARD_BAGLANTI_PLANI.md) (iki kartlı yığın planı, `make_plan.py`),
+[`perfboard/compact_stack.html`](perfboard/compact_stack.html),
+[`perfboard/single_board.html`](perfboard/single_board.html) (kabuklu tek board),
+[`perfboard/pocket.html`](perfboard/pocket.html) (cebe giren hali). Eski
+`LEHIM_REHBERI.md` / `DIYLC_PERFBOARD_REHBERI.md` sadece net listesi veriyordu,
+hangi deliğe ne geleceğini vermiyordu.
 
 ## Dosyalar
 
@@ -60,7 +82,7 @@ makeshift_flipper.net   (ELİMİZDE ✅)
 | U2 | RC522 (MFRC522) | 1 | 13.56MHz NFC, **3.3V** |
 | U3 | RDM6300 | 1 | 125kHz RFID, **5V** |
 | U4 | VS1838B | 1 | IR alıcı, 3.3V |
-| U6 | 5V→3.3V level shifter (BSS138 tipi) | 1 | RDM6300 TX → IO15 için |
+| R7–R9 | 3× 1kΩ (üstte 1k, altta 1k+1k seri) | 3 | RDM6300 TX 5V → ~3.3V, IO15 için. TX'i önce ölç: ~3.3V ise bölücüyü atla. (Level shifter da olur.) |
 | Q1 | NPN transistör (2N2222 vb.) | 1 | IR LED sürücüsü |
 | D1 | IR LED 940nm (elde: KY-005 modülü) | 1 | IR verici; KY-005'in orta pini belirsiz, önce ölç ([DOGRULAMA](perfboard/DOGRULAMA.md)) |
 | R3 | 33Ω (3×100Ω paralel) | 1 | IR LED seri direnci (LED'e göre ayarla) |
@@ -76,7 +98,7 @@ makeshift_flipper.net   (ELİMİZDE ✅)
 - **IO12/IO13 ve IO16/IO17'ye ASLA dokunma** (USB ve CH343 konsol).
 - **SCK(IO18) ve MOSI(IO19) ortak hat**: LCD ile RC522 aynı iki hattı
   paylaşır. PCB'de tek bir yol çekip ikisine de dağıt.
-- **RC522 ve LCD 3.3V**, RDM6300 **5V** (TX'i level shifter'dan geçer).
+- **RC522 ve LCD 3.3V** (LCD'nin VSYS pini C6'nın 3V3'üne bağlı; Waveshare aralığı 2.6–5.5V), RDM6300 **5V** (TX'i bölücüden veya level shifter'dan geçer).
 - **Pil doğrudan IO3'e gitmez** — 2:1 bölücüden (R1/R2) geçer, yoksa pini yakar.
 - **IR LED ve buzzer**: aktif buzzer doğrudan sürülür; IR LED transistör (Q1)
   üzerinden. Motor/pasif buzzer kullanırsan flyback diyot ekle.

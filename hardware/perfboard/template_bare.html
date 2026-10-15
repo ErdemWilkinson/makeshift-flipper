@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perfboard Plan</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171b23; --line:#2a303c; --fg:#e8ebf2; --dim:#9aa3b2; --acc:#4ea3ff; --ok:#3ecf8e; --warn:#ffb84d; --bad:#ff5c5c; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  header span { color:var(--dim); font-size:13px; }
+  #app { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(340px,.85fr); gap:16px; padding:16px; align-items:start; }
+  @media (max-width:980px){ #app{ grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+  #tools { display:flex; flex-wrap:wrap; gap:6px; padding:10px; border-bottom:1px solid var(--line); align-items:center; }
+  .stg { background:#222836; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:6px 10px; cursor:pointer; font-size:13px; }
+  .stg.on { background:var(--acc); color:#06121f; border-color:var(--acc); font-weight:600; }
+  .stg:hover { border-color:var(--acc); }
+  label.t { color:var(--dim); font-size:13px; display:flex; gap:6px; align-items:center; cursor:pointer; margin-left:8px; }
+  #boardwrap { padding:10px; }
+  svg { width:100%; height:auto; display:block; border-radius:8px; background:#0b0f0d; }
+  #side { padding:14px 16px; }
+  #side h2 { font-size:15px; margin:0 0 6px; }
+  #side ul { margin:6px 0 10px 18px; padding:0; color:#c7cdd9; }
+  #side li { margin:3px 0; }
+  .test { background:#13261e; border:1px solid #1f4a37; color:#bfeed6; padding:8px 10px; border-radius:8px; margin:8px 0 12px; font-size:13px; }
+  details { background:#1a1f29; border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:12px; }
+  details summary { cursor:pointer; font-weight:600; }
+  details li { color:#c7cdd9; margin:4px 0; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; }
+  tr.done td { opacity:.45; text-decoration:line-through; }
+  tr.hl td { background:#1e2736; }
+  .sw { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; border:1px solid #fff3; }
+  .short { color:var(--warn); }
+  #tip { position:fixed; pointer-events:none; display:none; background:#05070b; border:1px solid var(--acc); border-radius:8px; padding:6px 10px; font-size:12px; z-index:9; max-width:260px; }
+  #legend { display:flex; flex-wrap:wrap; gap:10px 16px; padding:8px 12px; color:var(--dim); font-size:12px; border-top:1px solid var(--line); }
+  .mono { font-family:ui-monospace,Consolas,monospace; }
+  .bannerwarn { background:#2a1f10; border:1px solid #5a4116; color:#ffd9a0; padding:8px 12px; border-radius:8px; margin-bottom:12px; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Makeshift Flipper · Perfboard wiring plan</h1>
+  <span>118×46 mm plate (46×18 holes) · bare stack · seen from the component side · every wire numbered</span>
+</header>
+<div id="app">
+  <section class="card">
+    <div id="tools"></div>
+    <div id="boardwrap"><svg id="board" viewBox="0 0 800 800"></svg></div>
+    <div id="legend"></div>
+  </section>
+  <aside class="card" id="side"></aside>
+</div>
+<div id="tip"></div>
+
+<script>
+const D = /*__DATA__*/null;
+const S = 19, M = 46;            // px per hole, margin
+const NS = "http://www.w3.org/2000/svg";
+let stage = 1, mirror = false, showLabels = true, hlWire = null;
+const padById = Object.fromEntries(D.pads.map(p => [p.id, p]));
+const done = (() => { try { return JSON.parse(localStorage.getItem("pf_done_bare") || "{}"); } catch (e) { return {}; } })();
+const saveDone = () => { try { localStorage.setItem("pf_done_bare", JSON.stringify(done)); } catch (e) {} };
+
+const gx = x => M + ((mirror ? D.W + 1 - x : x) - 0.5) * S;
+const gy = y => M + (y - 0.5) * S;
+function el(name, attrs, parent, text) {
+  const e = document.createElementNS(NS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const tip = document.getElementById("tip");
+function showTip(ev, html) { tip.innerHTML = html; tip.style.display = "block";
+  tip.style.left = Math.min(ev.clientX + 14, innerWidth - 270) + "px"; tip.style.top = (ev.clientY + 14) + "px"; }
+const hideTip = () => tip.style.display = "none";
+
+function drawBoard() {
+  const svg = document.getElementById("board");
+  svg.innerHTML = "";
+  const w = M * 2 + D.W * S, h = M * 2 + D.H * S;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  el("rect", { x: M - S * 0.5, y: M - S * 0.5, width: D.W * S + S, height: D.H * S + S, rx: 10, fill: "#16261d", stroke: "#2f5a43", "stroke-width": 2 }, svg);
+  // hole grid + axis numbers
+  for (let x = 1; x <= D.W; x++) for (let y = 1; y <= D.H; y++)
+    el("circle", { cx: gx(x), cy: gy(y), r: 1.5, fill: "#3b6b52", opacity: .55 }, svg);
+  for (let x = 1; x <= D.W; x++) if (x % 5 === 0 || x === 1)
+    el("text", { x: gx(x), y: M - 14, fill: "#7aa88f", "font-size": 9, "text-anchor": "middle" }, svg, x);
+  for (let y = 1; y <= D.H; y++) if (y % 5 === 0 || y === 1)
+    el("text", { x: M - 20, y: gy(y) + 3, fill: "#7aa88f", "font-size": 9, "text-anchor": "middle" }, svg, y);
+  el("text", { x: w / 2, y: h - 8, fill: "#7aa88f", "font-size": 11, "text-anchor": "middle" }, svg,
+     mirror ? "BACK (SOLDER) SIDE — left/right appear swapped" : "TOP (COMPONENT) SIDE · USB-C left, antenna right");
+
+  // zones + module ghosts
+  const rect = (o, fill, stroke, dash, txt) => {
+    const xa = gx(o.x0), xb = gx(o.x1);
+    el("rect", { x: Math.min(xa, xb), y: gy(o.y0), width: Math.abs(xb - xa), height: gy(o.y1) - gy(o.y0), rx: 8,
+      fill, stroke, "stroke-width": 1.4, "stroke-dasharray": dash }, svg);
+    if (txt) el("text", { x: (xa + xb) / 2, y: o.kind === "keepout" ? gy(o.y0) + 11 : gy(o.y1) - 5, fill: stroke, "font-size": 9.5, "text-anchor": "middle", opacity: .9 }, svg, txt);
+  };
+  D.zones.forEach(z => z.kind === "keepout"
+    ? rect(z, "rgba(255,92,92,.10)", "#ff7a7a", "4 3", z.name)
+    : rect(z, "rgba(78,163,255,.05)", "#4ea3ff", "4 4", z.name));
+  D.modules.forEach(m => {
+    rect(m, "rgba(120,140,170,.10)", "#8aa0c0", "6 4", null);
+    el("text", { x: (gx(m.x0) + gx(m.x1)) / 2, y: gy(m.y1) + 12, fill: "#9db4d4", "font-size": 11, "text-anchor": "middle", opacity: .85 }, svg, m.name);
+    el("text", { x: (gx(m.x0) + gx(m.x1)) / 2, y: gy(m.y1) + 23, fill: "#7f93b0", "font-size": 9.5, "text-anchor": "middle", opacity: .85 }, svg, m.note);
+  });
+
+  // parts (resistors, caps, transistors...)
+  const partPads = {};
+  D.pads.forEach(p => (partPads[p.ref] = partPads[p.ref] || []).push(p));
+  D.parts.forEach(pt => {
+    if (pt.stage > stage) return;
+    const ps = partPads[pt.ref]; if (!ps) return;
+    const xs = ps.map(p => gx(p.x)), ys = ps.map(p => gy(p.y));
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const g = el("g", {}, svg);
+    if (pt.kind === "res" || pt.kind === "diode" || pt.kind === "cap") {
+      const cx = (x0 + x1) / 2, bodyH = pt.kind === "cap" ? (y1 - y0) * 0.5 : (y1 - y0) * 0.55;
+      const horiz = (x1 - x0) > (y1 - y0);
+      const col = pt.kind === "res" ? "#c9a56a" : pt.kind === "diode" ? "#555a66" : "#2b4a8a";
+      if (horiz) {
+        const cy = (y0 + y1) / 2, bw = (x1 - x0) * 0.55;
+        el("line", { x1: x0, y1: cy, x2: x1, y2: cy, stroke: "#aab", "stroke-width": 1.5 }, g);
+        el("rect", { x: (x0 + x1) / 2 - bw / 2, y: cy - 5, width: bw, height: 10, rx: 3, fill: col, stroke: "#0006" }, g);
+      } else {
+        el("line", { x1: cx, y1: y0, x2: cx, y2: y1, stroke: "#aab", "stroke-width": 1.5 }, g);
+        el("rect", { x: cx - 5, y: (y0 + y1) / 2 - bodyH / 2, width: 10, height: bodyH, rx: 3, fill: col, stroke: "#0006" }, g);
+        if (pt.kind === "diode") el("rect", { x: cx - 5, y: (y0 + y1) / 2 - bodyH / 2, width: 10, height: 3.5, fill: "#e8e8e8" }, g);
+        if (pt.kind === "cap") el("text", { x: cx, y: (y0 + y1) / 2 + 3, fill: "#cfe", "font-size": 8, "text-anchor": "middle" }, g, "+");
+      }
+      el("text", { x: cx + (horiz ? 0 : 9), y: (y0 + y1) / 2 + (horiz ? -9 : 3), fill: "#e8d9b8", "font-size": 9, "text-anchor": horiz ? "middle" : "start" }, g, pt.value || "");
+    } else if (pt.kind === "tr") {
+      el("rect", { x: x0 - 9, y: y0 - 9, width: x1 - x0 + 18, height: 18 + (y1 - y0), rx: 8, fill: "#1b1b20", stroke: "#8a8fa0" }, g);
+      el("text", { x: (x0 + x1) / 2, y: y0 - 13, fill: "#aab", "font-size": 9, "text-anchor": "middle" }, g, pt.ref);
+    } else {
+      el("rect", { x: x0 - 8, y: y0 - 8, width: x1 - x0 + 16, height: y1 - y0 + 16, rx: 6, fill: "rgba(160,170,190,.08)", stroke: "#6b7385", "stroke-dasharray": "3 2" }, g);
+    }
+    g.addEventListener("mousemove", ev => showTip(ev, `<b>${pt.name}</b>${pt.note ? "<br>" + pt.note : ""}`));
+    g.addEventListener("mouseleave", hideTip);
+  });
+
+  // wires
+  const wg = el("g", {}, svg);
+  D.wires.filter(w => w.stage <= stage).forEach(w => {
+    const cur = w.stage === stage, isHl = hlWire === w.n;
+    const P2 = w.pts.map(p => [gx(p[0]), gy(p[1])]);
+    let acc = 0, segs = [];
+    for (let i = 1; i < P2.length; i++) { const l = Math.hypot(P2[i][0] - P2[i-1][0], P2[i][1] - P2[i-1][1]); segs.push(l); acc += l; }
+    let half = acc / 2, mx = P2[0][0], my = P2[0][1];
+    for (let i = 0; i < segs.length; i++) { if (half <= segs[i]) { const f = half / (segs[i] || 1); mx = P2[i][0] + (P2[i+1][0] - P2[i][0]) * f; my = P2[i][1] + (P2[i+1][1] - P2[i][1]) * f; break; } half -= segs[i]; }
+    const path = el("path", { d: "M" + P2.map(p => p.join(",")).join(" L"), fill: "none",
+      stroke: w.color, "stroke-width": isHl ? 4.4 : cur ? 2.6 : 1.7, "stroke-linecap": "round", "stroke-linejoin": "round",
+      opacity: isHl ? 1 : cur ? .95 : .30 }, wg);
+    path.addEventListener("mousemove", ev => showTip(ev, `<b>#${w.n} ${w.net}</b><br>${padLbl(w.a)} → ${padLbl(w.b)}<br>${w.holes} holes · cut ${w.cut_cm} cm · ${w.cname}`));
+    path.addEventListener("mouseleave", hideTip);
+    path.addEventListener("click", () => { hlWire = hlWire === w.n ? null : w.n; render(); });
+    if (cur) el("text", { x: mx + 4, y: my - 3, fill: "#fff", "font-size": 8.5, "paint-order": "stroke", stroke: "#000", "stroke-width": 2.5 }, wg, w.n);
+  });
+
+  // pads
+  const pg = el("g", {}, svg);
+  D.pads.forEach(p => {
+    const part = D.parts.find(q => q.ref === p.ref);
+    const active = (p.stage <= stage) && (!part || part.stage <= stage || p.ref === "J1" || p.ref === "J3" || p.ref === "LCD");
+    const used = !!p.net;
+    const cx = gx(p.x), cy = gy(p.y);
+    const col = used ? (D.netcol[p.net] || "#b0bec5") : "#6d7a72";
+    if (!active && used) { el("circle", { cx, cy, r: 3, fill: "none", stroke: "#4a5a52", "stroke-width": 1 }, pg); return; }
+    if (p.strap && (p.ref === "J1" || p.ref === "J3")) el("circle", { cx, cy, r: 8.4, fill: "none", stroke: "#ffb84d", "stroke-width": 1.4, "stroke-dasharray": "2 2" }, pg);
+    const c = el("circle", { cx, cy, r: used ? 5.4 : 3.2, fill: used ? col : "#30403a", stroke: used ? "#000a" : "#52665c", "stroke-width": 1 }, pg);
+    if (p.forbid) {
+      el("circle", { cx, cy, r: 7.5, fill: "rgba(255,70,70,.25)", stroke: "#ff4b4b", "stroke-width": 1.6 }, pg);
+      el("path", { d: `M${cx - 4.5},${cy - 4.5} L${cx + 4.5},${cy + 4.5} M${cx + 4.5},${cy - 4.5} L${cx - 4.5},${cy + 4.5}`, stroke: "#ff4b4b", "stroke-width": 2 }, pg);
+    }
+    c.addEventListener("mousemove", ev => showTip(ev, `<b>${p.ref} · ${p.label || p.pin}</b><br>pad x${p.x}, y${p.y}${p.net ? "<br>net: " + p.net : ""}${p.forbid ? "<br><span style='color:#ff7b7b'>⛔ NEVER wire</span>" : ""}${p.strap ? "<br><span style='color:#ffb84d'>strap pin: do not pull low at reset</span>" : ""}`));
+    c.addEventListener("mouseleave", hideTip);
+    if (showLabels && p.lab && p.label && active && (used || p.forbid)) {
+      const flip = mirror ? { r: "l", l: "r", t: "t", b: "b" } : { r: "r", l: "l", t: "t", b: "b" };
+      const d = flip[p.lab];
+      const off = d === "r" ? [9, 3, "start"] : d === "l" ? [-9, 3, "end"] : d === "t" ? [3, -9, "start"] : [-3, 9, "start"];
+      const tx = el("text", { x: cx + off[0], y: cy + off[1], fill: p.forbid ? "#ff8b8b" : "#d5dde8", "font-size": 8.6, "text-anchor": off[2] }, pg, p.label);
+      if (d === "t") tx.setAttribute("transform", `rotate(-90 ${cx + off[0]} ${cy + off[1]})`);
+      if (d === "b") tx.setAttribute("transform", `rotate(90 ${cx + off[0]} ${cy + off[1]})`);
+    }
+  });
+}
+const padLbl = id => { const p = padById[id]; return `${p.ref}.${p.label || p.pin}`; };
+
+function renderTools() {
+  const t = document.getElementById("tools"); t.innerHTML = "";
+  D.stages.forEach(s => {
+    const b = document.createElement("button"); b.className = "stg" + (s.n === stage ? " on" : ""); b.textContent = "Step " + s.n;
+    b.onclick = () => { stage = s.n; hlWire = null; render(); }; t.appendChild(b);
+  });
+  const m = document.createElement("label"); m.className = "t";
+  m.innerHTML = `<input type="checkbox" ${mirror ? "checked" : ""}> Back (solder) side`;
+  m.firstChild.onchange = e => { mirror = e.target.checked; render(); }; t.appendChild(m);
+  const l = document.createElement("label"); l.className = "t";
+  l.innerHTML = `<input type="checkbox" ${showLabels ? "checked" : ""}> Pin labels`;
+  l.firstChild.onchange = e => { showLabels = e.target.checked; render(); }; t.appendChild(l);
+}
+function renderSide() {
+  const s = D.stages.find(x => x.n === stage);
+  const ws = D.wires.filter(w => w.stage === stage);
+  const side = document.getElementById("side");
+  let h = `<details ${stage === 1 ? "open" : ""}><summary>Verify before you start (5 min)</summary><ul>
+   <li><b>C6 strips:</b> are the two rows <b>8 hole pitches</b> apart (~20.3 mm; your measurement), with <b>16 pins</b> per row? Is the silkscreen order for J1 <span class="mono">3V3 RST 4 5 6 7 0 1 8 10 11 2 3 5V G NC</span> and for J3 <span class="mono">G TX RX 15 23 22 21 20 19 18 9 G 13 12 G NC</span>? The antenna end is on the RIGHT (facing the screen), USB-C stays on the LEFT; the plate is 46×18 holes.</li>
+   <li><b>Screen:</b> it has a pre-soldered 2×20 <b>female</b> socket on the back (Waveshare/ThePihut); the plate needs a <b>male</b> pin strip to match. Orientation: the end of the screen marked <b>"USB"</b> = the Pico's USB end = the pin-1 end; that end faces the plate's <b>left</b> edge (the C6's USB end). ⚠ Confirm on the module that the screen reads correctly this way; mounted backwards, every pin changes place.</li>
+   <li><b>RC522, RDM6300, VS1838B, 2N2222:</b> read the pin order from the module's silkscreen. If it differs from what is drawn here, change that port's order and regenerate the wire list.</li>
+   <li><b>Without power</b>, after every step run a 3V3↔GND and 5V↔GND continuity test.</li></ul></details>`;
+  h += `<h2>Step ${s.n} — ${s.title}</h2><ul>${s.intro.map(i => `<li>${i}</li>`).join("")}</ul>`;
+  h += `<div class="test"><b>Test:</b> ${s.test}</div>`;
+  h += `<table><thead><tr><th></th><th>#</th><th>From → to</th><th>Length</th></tr></thead><tbody>`;
+  ws.forEach(w => {
+    h += `<tr data-n="${w.n}" class="${done[w.n] ? "done" : ""} ${hlWire === w.n ? "hl" : ""}"><td><input type="checkbox" ${done[w.n] ? "checked" : ""} data-n="${w.n}"></td>
+      <td>${w.n}</td><td><span class="sw" style="background:${w.color}"></span>${padLbl(w.a)} <span style="color:var(--dim)">(x${w.ax},y${w.ay})</span><br>→ ${padLbl(w.b)} <span style="color:var(--dim)">(x${w.bx},y${w.by})</span>
+      <div style="color:var(--dim)">${w.cname} · ${w.net}</div></td>
+      <td>${w.short ? `<span class="short">jumper<br>1-2 holes</span>` : `${w.holes} holes<br>cut ${w.cut_cm} cm`}</td></tr>`;
+  });
+  h += `</tbody></table>`;
+  if (s.n === 9) {
+    h = h.replace(/<table>[\s\S]*<\/table>/, "");
+    h += `<table><thead><tr><th>From</th><th>To</th><th>Colour</th></tr></thead><tbody>` +
+      D.harness.map(r => `<tr><td>${r[0]}</td><td>${r[1]}${r[3] ? `<div style="color:var(--dim)">${r[3]}</div>` : ""}</td><td>${r[2]}</td></tr>`).join("") + `</tbody></table>`;
+  } else if (!ws.length) h += `<p style="color:var(--dim)">No new wires in this step.</p>`;
+  side.innerHTML = h;
+  side.querySelectorAll("input[type=checkbox][data-n]").forEach(c => c.onchange = e => {
+    done[c.dataset.n] = e.target.checked; saveDone(); renderSide(); });
+  side.querySelectorAll("tbody tr").forEach(tr => tr.onclick = ev => {
+    if (ev.target.tagName === "INPUT") return;
+    const n = +tr.dataset.n; hlWire = hlWire === n ? null : n; render(); });
+}
+function renderLegend() {
+  document.getElementById("legend").innerHTML =
+    `<span>⛔ red cross: never wire (IO12/13, TX/RX)</span><span><span style="color:#ffb84d">◌</span> orange ring: strap pin</span>` +
+    `<span>thick wire = added in this step · faded = earlier steps · click/hover a wire</span>`;
+}
+function render() { renderTools(); drawBoard(); renderSide(); renderLegend(); }
+render();
+</script>
+</body>
+</html>

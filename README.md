@@ -153,7 +153,7 @@ reference is [WIRING_MAP_RC522.md](WIRING_MAP_RC522.md).
 | Battery sense (ADC1_CH3, via a 2:1 divider) | 3 | Sense wiring unverified |
 | RC522 SCK / MOSI (shared with LCD) | 18 / 19 | No |
 | RC522 MISO / CS / RST | 5 / 7 / 2 | No |
-| RDM6300 TX (through a 5 V-to-3.3 V level shifter) | 15 | No |
+| RDM6300 TX (through a 1 k / 2 k divider, or a level shifter) | 15 | No |
 | IR receiver (VS1838B) / IR LED driver | 4 / 0 | No |
 | Buzzer / vibration driver | 1 | Buzzer bench-tested |
 
@@ -172,23 +172,79 @@ the motor are unverified on real hardware. The old TCA9554 button map in
 and **does not describe the current direct-GPIO build**. Use the source and
 [HARDWARE_TEST_MATRIX.md](docs/hardware/HARDWARE_TEST_MATRIX.md) before changing wires.
 
-## Hardware visuals
+## Physical build: the bare stack
 
-Screenshots of the interactive pages in this repo (open the HTML files for the live, rotatable versions).
+The handheld is built **without an enclosure**, on one 118 × 46 mm perfboard
+(46 × 18 holes, 2.54 mm pitch) that is both the wiring and the backbone. The
+design is driven by the two RFID readers: their antennas must face the outside
+world, so the bottom face is left open.
 
-| 3D model, assembled | 3D model, exploded |
+| Part of the stack | What and why |
+| --- | --- |
+| Read face (bottom, open) | RDM6300 125 kHz coil with the RDM6300 board lying inside the coil opening, and the RC522 beside it, antennas facing down |
+| Sandwich above the coil | 1 mm cardboard / LiPo / 1 mm cardboard, held by two strips of electrical tape. Not glued to the plate, so the cell can be swapped |
+| Plate (backbone) | Solder side down. 2.5 mm air gap to the sandwich, kept by bridge feet cut from perfboard scrap, so solder tips never touch the battery. No screws |
+| Top face | ESP32-C6 (USB-C on the left, antenna on the right, no wire or part under the antenna), Pico-LCD-1.3 with joystick, IR LED and receiver, buzzer, vibration motor and transistor drivers. TP4056 and MT3608 sit on 1 mm foam over the free rows |
+| Wiring | 64 short wires soldered on the underside of the plate, numbered and listed per stage in the hole-by-hole plan |
+
+Overall size is about **118 × 46 × 32 mm (≈ 175 cm³)**: 18 % longer, 15 %
+wider and 26 % thicker than a Flipper Zero (about 1.7× its volume).
+
+**Build order** (nine stages in the plan, each ends with a test): 1 skeleton
+and power (C6 3V3 → screen VSYS, GND) → 2 screen signals → 3 joystick and A →
+4 buzzer, motor, load selector → 5 RC522 port → 6 RDM6300 port and divider →
+7 IR receiver and transmitter → 8 battery gauge and power inputs → 9 power
+chain between modules. Continuity-test 3V3↔GND and 5V↔GND after every stage,
+and connect the battery **last**.
+
+**Not yet verified on real parts (⚠):**
+
+- The screen's power pin (marked VSYS, Pico pin 39) fed from the C6's 3V3. The
+  Waveshare wiki lists a 2.6–5.5 V supply and does not mention a regulator.
+- Spacing of the C6's two header rows: the plan uses 8 holes (measured on the
+  board in hand), the older notes assume 9 (Espressif DevKitC-1 drawing).
+- Whether the RDM6300 board fits inside the coil opening, and RF range with
+  the battery over the coil.
+- Screen orientation (pin-1 end), KY-005 pin order, 2N2222 pinout and whether
+  the TP4056 module is the protected kind.
+
+The full checklist is in [`hardware/perfboard/DOGRULAMA.md`](hardware/perfboard/DOGRULAMA.md)
+(Turkish). The other hardware notes under [`hardware/`](hardware/README.md) are
+also Turkish; the pages and drawings below are English.
+
+### Hardware visuals
+
+Screenshots of the interactive pages in this repo. The HTML pages cannot be
+rendered by GitHub itself; to open the live, rotatable versions run
+`python -m http.server 8741` in the repo root and browse to
+`http://localhost:8741/hardware/perfboard/bare_stack.html` (Three.js is loaded
+from a CDN, so you need an internet connection).
+
+| Assembled (3D) | Exploded (3D) |
 |---|---|
-| ![3D viewer, assembled](docs/images/3d-viewer-assembled.png) | ![3D viewer, exploded](docs/images/3d-viewer-exploded.png) |
+| ![Bare stack, assembled](docs/images/bare-stack-iso.png) | ![Bare stack, exploded](docs/images/bare-stack-exploded.png) |
 
-| Compact stack, assembled | Compact stack, exploded |
+Read face (view from below): the RDM6300 coil and the RC522 face down, with the plate, bridge feet and cardboard sandwich above them.
+
+![Bare stack, read face and underside](docs/images/bare-stack-under.png)
+
+| Plate top view: parts and holes | Same, with the numbered underside wires |
 |---|---|
-| ![Compact stack, assembled](docs/images/compact-stack-assembled.png) | ![Compact stack, exploded](docs/images/compact-stack-exploded.png) |
+| ![Plate top view](docs/images/bare-board-top.png) | ![Plate top view with wires](docs/images/bare-board-top-wires.png) |
 
-| Perfboard plan, step 1 | Perfboard plan, step 7 |
+| Hole-by-hole plan, stage 1 (power + screen) | Hole-by-hole plan, stage 8 (battery gauge + power inputs) |
 |---|---|
-| ![Perfboard plan, step 1](docs/images/perfboard-plan.png) | ![Perfboard plan, step 7](docs/images/perfboard-plan-step7.png) |
+| ![Wiring plan, stage 1](docs/images/bare-plan-step1.png) | ![Wiring plan, stage 8](docs/images/bare-plan-step8.png) |
 
-Sources: [`3d/viewer.html`](3d/viewer.html), [`hardware/perfboard/compact_stack.html`](hardware/perfboard/compact_stack.html), [`hardware/perfboard/perfboard_plan.html`](hardware/perfboard/perfboard_plan.html). Dimensions and unverified items: [`hardware/perfboard/DOGRULAMA.md`](hardware/perfboard/DOGRULAMA.md).
+Sources, all under [`hardware/perfboard/`](hardware/perfboard/):
+
+| File | What it is |
+| --- | --- |
+| [`bare_stack.html`](hardware/perfboard/bare_stack.html) | 3D model with automatic clash check, hover-able hole plan and a 15-step assembly animation (works on phones) |
+| [`perfboard_plan_bare.html`](hardware/perfboard/perfboard_plan_bare.html) | Interactive hole-by-hole plan, stages 1–9, tick-off list, back (solder) side view |
+| [`bare_board_top.svg`](hardware/perfboard/bare_board_top.svg), [`bare_board_top_wires.svg`](hardware/perfboard/bare_board_top_wires.svg) | Top-view drawings, generated by `make_board_drawing.py` |
+| [`make_plan_bare.py`](hardware/perfboard/make_plan_bare.py) | Single source of truth for hole positions and wires; regenerates the plan page, [`PERFBOARD_BAGLANTI_PLANI_BARE.md`](hardware/PERFBOARD_BAGLANTI_PLANI_BARE.md) and the plan data embedded in the 3D page |
+| [`single_board.html`](hardware/perfboard/single_board.html), [`pocket.html`](hardware/perfboard/pocket.html), [`compact_stack.html`](hardware/perfboard/compact_stack.html) | Earlier explorations (enclosed pocket-size build, two-board stack); kept for reference, **not** the current plan |
 
 ## Build, flash and tests
 
@@ -231,6 +287,9 @@ still need testing.
 | `main/` | ESP32-C6 firmware: UI, direct-GPIO controls, RFID/IR drivers, diagnostics and on-chip radios |
 | `main/net/c6_link.c`, `main/net/radio_ble.c` | Station Wi-Fi, local AP, scan/monitor and passive BLE; the `c6_link_*` name is historical, not a UART link |
 | `tests/` | Host-side logic tests; not a replacement for hardware testing |
+| [`hardware/`](hardware/README.md) | Perfboard wiring plans, 3D models and drawings (see *Physical build* above), KiCad netlist, parts list (Turkish) |
+| [WIRING_MAP_RC522.md](WIRING_MAP_RC522.md) | Pin-by-pin soldering reference (Turkish) |
+| `docs/images/` | Screenshots used in this README, regenerated from the pages in `hardware/perfboard/` |
 | [HARDWARE_TEST_MATRIX.md](docs/hardware/HARDWARE_TEST_MATRIX.md) | Device-level checks and current direct-button map; some older prose may still need reconciliation |
 | [C6_STANDALONE_HARDWARE_PLAN.md](docs/hardware/C6_STANDALONE_HARDWARE_PLAN.md) | Historical Pico/TCA9554 plan and unassembled power concept; **not** the current button pin map |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Historical audit notes; some older P4/C6 and “not yet flashed” statements are stale |
